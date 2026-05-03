@@ -2,8 +2,8 @@ package com.award.log.collector;
 
 import com.award.log.collector.impl.KafkaLogProducer;
 import com.award.log.collector.model.RawLogEvent;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -21,11 +21,16 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class CollectorDispatchScheduler {
 
     private final LogCollectorManager logCollectorManager;
     private final KafkaLogProducer kafkaLogProducer;
+
+    public CollectorDispatchScheduler(LogCollectorManager logCollectorManager,
+            @Autowired(required = false) KafkaLogProducer kafkaLogProducer) {
+        this.logCollectorManager = logCollectorManager;
+        this.kafkaLogProducer = kafkaLogProducer;
+    }
     private final AtomicLong offsetGenerator = new AtomicLong(0);
     private final AtomicLong totalCollected = new AtomicLong(0);
     private final AtomicLong totalDispatched = new AtomicLong(0);
@@ -41,6 +46,9 @@ public class CollectorDispatchScheduler {
     @Scheduled(fixedDelayString = "${log.pipeline.collector.dispatch-interval-ms:1000}")
     public void dispatch() {
         if (!dispatchEnabled) {
+            return;
+        }
+        if (kafkaLogProducer == null) {
             return;
         }
         List<String> collected = logCollectorManager.collectAll();

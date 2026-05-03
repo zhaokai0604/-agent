@@ -15,13 +15,16 @@ import java.util.regex.Pattern;
 public class IntentRiskFilter {
 
     private static final Pattern HIGH_RISK_PATTERN = Pattern.compile(
-        "(删除|关闭防火墙|rm\\s|shutdown|reboot|format|mkfs)",
-        Pattern.CASE_INSENSITIVE
+            "(删库|drop\\s+database|关闭防火墙|关防火墙|rm\\s+-rf\\s+/|格式化磁盘|\\bmkfs\\b|\\bfdisk\\b|shutdown|poweroff|reboot|init\\s+0|"
+                    + ":mkfs|一键下载.*执行|下载.*\\|\\s*bash|curl[^\\n]{0,400}\\|\\s*sh|wget[^\\n]{0,400}\\|\\s*sh|"
+                    + "iptables\\s+-F|iptables\\s+-X|echo\\s+.*>\\s+/etc/sudoers|写入.*sudoers)",
+            Pattern.CASE_INSENSITIVE
     );
 
     private static final Pattern MEDIUM_RISK_PATTERN = Pattern.compile(
-        "(修改配置|重启服务|chmod|kill)",
-        Pattern.CASE_INSENSITIVE
+            "(修改配置|重启服务|systemctl\\s+restart|chmod\\s+[0-7]{3,4}|chown\\s+-R|kill\\s+-9|userdel|groupdel|"
+                    + "删除文件|删除临时|真实删除|彻底删除|不要预览|rm\\s+-f\\s+/|truncate\\s+-s\\s+0)",
+            Pattern.CASE_INSENSITIVE
     );
 
     private final CollaborativeDecisionService collaborativeDecisionService;

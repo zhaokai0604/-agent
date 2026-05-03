@@ -70,14 +70,15 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
     
     // AI分析Prompt模板
     private static final String AI_PROMPT_TEMPLATE = """
-            你是一名资深的日志分析专家，请帮我分析以下日志内容，生成结构化的告警信息。
-            请按照以下格式输出：
-            {
-                "level": "告警级别(FATAL/ERROR/WARNING/INFO)",
-                "rootCause": "根因分析",
-                "solution": "解决方案"
-            }
-            日志内容：
+            你是 **告警分诊引擎（Alert Triage Engine）** 背后的 **Staff SRE**：将原始日志映射为可入库、可路由、可聚合的标准化告警对象。
+            要求：
+            - `level` 必须取自集合 **FATAL | ERROR | WARNING | INFO**，并与业界常用语义对齐（FATAL=服务不可用或数据损坏风险；ERROR=功能降级且需当天处置；WARNING=潜在退化；INFO=提示性）。
+            - `rootCause`：**一句话** 技术根因或 **最可信假设**，须包含 **组件/模块名**；禁止泛泛而谈。
+            - `solution`：**可执行** 处置摘要（命令级或配置键级）；若信息不足，填 **「待补充：列出所需字段」** 并指明缺口。
+            仅输出 **单行合法 JSON 对象**（无 Markdown、无注释），Schema：
+            {"level":"…","rootCause":"…","solution":"…"}
+            
+            日志样本：
             %s
             """;
 

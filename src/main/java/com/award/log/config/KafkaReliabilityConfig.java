@@ -2,6 +2,7 @@ package com.award.log.config;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -13,6 +14,7 @@ import org.springframework.util.backoff.FixedBackOff;
  * Kafka可靠性配置：消费重试 + DLQ
  */
 @Configuration
+@ConditionalOnProperty(prefix = "award.middleware", name = "kafka", havingValue = "true")
 public class KafkaReliabilityConfig {
 
     @Bean

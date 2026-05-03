@@ -3,7 +3,9 @@ package com.award.log.mcp.tools;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
+import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
@@ -42,7 +44,7 @@ public class ProcessTool extends AbstractCommandExecutor {
         this.minPrivilegeExecutor = minPrivilegeExecutor;
     }
 
-    @Tool(name = "listProcesses", description = "执行 ps aux 命令，列出系统进程，可按 CPU 或内存使用率过滤，默认过滤 CPU 或内存占用超过 5% 的进程，以及僵尸进程")
+    @Tool(name = "listProcesses", description = "列出进程：Linux 用 ps aux；Windows 用 WMI 性能计数器近似 CPU%，内存为物理内存占比。默认列出 CPU 或内存超过阈值（默认 5%）的进程")
     @Cacheable(value = McpToolsConfig.CACHE_PROCESS_LIST, key = "'processes'", cacheManager = "mcpCacheManager")
     public String listProcesses(
             @ToolParam(description = "最小 CPU 使用率百分比，超过此值的进程会被列出（默认 5.0）", required = false) Double minCpu,
@@ -55,6 +57,9 @@ public class ProcessTool extends AbstractCommandExecutor {
         log.info("开始执行进程列表检查，CPU阈值: {}%, 内存阈值: {}%", cpuThreshold, memThreshold);
 
         try {
+            if (OsRuntime.isWindows()) {
+                return listProcessesWindows(cpuThreshold, memThreshold, startTime);
+            }
             AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of("ps", "aux"));
 
             if (!result.success()) {
@@ -74,6 +79,90 @@ public class ProcessTool extends AbstractCommandExecutor {
             log.error("执行进程列表检查时发生异常", e);
             return buildErrorResponse("执行进程列表检查时发生异常: " + e.getMessage(), startTime);
         }
+    }
+
+    /**
+     * Windows：用性能计数器 {@code PercentProcessorTime} 得到近似 CPU%，勿把 {@code Get-Process.CPU}（累计秒）当百分比。
+     */
+    private String listProcessesWindows(double cpuThreshold, double memThreshold, long startTime) throws JsonProcessingException {
+        String psPerf =
+                "$t=(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize*1KB;"
+                        + "$list=@(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction SilentlyContinue"
+                        + "|Where-Object{$_.IDProcess -gt 0 -and $_.Name -ne 'Idle'});"
+                        + "$list|Sort-Object WorkingSet -Descending|Select-Object -First 80 "
+                        + "@{N='ProcessName';E={($_.Name -split '#')[0]}},@{N='Id';E={$_.IDProcess}},"
+                        + "@{N='cpuPct';E={[math]::Round([double]$_.PercentProcessorTime,2)}},"
+                        + "@{N='memPct';E={[math]::Round(100*[double]$_.WorkingSet/($t+1),2)}},"
+                        + "@{N='wsMb';E={[math]::Round($_.WorkingSet/1MB,2)}}|ConvertTo-Json -Compress -Depth 5";
+        AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
+                List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psPerf), 60_000L);
+        List<Map<String, String>> processList = parseWindowsProcessJson(result, cpuThreshold, memThreshold, true);
+        if (processList.isEmpty() && (!result.success() || result.output() == null || result.output().isBlank())) {
+            return buildErrorResponse("Windows 进程列表失败: " + (result.success() ? "无数据" : result.error()), startTime);
+        }
+        if (processList.isEmpty()) {
+            processList = listProcessesWindowsMemFallback(cpuThreshold, memThreshold);
+        }
+        String dataJson = toJson(processList);
+        long duration = System.currentTimeMillis() - startTime;
+        return buildSuccessResponse(dataJson, duration, false);
+    }
+
+    /** perf 计数器不可用时：仅按内存占比筛选，CPU 列标注为不可用 */
+    private List<Map<String, String>> listProcessesWindowsMemFallback(double cpuThreshold, double memThreshold) {
+        String ps =
+                "$t=(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize*1KB;"
+                        + "Get-Process -ErrorAction SilentlyContinue|Sort-Object WorkingSet64 -Descending|Select-Object -First 60 "
+                        + "ProcessName,Id,@{N='cpuPct';E={-1}},"
+                        + "@{N='memPct';E={[math]::Round(100*$_.WorkingSet64/($t+1),2)}},"
+                        + "@{N='wsMb';E={[math]::Round($_.WS/1MB,2)}}|ConvertTo-Json -Compress";
+        AbstractCommandExecutor.CommandResult r = minPrivilegeExecutor.executeSafely(
+                List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 60_000L);
+        List<Map<String, String>> list = parseWindowsProcessJson(r, cpuThreshold, memThreshold, false);
+        if (!list.isEmpty()) {
+            log.info("Windows 进程列表已回退为仅内存阈值筛选（CPU 计数器不可用）");
+        }
+        return list;
+    }
+
+    private List<Map<String, String>> parseWindowsProcessJson(
+            AbstractCommandExecutor.CommandResult result,
+            double cpuThreshold,
+            double memThreshold,
+            boolean useCpuThreshold) {
+        List<Map<String, String>> processList = new ArrayList<>();
+        if (!result.success() || result.output() == null || result.output().isBlank()) {
+            return processList;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(result.output());
+            JsonNode arr = node.isArray() ? node : objectMapper.createArrayNode().add(node);
+            for (JsonNode n : arr) {
+                double mem = n.path("memPct").asDouble(0);
+                double cpu = n.path("cpuPct").asDouble(0);
+                boolean cpuHit = useCpuThreshold && cpu >= 0 && cpu > cpuThreshold;
+                boolean memHit = mem > memThreshold;
+                if (!cpuHit && !memHit) {
+                    continue;
+                }
+                Map<String, String> info = new LinkedHashMap<>();
+                info.put("user", "-");
+                info.put("pid", String.valueOf(n.path("Id").asInt(0)));
+                if (cpu < 0) {
+                    info.put("cpu", "n/a");
+                } else {
+                    info.put("cpu", String.format("%.1f", cpu));
+                }
+                info.put("mem", String.format("%.1f", mem));
+                info.put("etime", "-");
+                info.put("command", n.path("ProcessName").asText(""));
+                info.put("state", "running");
+                processList.add(info);
+            }
+        } catch (Exception e) {
+            log.warn("解析 Windows 进程 JSON 失败: {}", e.getMessage());
+        }
+        return processList;
     }
 
     private List<Map<String, String>> parseOutput(String output, double cpuThreshold, double memThreshold) {

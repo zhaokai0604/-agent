@@ -39,5 +39,12 @@ export function normalizeMcpToolResponse(raw) {
       /* 保留原始字符串 */
     }
   }
-  return { ...raw, success, data, duration }
+  return {
+    ...raw,
+    success,
+    data,
+    duration,
+    traceId: raw.traceId ?? raw.trace_id,
+    needConfirm: raw.needConfirm === true
+  }
 }

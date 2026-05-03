@@ -6,6 +6,7 @@ import com.award.log.collector.impl.FileLogCollector;
 import com.award.log.collector.impl.KafkaLogProducer;
 import com.award.log.collector.impl.NetworkLogCollector;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,7 +24,7 @@ public class LogCollectorConfig {
     private final KafkaLogProducer kafkaLogProducer;
     private final DataSource dataSource;
 
-    public LogCollectorConfig(KafkaLogProducer kafkaLogProducer, DataSource dataSource) {
+    public LogCollectorConfig(@Autowired(required = false) KafkaLogProducer kafkaLogProducer, DataSource dataSource) {
         this.kafkaLogProducer = kafkaLogProducer;
         this.dataSource = dataSource;
     }
@@ -61,7 +62,11 @@ public class LogCollectorConfig {
     @Bean
     public LogCollectorManager logCollectorManager() {
         LogCollectorManager collectorManager = new LogCollectorManager();
-        collectorManager.setKafkaLogProducer(kafkaLogProducer);
+        if (kafkaLogProducer != null) {
+            collectorManager.setKafkaLogProducer(kafkaLogProducer);
+        } else {
+            log.info("[采集器配置] Kafka 未启用，采集结果将不推送到 MQ");
+        }
         
         if (enabled) {
             log.info("[采集器配置] 初始化日志采集器");

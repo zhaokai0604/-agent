@@ -26,7 +26,7 @@ import java.util.UUID;
  */
 @Slf4j
 @Service
-@ConditionalOnProperty(name = "spring.elasticsearch.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "spring.elasticsearch.enabled", havingValue = "true")
 public class ElasticsearchServiceImpl implements ElasticsearchService {
 
     @Resource

@@ -108,6 +108,21 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         log.info("[任务状态变更] 任务取消完成，任务ID: [{}]", taskId);
     }
 
+    /**
+     * 与 {@link LogAnalysisController#downloadReport} 使用相同目录约定，便于在 target 被清理或进程 cwd 变化后仍能导出。
+     */
+    @Override
+    public void ensureReportArtifacts(String taskId, List<EnhancedLogParseResultEntity> results) throws IOException {
+        if (taskId == null || taskId.isBlank() || results == null || results.isEmpty()) {
+            return;
+        }
+        EngineConfig config = new EngineConfig();
+        config.outputDir = System.getProperty("user.dir") + File.separator + "target" + File.separator + "output"
+                + File.separator + taskId;
+        exportCsvResult(results, config);
+        generateHtmlReport(results, config);
+    }
+
     @Async
     @Override
     public void startAnalysisAsync(File logFile, String taskId) {

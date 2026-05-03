@@ -6,12 +6,14 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 @Service
+@ConditionalOnProperty(prefix = "award.middleware", name = "kafka", havingValue = "true")
 public class KafkaMonitorServiceImpl implements KafkaMonitorService {
 
     @Value("${spring.kafka.bootstrap-servers:localhost:9092}")

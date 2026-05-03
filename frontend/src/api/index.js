@@ -254,10 +254,10 @@ export const searchESLogs = (
   params: { query, severity, pageNum, pageSize, startTime, endTime, anomaly }
 })
 
-export const getESLogById = (id) => request.get(`/api/elasticsearch/logs/${id}`)
+export const getESLogById = (id) => request.get(`/api/elasticsearch/get/${id}`)
 
 // 运维状态相关 API
-export const getModelRfHealth = () => request.get('/api/model/rf/health')
+export const getModelRfHealth = () => request.get('/api/v1/model/health')
 export const getCollectorStatus = () => request.get('/api/collector/status')
 export const getKafkaStatus = () => request.get('/api/kafka/status')
 
@@ -265,21 +265,23 @@ export const getKafkaStatus = () => request.get('/api/kafka/status')
 export const chatAnalyze = (message) => request.post('/api/chat/analyze', { message })
 
 export const chatAnalyzeStream = (message) => {
-  return fetch('/api/chat/analyze/stream', {
+  return fetch(`${runtimeBaseUrl}/api/chat/analyze/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
+    credentials: 'include',
     body: JSON.stringify({ message })
   })
 }
 
 export const chatStream = (message) => {
-  return fetch('/api/chat/chat', {
+  return fetch(`${runtimeBaseUrl}/api/chat/chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
+    credentials: 'include',
     body: JSON.stringify({ message })
   })
 }

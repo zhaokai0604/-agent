@@ -7,6 +7,7 @@ import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.util.OsRuntime;
 import com.award.log.service.AiDiagnosisService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -60,7 +61,8 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
             @ToolParam(description = "分析的行数（默认 100）", required = false) Integer lines
     ) throws JsonProcessingException {
         long startTime = System.currentTimeMillis();
-        String targetPath = logPath != null && !logPath.isBlank() ? logPath.trim() : "/var/log/syslog";
+        String targetPath = logPath != null && !logPath.isBlank() ? logPath.trim()
+                : (OsRuntime.isWindows() ? "C:\\Windows\\setupact.log" : "/var/log/syslog");
         int maxLines = lines != null && lines > 0 ? Math.min(lines, 1000) : 100;
 
         log.info("开始分析日志文件，路径: {}, 行数: {}", targetPath, maxLines);

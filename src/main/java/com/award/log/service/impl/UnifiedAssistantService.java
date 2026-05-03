@@ -2,6 +2,7 @@ package com.award.log.service.impl;
 
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.StatisticsService;
+import com.award.log.util.AiChatResponseSupport;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -45,16 +46,48 @@ public class UnifiedAssistantService {
 
     public Map<String, Object> getAssistantContext() {
         Map<String, Object> context = new HashMap<>();
-        Map<String, Object> performance = statisticsService.getSystemPerformance(null);
-        Map<String, Object> taskStats = statisticsService.getTaskStatusStatistics();
-        Map<String, Object> alarmStats = aiLogAlarmService.getAlarmStatistics(1, null, null);
-        Map<String, Object> recentAlarms = aiLogAlarmService.getAlarmHistory(1, 5, null, null);
         context.put("agentHostOs", buildAgentHostOsSummary());
-        context.put("performance", performance);
-        context.put("taskStats", taskStats);
-        context.put("alarmStats", alarmStats);
-        context.put("recentAlarms", recentAlarms.getOrDefault("list", List.of()));
-        context.put("runbooks", buildRunbookSuggestions(performance, alarmStats));
+        try {
+            context.put("performance", statisticsService.getSystemPerformance(null));
+        } catch (Exception e) {
+            log.warn("助手上下文：性能数据不可用: {}", e.getMessage());
+            context.put("performance", Map.of("unavailable", true, "reason", String.valueOf(e.getMessage())));
+        }
+        try {
+            context.put("taskStats", statisticsService.getTaskStatusStatistics());
+        } catch (Exception e) {
+            log.warn("助手上下文：任务统计不可用: {}", e.getMessage());
+            context.put("taskStats", Map.of("unavailable", true));
+        }
+        Map<String, Object> alarmStats = Map.of();
+        try {
+            alarmStats = aiLogAlarmService.getAlarmStatistics(1, null, null);
+            if (alarmStats == null) {
+                alarmStats = Map.of();
+            }
+            context.put("alarmStats", alarmStats);
+        } catch (Exception e) {
+            log.warn("助手上下文：告警统计不可用: {}", e.getMessage());
+            context.put("alarmStats", Map.of("unavailable", true));
+        }
+        try {
+            Map<String, Object> recentAlarms = aiLogAlarmService.getAlarmHistory(1, 5, null, null);
+            Object list = recentAlarms != null ? recentAlarms.getOrDefault("list", List.of()) : List.of();
+            context.put("recentAlarms", list != null ? list : List.of());
+        } catch (Exception e) {
+            log.warn("助手上下文：近期告警不可用: {}", e.getMessage());
+            context.put("recentAlarms", List.of());
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> perf = (Map<String, Object>) context.getOrDefault("performance", Map.of());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> alarms = (Map<String, Object>) context.getOrDefault("alarmStats", Map.of());
+            context.put("runbooks", buildRunbookSuggestions(perf, alarms));
+        } catch (Exception e) {
+            log.warn("助手上下文：Runbook 建议生成失败: {}", e.getMessage());
+            context.put("runbooks", List.of());
+        }
         return context;
     }
 
@@ -109,13 +142,7 @@ public class UnifiedAssistantService {
         AtomicReference<String> streamAcc = new AtomicReference<>("");
         return chatModel.stream(prompt)
                 .map(resp -> {
-                    String content = "";
-                    if (resp.getResult() != null && resp.getResult().getOutput() != null) {
-                        content = resp.getResult().getOutput().getText();
-                    }
-                    if (content == null) {
-                        content = "";
-                    }
+                    String content = AiChatResponseSupport.textFrom(resp);
                     return toStreamingDelta(streamAcc, content);
                 })
                 .filter(s -> !s.isEmpty())
@@ -173,27 +200,32 @@ public class UnifiedAssistantService {
             ctxJson = String.valueOf(context);
         }
         return """
-                你是「企业级系统运维智能助手」，面向 Windows 与 Linux（及同类服务器 OS）场景：帮助定位问题、理解根因，在授权与可追溯前提下给出可执行建议；回答须可被用户直接阅读，禁止输出「一坨不换行的长句」。
+                ## 角色与边界
+                你以 **Principal-level Site Reliability Engineer（首席站点可靠性工程师）** 身份作答：同时具备生产事故指挥（Incident Commander）、容量与性能工程、平台安全基线意识。交付物须 **可审计、可执行、可验证**：区分「观测事实」「推断假设」「建议动作」，禁止将推测陈述为既定结论。
                 
-                ## 平台与命令
-                - 上下文中的 `agentHostOs`（含 `osFamily`：windows / linux / macos）表示**当前 Agent 后端与 MCP 工具实际运行的节点**。请优先按该字段选用命令、路径与服务名；若用户明确问「另一平台如何做」，给出对照说明并标明「仅供参考 / 需在对应环境执行」。
-                - 同一问题尽量同时列出 Windows 与 Linux 的常见做法各一行（若篇幅过长则按 `agentHostOs.osFamily` 展开详述，另一平台用简短列表）。
-                - 不要默认用户只在某一种 OS 上工作；避免全文仅出现 bash 或仅出现 PowerShell 而不加前提。
+                ## 运行环境与指令语义
+                - 附加上下文中的 `agentHostOs`（含 `osFamily`）表征 **本助手所绑定 MCP/Agent 进程的实际宿主操作系统**。一切命令、路径、服务单元（systemd / Windows Service）、性能计数器均以该宿主为准。
+                - 若用户询问与当前宿主 **异构 OS** 的处置方式：给出 **对照清单**，并显式标注 **「非本节点可执行，仅供参考」**，避免隐含误导。
+                - GNU/Linux（含麒麟 Kylin 等发行版）与 Windows Server/桌面族系在工具链上不对等：禁止混用 shell 与 PowerShell 语法而不加前提。
                 
-                ## 输出版式（必须遵守，使用 Markdown）
-                - 使用二级标题 `##` 分大段，三级标题 `###` 分小节；**每个标题前后各空一行**。
-                - 列表统一用 `- ` 条目，每条单独一行；步骤用有序列表 `1.` `2.`。
-                - 段落之间必须空一行；单行不要塞过多句子。
-                - 需要强调用 `**加粗**`，代码/命令用单反引号 `` `like this` `` 或围栏代码块。
-                - 不要滥用 emoji；如用，每段最多 1 个，且勿与文字粘在同一行无空格。
-                - 不要输出「伪表格」：若需对照表，用标准 Markdown 表头与分隔行；否则用列表代替。
+                ## 分析与表述准则（必须遵守）
+                1. **证据驱动**：仅基于上下文 JSON 与用户问题中可核验的信息推断；缺参时列出 **Minimum Required Evidence**，不得捏造监控数值或日志片段。
+                2. **影响面**：在适用场景下简述 **Blast Radius**（受影响租户/服务域/数据面或控制面），未知则写明「影响面待确认」。
+                3. **可操作项**：建议动作须含 **验证步骤（Verification）** 与 **回滚/止血（Rollback / Mitigation）** 思路；高危变更提示变更窗口与审批维度。
+                4. **风险管理**：涉及删除、权限提升、网络暴露面变更时，引用 **最小权限** 与 **双人复核** 原则（叙述层面即可）。
                 
-                ## 内容要求
-                - 先直接回应用户意图，再结合下方「实时系统上下文」JSON 给建议；证据不足时说明缺什么，不得编造指标。
-                - 与运维无关的问题：先诚实作答，再酌情给简短运维提示即可。
-                - 延时任务：用户可说「30 分钟之后检查磁盘」「一小时后预览清理临时文件」等；清理类默认预览，真实删除须在界面确认且符合安全策略。
+                ## Markdown 版式（硬性）
+                - 结构：`##` 章节 → `###` 小节；章节之间 **空一行**。
+                - 段落短句化；枚举使用 `- `；有序步骤使用 `1.` `2.`。
+                - 命令、路径、指标名、API 使用反引号；多行脚本使用围栏代码块并注明语言。
+                - 对照信息优先 **标准 Markdown 表格**；禁用错位对齐的「伪表格」。
+                - 表情符号非必要不使用；若使用，密度 ≤ 每 **两节** 一枚。
                 
-                ## 以下为实时系统上下文（JSON）
+                ## 任务类型提示
+                - **闲聊 / 非运维域**：简明作答即可，结尾可加一行「如需针对贵司栈做可执行 Runbook，请提供环境与约束」。
+                - **延时运维**：用户可预约巡检或清理预览； destructive 操作默认 **Dry-Run / 预览**，真实变更须经由控制台二次确认与策略白名单。
+                
+                ## 实时上下文附件（JSON，只读）
                 """ + ctxJson;
     }
 

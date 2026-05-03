@@ -5,7 +5,9 @@ import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
 import com.award.log.mcp.ToolResult;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
@@ -55,6 +57,9 @@ public class DiskTool extends AbstractCommandExecutor {
         log.info("开始执行磁盘使用率检查");
 
         try {
+            if (OsRuntime.isWindows()) {
+                return checkDiskUsageWindows(startTime);
+            }
             AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of("df", "-h"));
 
             if (!result.success()) {
@@ -87,7 +92,8 @@ public class DiskTool extends AbstractCommandExecutor {
             @ToolParam(description = "返回前 N 条，默认 15，最大 40", required = false) Integer topN
     ) throws JsonProcessingException {
         long startTime = System.currentTimeMillis();
-        String root = (rootPath != null && !rootPath.isBlank()) ? rootPath.trim() : "/tmp";
+        String root = (rootPath != null && !rootPath.isBlank()) ? rootPath.trim()
+                : (OsRuntime.isWindows() ? "C:\\Windows\\Logs" : "/tmp");
         int depth = maxDepth != null ? Math.min(Math.max(maxDepth, 1), 4) : 2;
         int limit = topN != null ? Math.min(Math.max(topN, 5), 40) : 15;
 
@@ -97,6 +103,9 @@ public class DiskTool extends AbstractCommandExecutor {
         }
 
         try {
+            if (OsRuntime.isWindows()) {
+                return rankDiskUsageWindows(root, limit, depth, startTime);
+            }
             List<String> cmd = List.of("du", "-xk", "--max-depth=" + depth, root);
             AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(cmd, 120_000L);
             if (!result.success()) {
@@ -163,6 +172,83 @@ public class DiskTool extends AbstractCommandExecutor {
             return new ArrayList<>(rows.subList(0, topN));
         }
         return rows;
+    }
+
+    private String checkDiskUsageWindows(long startTime) throws JsonProcessingException {
+        String ps = "Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free,@{N='Size';E={$_.Used+$_.Free}} | ConvertTo-Json -Compress";
+        AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
+                List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 60_000L);
+        if (!result.success()) {
+            return buildErrorResponse("Windows 磁盘检查失败: " + result.error(), startTime);
+        }
+        List<Map<String, String>> rows = new ArrayList<>();
+        try {
+            JsonNode arr = objectMapper.readTree(result.output());
+            JsonNode node = arr.isArray() ? arr : objectMapper.createArrayNode().add(arr);
+            for (JsonNode n : node) {
+                Map<String, String> m = new LinkedHashMap<>();
+                m.put("filesystem", n.path("Name").asText(""));
+                m.put("used", String.valueOf(n.path("Used").asLong(0)));
+                m.put("available", String.valueOf(n.path("Free").asLong(0)));
+                long size = n.path("Size").asLong(0);
+                m.put("size", String.valueOf(size));
+                int pct = size > 0 ? (int) Math.round(100.0 * n.path("Used").asLong(0) / size) : 0;
+                m.put("usePercent", pct + "%");
+                m.put("mountedOn", n.path("Name").asText(""));
+                rows.add(m);
+            }
+        } catch (Exception e) {
+            log.warn("解析 PowerShell 磁盘 JSON 失败，回退原始输出: {}", e.getMessage());
+            Map<String, String> m = new LinkedHashMap<>();
+            m.put("raw", result.output());
+            rows.add(m);
+        }
+        String dataJson = toJson(rows);
+        long duration = System.currentTimeMillis() - startTime;
+        return buildSuccessResponse(dataJson, duration, false);
+    }
+
+    private String rankDiskUsageWindows(String root, int limit, int depth, long startTime) throws JsonProcessingException {
+        String safe = root.replace("'", "''");
+        // 一级子目录按占用排序（递归统计各子目录下文件总大小）；大目录可能较慢，已放宽超时
+        String ps = "$r='" + safe + "';$lim=" + limit
+                + ";Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue"
+                + "|ForEach-Object{$s=(Get-ChildItem $_.FullName -File -Recurse -ErrorAction SilentlyContinue"
+                + "|Measure-Object -Property Length -Sum).Sum;if($null -eq $s){$s=0}"
+                + ";[pscustomobject]@{kb=[long]($s/1KB);path=$_.FullName}}"
+                + "|Sort-Object kb -Descending|Select-Object -First $lim|ConvertTo-Json -Compress";
+        AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
+                List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 120_000L);
+        if (!result.success()) {
+            return buildErrorResponse("Windows 目录占用扫描失败: " + result.error(), startTime);
+        }
+        List<Map<String, Object>> ranked = new ArrayList<>();
+        try {
+            JsonNode node = objectMapper.readTree(result.output());
+            if (node.isArray()) {
+                for (JsonNode n : node) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("kb", n.path("kb").asLong(0));
+                    row.put("path", n.path("path").asText(""));
+                    ranked.add(row);
+                }
+            } else if (node.has("kb")) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("kb", node.path("kb").asLong(0));
+                row.put("path", node.path("path").asText(""));
+                ranked.add(row);
+            }
+        } catch (Exception e) {
+            log.warn("解析目录占用 JSON 失败: {}", e.getMessage());
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("root", OpsPathPolicy.normalizeWindowsPath(root));
+        payload.put("maxDepth", depth);
+        payload.put("topN", limit);
+        payload.put("entries", ranked);
+        payload.put("platform", "windows");
+        long duration = System.currentTimeMillis() - startTime;
+        return buildSuccessResponse(objectMapper.writeValueAsString(payload), duration, false);
     }
 
     private List<Map<String, String>> parseOutput(String output) {

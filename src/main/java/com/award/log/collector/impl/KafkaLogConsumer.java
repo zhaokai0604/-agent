@@ -4,6 +4,7 @@ import com.alibaba.fastjson.JSON;
 import com.award.log.collector.model.RawLogEvent;
 import com.award.log.service.impl.MvpStreamProcessor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(prefix = "award.middleware", name = "kafka", havingValue = "true")
 public class KafkaLogConsumer {
 
     private final MvpStreamProcessor mvpStreamProcessor;

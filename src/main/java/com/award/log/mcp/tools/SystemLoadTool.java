@@ -3,6 +3,7 @@ package com.award.log.mcp.tools;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
+import com.award.log.util.OsRuntime;
 import com.award.log.service.StatisticsService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -59,15 +60,30 @@ public class SystemLoadTool extends AbstractCommandExecutor {
         log.info("开始执行系统负载检查");
 
         try {
-            double cpuUsage = getCpuUsage();
-            double memUsage = getMemUsage();
-            double[] loadAvg = getLoadAverage();
-
-            if (cpuUsage < 0) {
+            double cpuUsage;
+            double memUsage;
+            double[] loadAvg;
+            if (OsRuntime.isWindows()) {
                 cpuUsage = readPerfPercent("cpuUsage");
-            }
-            if (memUsage < 0) {
                 memUsage = readPerfPercent("memoryUsage");
+                loadAvg = new double[]{0.0, 0.0, 0.0};
+                if (cpuUsage < 0) {
+                    cpuUsage = getCpuUsage();
+                }
+                if (memUsage < 0) {
+                    memUsage = getMemUsage();
+                }
+            } else {
+                cpuUsage = getCpuUsage();
+                memUsage = getMemUsage();
+                loadAvg = getLoadAverage();
+
+                if (cpuUsage < 0) {
+                    cpuUsage = readPerfPercent("cpuUsage");
+                }
+                if (memUsage < 0) {
+                    memUsage = readPerfPercent("memoryUsage");
+                }
             }
 
             Map<String, Object> result = new LinkedHashMap<>();

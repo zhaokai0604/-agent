@@ -1,12 +1,12 @@
 package com.award.log.controller;
 
 import com.award.log.mcp.tools.*;
-import com.award.log.security.HighRiskCommandDetector;
 import com.award.log.security.HttpAuditSubject;
-import com.award.log.security.IntentRiskFilter;
+import com.award.log.security.McpInvocationSecurityGate;
+import com.award.log.security.McpInvocationSecurityGate.GateDecision;
+import com.award.log.security.McpInvocationSecurityGate.McpSecurityProfile;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.security.OpsSecurityContext;
-import com.award.log.security.PromptInjectionGuard;
 import com.award.log.security.RiskLevel;
 import com.award.log.service.OpsAuditTraceService;
 import com.award.log.trace.TraceService;
@@ -37,9 +37,7 @@ public class McpExecuteController {
     private final PrivilegeTool privilegeTool;
     private final OsInsightTool osInsightTool;
 
-    private final PromptInjectionGuard promptInjectionGuard;
-    private final IntentRiskFilter intentRiskFilter;
-    private final HighRiskCommandDetector highRiskCommandDetector;
+    private final McpInvocationSecurityGate mcpInvocationSecurityGate;
     private final OpsAuditTraceService opsAuditTraceService;
     private final HttpAuditSubject httpAuditSubject;
     private final OpsPathPolicy opsPathPolicy;
@@ -81,83 +79,65 @@ public class McpExecuteController {
         Map<String, Object> parameters = (Map<String, Object>) request.get("parameters");
 
         long startTime = System.currentTimeMillis();
-        Map<String, Object> response = new HashMap<>();
         String traceId = UUID.randomUUID().toString();
+        log.info("收到工具执行请求: toolName={}", toolName);
 
-        if (toolName == null || toolName.isBlank()) {
+        GateDecision decision = mcpInvocationSecurityGate.evaluate(toolName, parameters, McpSecurityProfile.INITIAL_REQUEST);
+        String userInstruction = mcpInvocationSecurityGate.buildInstruction(toolName, parameters);
+
+        if (decision.getType() == GateDecision.Type.BLOCK) {
+            log.warn("MCP 安全门拦截: tool={} code={}", toolName, decision.getCode());
+            persistGateReject(traceId, userInstruction, toolName, decision, startTime);
+            return gateBlockResponse(traceId, startTime, decision);
+        }
+        if (decision.getType() == GateDecision.Type.NEED_CONFIRM) {
+            log.info("MCP 中等风险，需二次确认: tool={}", toolName);
+            persistMcpReject(traceId, userInstruction, decision.getRiskLevel(), toolName, "NEED_CONFIRM",
+                    decision.getMessage(), startTime);
+            Map<String, Object> response = new HashMap<>();
             response.put("success", false);
-            response.put("error", "工具名称不能为空");
+            response.put("needConfirm", true);
+            response.put("message", "该操作存在中等风险，请在界面点击确认（等同口令「确认执行」）");
+            response.put("riskLevel", decision.getRiskLevel().name());
+            response.put("toolName", toolName);
+            response.put("parameters", parameters);
             response.put("traceId", traceId);
             response.put("duration", System.currentTimeMillis() - startTime);
             return response;
         }
 
-        log.info("收到工具执行请求: toolName={}, parameters={}", toolName, parameters);
-        
-        String userInstruction = buildUserInstruction(toolName, parameters);
-        log.info("构造的用户指令: {}", userInstruction);
-
-        RiskLevel evaluatedRisk = RiskLevel.LOW;
-
-        try {
-            if (promptInjectionGuard.isInjection(userInstruction)) {
-                log.warn("检测到注入攻击，拦截工具执行: {}", toolName);
-                persistMcpReject(traceId, userInstruction, evaluatedRisk, toolName, "REJECT_INJECTION",
-                        "安全拦截：检测到注入攻击", startTime);
-                response.put("success", false);
-                response.put("error", "安全拦截：检测到注入攻击");
-                response.put("traceId", traceId);
-                response.put("duration", System.currentTimeMillis() - startTime);
-                return response;
-            }
-
-            evaluatedRisk = intentRiskFilter.evaluate(userInstruction);
-            log.info("风险评估结果: {}", evaluatedRisk);
-
-            if (evaluatedRisk == RiskLevel.HIGH) {
-                log.warn("检测到高风险操作，拦截工具执行: {}", toolName);
-                persistMcpReject(traceId, userInstruction, evaluatedRisk, toolName, "REJECT_HIGH_INTENT",
-                        "安全拦截：检测到高风险操作，需要人工确认", startTime);
-                response.put("success", false);
-                response.put("error", "安全拦截：检测到高风险操作，需要人工确认");
-                response.put("traceId", traceId);
-                response.put("duration", System.currentTimeMillis() - startTime);
-                return response;
-            }
-
-            if (highRiskCommandDetector.isHighRiskCommand(userInstruction)) {
-                log.warn("检测到高危命令，拦截工具执行: {}", toolName);
-                persistMcpReject(traceId, userInstruction, evaluatedRisk, toolName, "REJECT_HIGH_RISK_COMMAND",
-                        "安全拦截：检测到高危命令", startTime);
-                response.put("success", false);
-                response.put("error", "安全拦截：检测到高危命令");
-                response.put("traceId", traceId);
-                response.put("duration", System.currentTimeMillis() - startTime);
-                return response;
-            }
-
-            if (evaluatedRisk == RiskLevel.MEDIUM) {
-                log.info("检测到中等风险操作，需要二次确认: {}", toolName);
-                persistMcpReject(traceId, userInstruction, evaluatedRisk, toolName, "NEED_CONFIRM",
-                        "中等风险需二次确认", startTime);
-                response.put("success", false);
-                response.put("needConfirm", true);
-                response.put("message", "该操作存在中等风险，请输入 '确认执行' 以继续");
-                response.put("riskLevel", evaluatedRisk.name());
-                response.put("toolName", toolName);
-                response.put("parameters", parameters);
-                response.put("traceId", traceId);
-                response.put("duration", System.currentTimeMillis() - startTime);
-                return response;
-            }
-        } catch (Exception e) {
-            log.error("安全检查异常: {}", e.getMessage(), e);
-        }
-
+        RiskLevel evaluatedRisk = decision.getRiskLevel();
         Map<String, Object> execResponse = doExecuteTool(toolName, parameters, startTime, traceId, userInstruction);
         execResponse.put("traceId", traceId);
         persistMcpSuccess(traceId, userInstruction, evaluatedRisk, toolName, execResponse, startTime);
         return execResponse;
+    }
+
+    private void persistGateReject(String traceId, String userInstruction, String toolName, GateDecision d, long startTime) {
+        persistMcpReject(traceId, userInstruction, RiskLevel.HIGH, toolName, mapGateCodeToOutcome(d.getCode()),
+                d.getMessage(), startTime);
+    }
+
+    private static String mapGateCodeToOutcome(String code) {
+        if (code == null) {
+            return "SECURITY_REJECT";
+        }
+        return switch (code) {
+            case "INJECTION" -> "REJECT_INJECTION";
+            case "HIGH_INTENT" -> "REJECT_HIGH_INTENT";
+            case "HIGH_RISK_COMMAND" -> "REJECT_HIGH_RISK_COMMAND";
+            default -> "SECURITY_REJECT";
+        };
+    }
+
+    private static Map<String, Object> gateBlockResponse(String traceId, long startTime, GateDecision d) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", false);
+        response.put("error", d.getMessage());
+        response.put("securityCode", d.getCode());
+        response.put("traceId", traceId);
+        response.put("duration", System.currentTimeMillis() - startTime);
+        return response;
     }
 
     private void persistMcpReject(String traceId, String userInstruction, RiskLevel risk, String toolName,
@@ -213,38 +193,23 @@ public class McpExecuteController {
             return response;
         }
 
-        String userInstruction = buildUserInstruction(toolName, parameters);
-
-        try {
-            if (promptInjectionGuard.isInjection(userInstruction)) {
-                log.warn("检测到注入攻击，拦截确认执行: {}", toolName);
-                persistMcpReject(traceId, userInstruction, RiskLevel.MEDIUM, toolName, "REJECT_INJECTION",
-                        "安全拦截：检测到注入攻击", startTime);
-                response.put("success", false);
-                response.put("error", "安全拦截：检测到注入攻击");
-                response.put("traceId", traceId);
-                response.put("duration", System.currentTimeMillis() - startTime);
-                return response;
-            }
-
-            if (highRiskCommandDetector.isHighRiskCommand(userInstruction)) {
-                log.warn("检测到高危命令，拦截确认执行: {}", toolName);
-                persistMcpReject(traceId, userInstruction, RiskLevel.MEDIUM, toolName, "REJECT_HIGH_RISK_COMMAND",
-                        "安全拦截：检测到高危命令", startTime);
-                response.put("success", false);
-                response.put("error", "安全拦截：检测到高危命令");
-                response.put("traceId", traceId);
-                response.put("duration", System.currentTimeMillis() - startTime);
-                return response;
-            }
-        } catch (Exception e) {
-            log.error("安全检查异常: {}", e.getMessage(), e);
+        String userInstruction = mcpInvocationSecurityGate.buildInstruction(toolName, parameters);
+        GateDecision decision = mcpInvocationSecurityGate.evaluate(toolName, parameters, McpSecurityProfile.POST_CONFIRMATION);
+        if (decision.getType() == GateDecision.Type.BLOCK) {
+            log.warn("确认执行路径仍被安全门拦截: tool={} code={}", toolName, decision.getCode());
+            persistGateReject(traceId, userInstruction, toolName, decision, startTime);
+            response.put("success", false);
+            response.put("error", decision.getMessage());
+            response.put("securityCode", decision.getCode());
+            response.put("traceId", traceId);
+            response.put("duration", System.currentTimeMillis() - startTime);
+            return response;
         }
 
         log.info("用户已确认，执行工具: {}", toolName);
         Map<String, Object> execResponse = doExecuteTool(toolName, parameters, startTime, traceId, userInstruction);
         execResponse.put("traceId", traceId);
-        persistMcpSuccess(traceId, userInstruction, RiskLevel.MEDIUM, toolName, execResponse, startTime);
+        persistMcpSuccess(traceId, userInstruction, decision.getRiskLevel(), toolName, execResponse, startTime);
         return execResponse;
     }
 
@@ -264,53 +229,23 @@ public class McpExecuteController {
             return reject;
         }
 
-        String userInstruction = buildUserInstruction(toolName, parameters);
-        RiskLevel evaluatedRisk = RiskLevel.LOW;
-
-        try {
-            if (promptInjectionGuard.isInjection(userInstruction)) {
-                log.warn("延时任务拦截：注入检测 tool={}", toolName);
-                reject.put("success", false);
-                reject.put("error", "安全拦截：检测到注入攻击");
-                reject.put("duration", System.currentTimeMillis() - startTime);
-                return reject;
-            }
-
-            evaluatedRisk = intentRiskFilter.evaluate(userInstruction);
-            if (evaluatedRisk == RiskLevel.HIGH) {
-                log.warn("延时任务拦截：高风险意图 tool={}", toolName);
-                reject.put("success", false);
-                reject.put("error", "安全拦截：检测到高风险操作");
-                reject.put("duration", System.currentTimeMillis() - startTime);
-                return reject;
-            }
-
-            if (highRiskCommandDetector.isHighRiskCommand(userInstruction)) {
-                log.warn("延时任务拦截：高危命令 tool={}", toolName);
-                reject.put("success", false);
-                reject.put("error", "安全拦截：检测到高危命令");
-                reject.put("duration", System.currentTimeMillis() - startTime);
-                return reject;
-            }
-        } catch (Exception e) {
-            log.error("延时任务安全校验异常", e);
+        String userInstruction = mcpInvocationSecurityGate.buildInstruction(toolName, parameters);
+        GateDecision decision = mcpInvocationSecurityGate.evaluate(toolName, parameters, McpSecurityProfile.DEFERRED_SCHEDULED);
+        if (decision.getType() == GateDecision.Type.BLOCK) {
+            log.warn("延时任务安全门拦截: tool={} code={}", toolName, decision.getCode());
+            reject.put("success", false);
+            reject.put("error", decision.getMessage());
+            reject.put("securityCode", decision.getCode());
+            reject.put("traceId", traceId);
+            reject.put("duration", System.currentTimeMillis() - startTime);
+            return reject;
         }
-
+        RiskLevel evaluatedRisk = decision.getRiskLevel();
         String deferredInstruction = "[DEFERRED_SCHEDULE] " + userInstruction;
         Map<String, Object> execResponse = doExecuteTool(toolName, parameters, startTime, traceId, deferredInstruction);
         execResponse.put("traceId", traceId);
         persistMcpSuccess(traceId, deferredInstruction, evaluatedRisk, toolName, execResponse, startTime);
         return execResponse;
-    }
-
-    private String buildUserInstruction(String toolName, Map<String, Object> parameters) {
-        StringBuilder instruction = new StringBuilder();
-        instruction.append("执行 ").append(toolName);
-        if (parameters != null && !parameters.isEmpty()) {
-            instruction.append(" 参数: ");
-            parameters.forEach((k, v) -> instruction.append(k).append("=").append(v).append(" "));
-        }
-        return instruction.toString().trim();
     }
     
     private Map<String, Object> doExecuteTool(String toolName, Map<String, Object> parameters, long startTime,

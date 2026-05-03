@@ -160,16 +160,36 @@ public class LogAnalysisController {
                 response.sendError(404, "任务不存在。");
                 return;
             }
-            String fileName = type.equals("csv") ? "log_analysis_result.csv" : "log_analysis_report.html";
+            boolean isCsv = "csv".equalsIgnoreCase(type);
+            if (!isCsv && !"html".equalsIgnoreCase(type)) {
+                response.sendError(400, "不支持的导出类型，请使用 csv 或 html。");
+                return;
+            }
+            String fileName = isCsv ? "log_analysis_result.csv" : "log_analysis_report.html";
             String filePath = System.getProperty("user.dir") + File.separator + "target" + File.separator + "output" + File.separator + taskId + File.separator + fileName;
             File file = new File(filePath);
+            if (!file.exists()) {
+                if ("COMPLETED".equalsIgnoreCase(task.getStatus())
+                        && task.getResult() != null
+                        && !task.getResult().isEmpty()) {
+                    try {
+                        log.info("报告文件缺失，尝试根据库内明细重新生成: [{}] -> [{}]", taskId, filePath);
+                        logAnalysisService.ensureReportArtifacts(taskId, task.getResult());
+                    } catch (java.io.IOException e) {
+                        log.error("按需生成报告失败，任务ID: [{}]", taskId, e);
+                        response.sendError(500, "生成报告文件失败。");
+                        return;
+                    }
+                    file = new File(filePath);
+                }
+            }
             if (!file.exists()) {
                 log.warn("下载失败：报告文件不存在，路径: [{}]", filePath);
                 response.sendError(404, "报告文件尚未生成。");
                 return;
             }
 
-            response.setContentType(type.equals("csv") ? "text/csv" : "text/html");
+            response.setContentType(isCsv ? "text/csv;charset=UTF-8" : "text/html;charset=UTF-8");
             response.setHeader("Content-Disposition", "attachment; filename=" + fileName);
             
             try (java.io.InputStream is = new java.io.FileInputStream(file);

@@ -2,6 +2,7 @@ package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
+import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,14 @@ public class OsInsightTool extends AbstractCommandExecutor {
         int since = sinceMinutes != null ? Math.min(Math.max(sinceMinutes, 1), MAX_SINCE_MIN) : 30;
         int lines = maxLines != null ? Math.min(Math.max(maxLines, 1), MAX_LINES) : 200;
         long start = System.currentTimeMillis();
+        if (OsRuntime.isWindows()) {
+            String ps = "Get-WinEvent -LogName System -MaxEvents " + lines
+                    + " | Where-Object { $_.TimeCreated -gt (Get-Date).AddMinutes(-" + since + ") }"
+                    + " | Format-List TimeCreated,Id,LevelDisplayName,Message | Out-String -Width 240";
+            List<String> cmd = List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps);
+            CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 90_000L);
+            return buildJsonResponse("Get-WinEvent-System", cmd, r, start);
+        }
         String sinceArg = since + " min ago";
         List<String> cmd = List.of("journalctl", "--no-pager", "-n", String.valueOf(lines), "--since", sinceArg);
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd);
@@ -56,6 +65,14 @@ public class OsInsightTool extends AbstractCommandExecutor {
     @Tool(name = "listListeningSockets", description = "列出监听套接字（ss -tuln），用于网络上下文感知（替代 netstat）")
     public String listListeningSockets() throws JsonProcessingException {
         long start = System.currentTimeMillis();
+        if (OsRuntime.isWindows()) {
+            String ps = "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue"
+                    + " | Select-Object LocalAddress,LocalPort,OwningProcess"
+                    + " | Sort-Object LocalPort | Format-Table -AutoSize | Out-String -Width 400";
+            List<String> cmd = List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps);
+            CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 60_000L);
+            return buildJsonResponse("Get-NetTCPConnection", cmd, r, start);
+        }
         List<String> cmd = List.of("ss", "-tuln");
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd);
         return buildJsonResponse("ss", cmd, r, start);
@@ -72,6 +89,14 @@ public class OsInsightTool extends AbstractCommandExecutor {
                     "error", "无效 PID",
                     "tool", "lsof"
             ));
+        }
+        if (OsRuntime.isWindows()) {
+            String ps = "$p=Get-Process -Id " + pid + " -ErrorAction SilentlyContinue;"
+                    + "if(-not $p){'NO_SUCH_PROCESS'} else {"
+                    + "$p.Modules | Select-Object ModuleName,FileName | Format-Table -AutoSize | Out-String -Width 400}";
+            List<String> cmd = List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps);
+            CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 60_000L);
+            return buildJsonResponse("Get-Process-Modules", cmd, r, start);
         }
         List<String> cmd = List.of("lsof", "-nP", "-p", String.valueOf(pid));
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd);

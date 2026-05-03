@@ -205,7 +205,9 @@ flowchart LR
 | `dashboard` | 日志分析仪表盘 | 汇总图表与统计。 |
 | `alarm-history` | 告警历史分析 | 告警列表与趋势类视图。 |
 
-**API 基地址**：`frontend/src/api/index.js` 中根据浏览器 `hostname` 与固定端口 `8088` 拼接 `http(s)://<host>:8088/award-log`。若前后端不同域或端口，需改此处或通过反向代理统一域名。
+**API 基地址**：`frontend/src/api/index.js` 中根据浏览器 `hostname` 与固定端口 `8088` 拼接 `http(s)://<host>:8088/award-log`（与后端 `server.servlet.context-path` 一致）。若前后端不同域或端口，需改此处或通过反向代理统一域名。
+
+**Cookie / 会话**：需携带登录态的请求（含部分流式 `fetch`）应设置 **`credentials: 'include'`**，并与上述 **`/award-log`** 前缀一致，否则易出现 401 或路径错位。
 
 **跨域**：`WebMvcConfig` 中对 `localhost:3000–3003` 等来源放开 CORS 且 `allowCredentials(true)`；生产应对齐真实前端域名。
 
@@ -231,6 +233,7 @@ flowchart LR
 | `/api/ops-schedule` | `OpsScheduleController` | 延时运维任务 |
 | `/api/ops-trace` | `OpsTraceController` | 运维链路 |
 | `/api/alarm` | `AlarmConfigController` | 告警配置读写 |
+| `/api/alarm-rule` | `AlarmRuleCompatController` | 与前端路径对齐的告警规则兼容接口（内存存储，重启清空） |
 | `/api/alarm/history` | `AlarmHistoryController` | 告警历史与统计接口 |
 | `/api/v1/alarm/lifecycle` | `AlarmLifecycleController` | 告警生命周期 |
 | `/api/profile` | `UserProfileController` | 个人中心、密码、通知设置等 |
@@ -313,7 +316,11 @@ flowchart LR
 
 **执行控制器**：`McpExecuteController`（`/api/mcp`）负责列出工具、执行、二次确认等；与 `McpToolSecurityAspect`、`OpsPathPolicy`、`MinPrivilegeExecutor` 协同实现**路径白名单、禁止敏感路径、最小权限用户**（`agent.*` 配置段）。
 
-**运维注意**：Linux 生产建议配置专用用户与 `sudoers`；Windows 本地开发可在 `application-dev.yml` 将 `agent.min-privilege.enabled` 设为 `false` 以减少权限错误（仅开发环境）。
+**统一安全门**：`McpInvocationSecurityGate` 在控制器层汇总校验：**工具名允许列表**、参数条目数与单字段长度上限、拼接后的「指令串」长度上限；并结合 `PromptInjectionGuard`、`IntentRiskFilter`、`HighRiskCommandDetector`。信任边界由 `McpSecurityProfile` 区分——**首次请求**（`INITIAL_REQUEST`）遇中等意图风险会要求前端二次确认；**已确认执行**（`POST_CONFIRMATION`）与**延时任务**（`DEFERRED`）不再因 MEDIUM 重复阻断。聊天入口 `/api/chat` 对用户消息长度另由 `enforceChatMessageLimit` 约束。
+
+**命令输出**：`AbstractCommandExecutor` 对 stdout/stderr 做长度截断，避免超大回显撑爆内存或日志。
+
+**运维注意**：Linux 生产建议配置专用用户与 `sudoers`；Windows 本地开发可在 `application-dev.yml` 将 `agent.min-privilege.enabled` 设为 `false` 以减少权限错误（仅开发环境）。`OpsPathPolicy` 在 Linux 下会将 `log.collector.file.path` 并入可读前缀；Windows 侧依赖 `agent.paths.windows-*` 覆盖常见日志盘符与目录。
 
 ---
 
@@ -323,6 +330,7 @@ flowchart LR
 |------|----------------|------|
 | 登录拦截 | `security.AuthInterceptor` + `WebMvcConfig` | 保护业务与日志接口 |
 | MCP 调用切面 | `security.McpToolSecurityAspect` | 工具层安检 |
+| MCP 统一门控 | `security.McpInvocationSecurityGate`、`McpSecurityProfile` | 工具允许列表、参数/指令尺度、注入与意图/高危命令；确认流与延时任务信任边界 |
 | 路径策略 | `security.OpsPathPolicy`、`application.yml` → `agent.paths` | 可读/可清/禁止路径 |
 | 高风险命令 | `security.HighRiskCommandDetector`、`HighRiskCommandRule` | 命令级拦截 |
 | 提示注入防护 | `security.PromptInjectionGuard`、`IntentRiskFilter` | 对话与意图风险 |
@@ -396,6 +404,9 @@ flowchart LR
 | `alarm.*` | 告警聚合窗口、最小级别、推送间隔 |
 | `management.endpoints.web.exposure.include` | Actuator 暴露端点 |
 | `knife4j` / `springdoc` | 文档 UI |
+| `agent.security.max-instruction-length` | MCP 拼接指令串最大字符数（环境变量 `AGENT_MAX_INSTRUCTION_LEN`） |
+| `agent.security.max-parameter-entries` | 单次工具调用参数键值对数量上限（`AGENT_MAX_PARAM_ENTRIES`） |
+| `agent.security.max-single-string-param-chars` | 单个字符串参数最大字符数（`AGENT_MAX_PARAM_STRING_CHARS`，防参数炸弹） |
 
 ---
 

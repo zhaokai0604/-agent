@@ -5,6 +5,7 @@ import com.award.log.collector.model.RawLogEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,7 @@ import java.util.concurrent.CompletableFuture;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(prefix = "award.middleware", name = "kafka", havingValue = "true")
 public class KafkaLogProducer {
 
     @Autowired

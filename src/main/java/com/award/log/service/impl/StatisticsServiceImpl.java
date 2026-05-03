@@ -38,7 +38,7 @@ public class StatisticsServiceImpl implements StatisticsService {
     @Autowired
     private LogAnalysisDetailMapper detailMapper;
 
-    @Autowired
+    @Autowired(required = false)
     private RedisTemplate<String, Object> redisTemplate;
 
     // 缓存键前缀
@@ -60,14 +60,16 @@ public class StatisticsServiceImpl implements StatisticsService {
         String cacheKey = LOG_SUMMARY_KEY_PREFIX + days;
         
         // 尝试从缓存获取
-        try {
-            Object cachedData = redisTemplate.opsForValue().get(cacheKey);
-            if (cachedData != null && cachedData instanceof Map) {
-                log.info("从缓存获取近期日志汇总，天数: [{}]", days);
-                return (Map<String, Object>) cachedData;
+        if (redisTemplate != null) {
+            try {
+                Object cachedData = redisTemplate.opsForValue().get(cacheKey);
+                if (cachedData != null && cachedData instanceof Map) {
+                    log.info("从缓存获取近期日志汇总，天数: [{}]", days);
+                    return (Map<String, Object>) cachedData;
+                }
+            } catch (Exception e) {
+                log.warn("从缓存获取近期日志汇总失败: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("从缓存获取近期日志汇总失败: {}", e.getMessage());
         }
 
         log.info("从数据库获取近期日志汇总，天数: [{}]", days);
@@ -89,11 +91,13 @@ public class StatisticsServiceImpl implements StatisticsService {
         summary.put("anomalyDistribution", anomalyDistribution);
 
         // 存入缓存
-        try {
-            redisTemplate.opsForValue().set(cacheKey, summary, CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
-            log.info("近期日志汇总存入缓存，天数: [{}]", days);
-        } catch (Exception e) {
-            log.warn("近期日志汇总存入缓存失败: {}", e.getMessage());
+        if (redisTemplate != null) {
+            try {
+                redisTemplate.opsForValue().set(cacheKey, summary, CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
+                log.info("近期日志汇总存入缓存，天数: [{}]", days);
+            } catch (Exception e) {
+                log.warn("近期日志汇总存入缓存失败: {}", e.getMessage());
+            }
         }
 
         return summary;
@@ -305,14 +309,16 @@ public class StatisticsServiceImpl implements StatisticsService {
     @Override
     public Map<String, Object> getTaskStatusStatistics() {
         // 尝试从缓存获取
-        try {
-            Object cachedData = redisTemplate.opsForValue().get(TASK_STATUS_KEY);
-            if (cachedData != null && cachedData instanceof Map) {
-                log.info("从缓存获取任务状态统计");
-                return (Map<String, Object>) cachedData;
+        if (redisTemplate != null) {
+            try {
+                Object cachedData = redisTemplate.opsForValue().get(TASK_STATUS_KEY);
+                if (cachedData != null && cachedData instanceof Map) {
+                    log.info("从缓存获取任务状态统计");
+                    return (Map<String, Object>) cachedData;
+                }
+            } catch (Exception e) {
+                log.warn("从缓存获取任务状态统计失败: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("从缓存获取任务状态统计失败: {}", e.getMessage());
         }
 
         log.info("从数据库获取任务状态统计");
@@ -338,11 +344,13 @@ public class StatisticsServiceImpl implements StatisticsService {
         statistics.put("avgProcessingTime", avgProcessingTime);
 
         // 存入缓存
-        try {
-            redisTemplate.opsForValue().set(TASK_STATUS_KEY, statistics, CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
-            log.info("任务状态统计存入缓存");
-        } catch (Exception e) {
-            log.warn("任务状态统计存入缓存失败: {}", e.getMessage());
+        if (redisTemplate != null) {
+            try {
+                redisTemplate.opsForValue().set(TASK_STATUS_KEY, statistics, CACHE_EXPIRE_TIME, TimeUnit.MINUTES);
+                log.info("任务状态统计存入缓存");
+            } catch (Exception e) {
+                log.warn("任务状态统计存入缓存失败: {}", e.getMessage());
+            }
         }
 
         return statistics;

@@ -110,6 +110,12 @@ public class ElasticsearchController {
         }
     }
 
+    /** 与旧版前端路径 {@code /logs/{id}} 兼容，行为同 {@link #getLogById(String)} */
+    @GetMapping("/logs/{id}")
+    public Result<LogDocument> getLogByIdLegacyPath(@PathVariable String id) {
+        return getLogById(id);
+    }
+
     /**
      * 全文检索日志
      * @param query 搜索关键词

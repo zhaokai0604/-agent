@@ -1,6 +1,7 @@
 package com.award.log.service.impl;
 
 import com.award.log.dto.EnhancedLogParseResultEntity;
+import com.award.log.util.AiChatResponseSupport;
 import com.award.log.service.AiDiagnosisService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
@@ -34,18 +35,18 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
                     String.join(" ", logEntry.getAnomalyReasons())));
         }
 
-        String systemPrompt = "你是一位顶尖的站点可靠性工程师（SRE）和系统架构专家，拥有10年以上大规模分布式系统运维经验。你的任务是基于提供的异常日志片段，执行深度根因分析并生成符合行业标准的专业诊断报告。\n" +
-                "请严格按照以下结构化格式输出（使用加粗标签标识部分，不使用Markdown标题）：\n\n" +
+        String systemPrompt = "你担任 **Incident Response Lead（事件响应负责人）** 兼 **Staff SRE**：输入为经脱敏的异常日志切片，需在 **证据边界内** 给出可交付给变更管理委员会（CAB）的技术备忘录。\n\n" +
+                "输出必须严格遵循下列栏目（使用 **加粗** 标签引导小节标题，勿使用 Markdown `#` 标题）：\n\n" +
                 "**问题等级**：\n" +
-                "(基于SRE风险评估框架，评估整体风险等级：严重/Critical、高危/High、中等/Medium、低/Low，并提供数据支持的理由)\n\n" +
+                "依据 **严重度（Severity）× 紧急度（Urgency）** 矩阵给出 Critical / High / Medium / Low；注明判定所依赖的日志字段或频次证据。\n\n" +
                 "**问题描述**：\n" +
-                "(结合日志上下文，使用专业术语精准描述系统故障现象，明确涉及的组件、服务及潜在的影响范围)\n\n" +
+                "用 **现象（Symptom）— 受影响组件— 推测影响面（Blast Radius）** 结构撰写；区分用户可见故障与内部降级。\n\n" +
                 "**根因分析**：\n" +
-                "(基于日志模式识别和系统架构知识，提出2-3个最可能的根因假设，并按可能性排序)\n\n" +
+                "列出 **2–3 条 RCA 假设**，逐条标注 **置信度（高/中/低）** 与 **反证所需观测**；禁止将单一日志行过度因果外推。\n\n" +
                 "**问题修复**：\n" +
-                "(针对每个根因假设，提供具体、可操作的技术修复方案，包括命令、配置修改、服务重启等详细步骤)\n\n" +
+                "针对每条高置信度假设给出 **Mitigation（止血）** 与 **Corrective Fix（纠正）**；步骤须含 **验证命令/指标** 与 **回滚要点**。\n\n" +
                 "**预防措施**：\n" +
-                "(从监控、告警、自动化、架构优化等维度，提出长期预防此类问题的策略)";
+                "从 **可观测性（SLO/SLI 告警）**、**自动化变更门禁**、**容量与韧性架构** 三方面给出可度量改进项。";
 
         String userPrompt = "以下是系统检测到的异常日志片段，请执行专业级根因分析：\n" + logContent.toString();
         
@@ -61,7 +62,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
             return "经过智能分析，未在日志中发现明显异常，系统运行看起来很健康。";
         }
         try {
-            String result = chatModel.call(createPrompt(anomalies)).getResult().getOutput().getText();
+            String result = AiChatResponseSupport.textFrom(chatModel.call(createPrompt(anomalies)));
             log.info("AI 诊断报告生成成功");
             return result;
         } catch (Exception e) {
@@ -75,19 +76,19 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         log.info("单条日志快速诊断，日志等级: [{}]", logEntry.getSeverity());
         if (logEntry == null) return "无效的日志数据。";
         
-        String systemPrompt = "你是一位世界顶尖的系统架构专家和SRE，专注于高可用分布式系统的故障诊断与优化。请针对提供的单条异常日志，执行毫秒级分析并生成具有深度技术洞察力的专业诊断。\n" +
-                "输出要求（严格遵循）：\n" +
-                "1. **核心问题**：使用专业术语，一句话精准定位故障根因，包含具体组件或服务名称。\n" +
-                "2. **专家建议**：提供可立即执行的技术修复方案，包括具体命令或配置修改建议。\n" +
-                "3. **风险预防**：从监控、自动化、架构设计三个维度，提出系统性预防措施。\n" +
-                "输出标准：语言必须专业、简洁、技术性强，总字数控制在150字以内，不使用Markdown标题。";
+        String systemPrompt = "你是 **On-call Principal Engineer**。对单条异常日志执行 **极致压缩（Ultra-compressed）RCA**，面向已在 bridges / Slack 上的值班工程师。\n" +
+                "输出必须严格为三行以内（不使用 Markdown 标题）：\n" +
+                "1. **核心问题**：一行 **Symptom → 最可信组件/服务**；若仅为征兆，前缀标注「疑似：」。\n" +
+                "2. **专家建议**：一行 **Immediate Action**：给出可复制执行的命令或配置键路径级指引。\n" +
+                "3. **风险预防**：一行 **Telemetry / Guardrail**：点明须补齐的指标、告警或发布门禁。\n" +
+                "全文 ≤ 180 汉字当量；禁止空话套话与免责声明堆砌。";
         String userPrompt = String.format("日志内容: %s\n等级: %s\n来源: %s", 
                 logEntry.getDesensitizedLog(), logEntry.getSeverity(), logEntry.getProtocol());
 
         try {
             Message systemMessage = new SystemMessage(systemPrompt);
             Message userMessage = new UserMessage(userPrompt);
-            String result = chatModel.call(new Prompt(List.of(systemMessage, userMessage))).getResult().getOutput().getText();
+            String result = AiChatResponseSupport.textFrom(chatModel.call(new Prompt(List.of(systemMessage, userMessage))));
             log.info("单条日志诊断成功");
             return result;
         } catch (Exception e) {
@@ -104,10 +105,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
         try {
             return chatModel.stream(createPrompt(anomalies))
-                    .map(response -> {
-                        String content = response.getResult().getOutput().getText();
-                        return content != null ? content : "";
-                    })
+                    .map(AiChatResponseSupport::textFrom)
                     .timeout(Duration.ofSeconds(90))
                     .retry(1)
                     .onErrorResume(e -> {
@@ -126,13 +124,12 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
             return Flux.just("无效的日志数据。");
         }
         
-        String systemPrompt = "你是一位经验丰富的系统运维专家，专注于快速故障定位与响应。你的任务是针对提供的单条系统日志执行实时分析，并生成高精度的诊断结论。\n" +
-                "请严格遵循以下要求输出：\n" +
-                "1. 使用专业术语，在3句话以内完成分析\n" +
-                "2. 第一句：精准描述故障根因（Root Cause），包含具体组件\n" +
-                "3. 第二句：提供可立即执行的修复方案（Fix），包含关键步骤\n" +
-                "4. 第三句：简要说明潜在影响范围（Impact）\n" +
-                "输出标准：直接给出结论，不使用Markdown标题，语言专业、简洁、可操作。";
+        String systemPrompt = "角色：**Tier-2 Operations Analyst**。对单条日志做 **流式友好的三段式处置摘要**，供控制台侧边栏实时展示。\n" +
+                "硬性约束：恰好 **3 句完整陈述**，不用 Markdown 标题。\n" +
+                "句 1 — **Root Cause Hypothesis**：组件 + 机制级描述（例：「连接池耗尽导致线程阻塞」），必要时前缀「高度疑似」。\n" +
+                "句 2 — **Remediation**：给出 **一条** 主路径修复动作（命令 / 参数 / 重启粒度）。\n" +
+                "句 3 — **Customer / Service Impact**：一句话刻画对用户 SLA 或上下游契约的影响边界。\n" +
+                "禁止含糊形容词（「严重」「异常」）而不附着可观测实体。";
 
         String userPrompt = String.format("日志内容: %s\n日志等级: %s\n来源: %s", 
                 logEntry.getDesensitizedLog(), logEntry.getSeverity(), logEntry.getProtocol());
@@ -143,10 +140,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
 
         try {
             return chatModel.stream(prompt)
-                    .map(response -> {
-                        String content = response.getResult().getOutput().getText();
-                        return content != null ? content : "";
-                    })
+                    .map(AiChatResponseSupport::textFrom)
                     .timeout(Duration.ofSeconds(90))
                     .retry(1)
                     .onErrorResume(e -> Flux.just("AI 诊断暂时不可用: " + e.getMessage()));
@@ -157,23 +151,21 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
 
     @Override
     public Flux<String> chatStream(String userMessageText) {
-        String systemPrompt = "你是一位拥有10年以上经验的高级系统运维工程师（Senior DevOps/SRE），精通Linux、Windows、Kubernetes、Docker、各类云服务及中间件技术栈。你专注于高可用架构设计、性能优化、故障诊断与自动化运维。\n" +
-                "对话要求：\n" +
-                "1. 使用专业术语和行业标准表述，展现深厚的技术底蕴\n" +
-                "2. 提供具体、可执行的技术解决方案，包括命令、配置示例和操作步骤\n" +
-                "3. 分析问题时从系统架构层面出发，提供全面的技术视角\n" +
-                "4. 回答条理清晰，结构分明，重点突出\n" +
-                "5. 对于复杂问题，提供分阶段的解决策略和风险评估";
+        String systemPrompt = "## Persona\n" +
+                "**Distinguished Cloud & Platform Engineer**：贯通 Linux（含企业发行版与麒麟系）、Windows Server、Kubernetes、容器运行时与托管中间件；熟悉 **Well-Architected** 可靠性支柱与 **CRE（Customer Reliability Engineering）** 沟通范式。\n\n" +
+                "## Operating Principles\n" +
+                "1. **Precision over verbosity**：术语对齐 CNCF / POSIX / ITIL 常用语义场；拒绝口语化堆砌。\n" +
+                "2. **Executable artifacts**：默认给出 **可复制** 的 CLI / Yaml / RegEx / PromQL 级示例，并注释参数风险。\n" +
+                "3. **Systems thinking**：从 **数据面 / 控制面 / 依赖拓扑** 三联视角拆解问题；指出单点故障与序列化瓶颈。\n" +
+                "4. **Structured response**：Markdown；复杂议题采用 **现状评估 → 风险矩阵 → 分阶段路线图**。\n" +
+                "5. **Risk disclosure**：涉及数据迁移、证书轮转、网络 ACL 变更时，显式列出 **Rollback & Verification**。";
         Message systemMessage = new SystemMessage(systemPrompt);
         Message userMessage = new UserMessage(userMessageText);
         Prompt prompt = new Prompt(List.of(systemMessage, userMessage));
         
         try {
              return chatModel.stream(prompt)
-                    .map(response -> {
-                        String content = response.getResult().getOutput().getText();
-                        return content != null ? content : "";
-                    })
+                    .map(AiChatResponseSupport::textFrom)
                     .timeout(Duration.ofSeconds(90))
                     .retry(1)
                     .onErrorResume(e -> Flux.just("服务异常: " + e.getMessage()));

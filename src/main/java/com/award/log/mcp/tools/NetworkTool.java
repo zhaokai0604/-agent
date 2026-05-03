@@ -2,6 +2,7 @@ package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
+import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +31,13 @@ public class NetworkTool extends AbstractCommandExecutor {
     private static final Pattern TRACE_LINE_PATTERN = Pattern.compile(
         "^\\s*(\\d+)\\s+([\\d.]+|\\*|\\S+)\\s+([\\d.]+|\\*|\\S+)\\s+([\\d.]+|\\*|\\S+)"
     );
+    /** Windows ping 英文/中文大致兼容 */
+    private static final Pattern WIN_PING_SENT = Pattern.compile(
+            "(?:Sent|已发送)\\s*=\\s*(\\d+).*?(?:Received|已接收)\\s*=\\s*(\\d+).*?(?:Lost|丢失)\\s*=\\s*(\\d+)",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern WIN_PING_LOSS = Pattern.compile("\\(\\s*(\\d+)%?\\s*(?:loss|丢失)\\s*\\)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern WIN_PING_AVG = Pattern.compile(
+            "(?:Average|平均)\\s*=\\s*(\\d+)\\s*ms", Pattern.CASE_INSENSITIVE);
 
     private final ObjectMapper objectMapper;
     private final MinPrivilegeExecutor minPrivilegeExecutor;
@@ -83,26 +91,48 @@ public class NetworkTool extends AbstractCommandExecutor {
 
     private String runPing(String target, int count) throws JsonProcessingException {
         AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
-            List.of("ping", "-c", String.valueOf(count), target)
+                OsRuntime.isWindows()
+                        ? List.of("ping", "-n", String.valueOf(count), target)
+                        : List.of("ping", "-c", String.valueOf(count), target)
         );
 
-        String[] lines = result.output() != null ? result.output().split("\n") : new String[0];
+        String blob = result.output() != null ? result.output() : "";
+        String[] lines = blob.split("\n");
 
         double packetLoss = 100.0;
         double avgLatency = -1.0;
         int transmitted = 0, received = 0;
 
-        for (String line : lines) {
-            Matcher pingMatcher = PING_LINE_PATTERN.matcher(line);
-            if (pingMatcher.find()) {
-                transmitted = Integer.parseInt(pingMatcher.group(1));
-                received = Integer.parseInt(pingMatcher.group(2));
-                packetLoss = Double.parseDouble(pingMatcher.group(3));
+        if (OsRuntime.isWindows()) {
+            Matcher sm = WIN_PING_SENT.matcher(blob);
+            if (sm.find()) {
+                transmitted = Integer.parseInt(sm.group(1));
+                received = Integer.parseInt(sm.group(2));
+                int lost = Integer.parseInt(sm.group(3));
+                int denom = Math.max(transmitted, 1);
+                packetLoss = 100.0 * lost / denom;
             }
+            Matcher lm = WIN_PING_LOSS.matcher(blob);
+            if (lm.find()) {
+                packetLoss = Double.parseDouble(lm.group(1));
+            }
+            Matcher am = WIN_PING_AVG.matcher(blob);
+            if (am.find()) {
+                avgLatency = Double.parseDouble(am.group(1));
+            }
+        } else {
+            for (String line : lines) {
+                Matcher pingMatcher = PING_LINE_PATTERN.matcher(line);
+                if (pingMatcher.find()) {
+                    transmitted = Integer.parseInt(pingMatcher.group(1));
+                    received = Integer.parseInt(pingMatcher.group(2));
+                    packetLoss = Double.parseDouble(pingMatcher.group(3));
+                }
 
-            Matcher timeMatcher = PING_TIME_PATTERN.matcher(line);
-            if (timeMatcher.find()) {
-                avgLatency = Double.parseDouble(timeMatcher.group(2));
+                Matcher timeMatcher = PING_TIME_PATTERN.matcher(line);
+                if (timeMatcher.find()) {
+                    avgLatency = Double.parseDouble(timeMatcher.group(2));
+                }
             }
         }
 
@@ -117,7 +147,9 @@ public class NetworkTool extends AbstractCommandExecutor {
 
     private String runTraceroute(String target, int maxHops) throws JsonProcessingException {
         AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
-            List.of("traceroute", "-m", String.valueOf(maxHops), "-w", "2", target)
+                OsRuntime.isWindows()
+                        ? List.of("tracert", "-d", "-h", String.valueOf(maxHops), target)
+                        : List.of("traceroute", "-m", String.valueOf(maxHops), "-w", "2", target)
         );
 
         List<String> hops = new ArrayList<>();
@@ -132,15 +164,23 @@ public class NetworkTool extends AbstractCommandExecutor {
                 String hop3 = matcher.group(4).equals("*") ? "timeout" : matcher.group(4);
 
                 hops.add(String.format(
-                    "{\"hop\":%d,\"rtt1\":\"%s\",\"rtt2\":\"%s\",\"rtt3\":\"%s\"}",
-                    hopNum, hop1, hop2, hop3
+                        "{\"hop\":%d,\"rtt1\":\"%s\",\"rtt2\":\"%s\",\"rtt3\":\"%s\"}",
+                        hopNum, hop1, hop2, hop3
                 ));
             }
         }
 
+        if (OsRuntime.isWindows() && hops.isEmpty() && result.output() != null && !result.output().isBlank()) {
+            String esc = result.output().replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n");
+            return String.format(
+                    "{\"type\":\"traceroute\",\"target\":\"%s\",\"hopCount\":0,\"hops\":[],\"raw\":\"%s\"}",
+                    target, esc.length() > 8000 ? esc.substring(0, 8000) + "...(truncated)" : esc
+            );
+        }
+
         return String.format(
-            "{\"type\":\"traceroute\",\"target\":\"%s\",\"hopCount\":%d,\"hops\":[%s]}",
-            target, hops.size(), String.join(",", hops)
+                "{\"type\":\"traceroute\",\"target\":\"%s\",\"hopCount\":%d,\"hops\":[%s]}",
+                target, hops.size(), String.join(",", hops)
         );
     }
 

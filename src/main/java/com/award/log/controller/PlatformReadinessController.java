@@ -49,7 +49,7 @@ public class PlatformReadinessController {
         checks.put("ai", checkAiConfig());
 
         boolean allUp = checks.values().stream()
-                .allMatch(v -> v instanceof Map && "UP".equals(((Map<?, ?>) v).get("status")));
+                .allMatch(v -> v instanceof Map && okHealthStatus(((Map<?, ?>) v).get("status")));
 
         Map<String, Object> result = new HashMap<>();
         result.put("status", allUp ? "UP" : "DEGRADED");
@@ -70,11 +70,18 @@ public class PlatformReadinessController {
         return r;
     }
 
+    private static boolean okHealthStatus(Object status) {
+        if (!(status instanceof String s)) {
+            return false;
+        }
+        return "UP".equals(s) || "SKIPPED".equals(s);
+    }
+
     private Map<String, Object> checkRedis() {
         Map<String, Object> r = new HashMap<>();
         if (stringRedisTemplate == null) {
-            r.put("status", "DOWN");
-            r.put("error", "Redis template unavailable");
+            r.put("status", "SKIPPED");
+            r.put("message", "Redis 未启用（award.middleware.redis=false）");
             return r;
         }
         try {
@@ -90,8 +97,8 @@ public class PlatformReadinessController {
     private Map<String, Object> checkKafka() {
         Map<String, Object> r = new HashMap<>();
         if (kafkaMonitorService == null) {
-            r.put("status", "DOWN");
-            r.put("error", "Kafka monitor unavailable");
+            r.put("status", "SKIPPED");
+            r.put("message", "Kafka 未启用（award.middleware.kafka=false）");
             return r;
         }
         try {

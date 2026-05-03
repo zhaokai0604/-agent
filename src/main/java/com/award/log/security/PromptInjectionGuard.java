@@ -14,8 +14,9 @@ import java.util.regex.Pattern;
 public class PromptInjectionGuard {
 
     private static final Pattern INJECTION_PATTERN = Pattern.compile(
-        "(?i)(ignore\s+previous\s+instructions|disregard\s+safety|pretend\s+you\s+are|execute\s+this:|system\s+prompt|role\s+play|bypass\s+security|override\s+instructions|reset\s+prompt|ignore\s+guidelines)",
-        Pattern.CASE_INSENSITIVE
+            "(?i)(ignore\\s+previous\\s+instructions|disregard\\s+safety|pretend\\s+you\\s+are|execute\\s+this:|system\\s+prompt|role\\s+play|bypass\\s+security|override\\s+instructions|reset\\s+prompt|ignore\\s+guidelines|"
+                    + "developer\\s+mode|jailbreak|DAN\\s+mode|\\bDAN\\b\\s*[:：]|reveal\\s+your\\s+prompt|show\\s+the\\s+prompt|"
+                    + "忽略\\s*上文|忽略.*指令|绕过.*安全|越狱|假装你是|解除限制|输出.*系统提示|泄露.*提示词)"
     );
 
     private final RuleExpressionEvaluator ruleExpressionEvaluator;

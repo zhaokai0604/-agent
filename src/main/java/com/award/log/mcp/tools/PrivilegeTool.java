@@ -3,6 +3,7 @@ package com.award.log.mcp.tools;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,9 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -124,8 +128,22 @@ public class PrivilegeTool extends AbstractCommandExecutor {
         }
     }
 
+    /** 裸命令名 vs 文件路径（支持 Unix 绝对路径与 Windows 盘符/UNC）。 */
     private boolean isCommand(String path) {
-        return !path.startsWith("/") || path.contains(" ");
+        if (path == null || path.isBlank()) {
+            return true;
+        }
+        String t = path.trim();
+        if (t.startsWith("/")) {
+            return false;
+        }
+        if (t.length() >= 2 && Character.isLetter(t.charAt(0)) && t.charAt(1) == ':') {
+            return false;
+        }
+        if (t.startsWith("\\\\")) {
+            return false;
+        }
+        return true;
     }
 
     private String getCurrentUser() {
@@ -139,9 +157,17 @@ public class PrivilegeTool extends AbstractCommandExecutor {
 
     private String findCommandPath(String command) {
         try {
-            AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of("which", command));
+            List<String> lookup = OsRuntime.isWindows()
+                    ? List.of("where.exe", command)
+                    : List.of("which", command);
+            AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(lookup);
             if (result.success() && result.output() != null) {
-                return result.output().trim();
+                String out = result.output().trim();
+                int nl = out.indexOf('\r');
+                if (nl < 0) {
+                    nl = out.indexOf('\n');
+                }
+                return nl >= 0 ? out.substring(0, nl).trim() : out;
             }
         } catch (Exception e) {
             log.debug("查找命令路径失败: {}", command);
@@ -150,22 +176,25 @@ public class PrivilegeTool extends AbstractCommandExecutor {
     }
 
     private boolean checkFilePermission(String path, String action) {
-        String testFlag;
-        switch (action) {
-            case "read": case "r": testFlag = "-r"; break;
-            case "write": case "w": testFlag = "-w"; break;
-            default: testFlag = "-x"; break;
-        }
-
         try {
-            AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of("test", testFlag, path));
-            return result.success();
+            Path p = Paths.get(path);
+            if (!Files.exists(p)) {
+                return false;
+            }
+            return switch (action) {
+                case "read", "r" -> Files.isReadable(p);
+                case "write", "w" -> Files.isWritable(p);
+                default -> Files.isExecutable(p);
+            };
         } catch (Exception e) {
             return false;
         }
     }
 
     private boolean checkSudoPermission(String command) {
+        if (OsRuntime.isWindows()) {
+            return false;
+        }
         try {
             AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of("sudo", "-l"));
             if (result.success() && result.output() != null) {

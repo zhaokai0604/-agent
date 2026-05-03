@@ -54,4 +54,26 @@ public class AiAuditLogService {
         int size = Math.max(1, Math.min(limit, 500));
         return jdbcTemplate.queryForList("SELECT * FROM ai_audit_log ORDER BY id DESC LIMIT ?", size);
     }
+
+    /** 个人中心「登录 / 请求足迹」：按用户过滤 HTTP 审计记录 */
+    public List<Map<String, Object>> listRecentByUserId(String userId, int limit) {
+        if (userId == null || userId.isBlank()) {
+            return List.of();
+        }
+        int size = Math.max(1, Math.min(limit, 200));
+        return jdbcTemplate.queryForList(
+                "SELECT id, method, path, status, duration_ms, remote_ip, created_at FROM ai_audit_log "
+                        + "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                userId,
+                size);
+    }
+
+    public long countByUserId(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return 0L;
+        }
+        Long n = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM ai_audit_log WHERE user_id = ?", Long.class, userId);
+        return n == null ? 0L : n;
+    }
 }

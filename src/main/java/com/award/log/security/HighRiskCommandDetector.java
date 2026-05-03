@@ -14,8 +14,10 @@ import java.util.regex.Pattern;
 public class HighRiskCommandDetector {
 
     private static final Pattern HIGH_RISK_PATTERN = Pattern.compile(
-        "(rm\\s+-rf\\s+/|rm\\s+-rf\\s+/*|chmod\\s+777\\s+/|dd\\s+if=/dev/(zero|random)|mkfs|fork\\s+bomb|sudo\\s+(rm|mkfs|dd|shutdown|reboot))",
-        Pattern.CASE_INSENSITIVE
+            "(rm\\s+-rf\\s+/|rm\\s+-rf\\s+\\/\\s*\\*|chmod\\s+-R?\\s*777\\s+/|dd\\s+if=/dev/(zero|random)|\\bmkfs\\.?\\b|fork\\s+bomb|sudo\\s+(rm|mkfs|dd|shutdown|reboot)|"
+                    + ":\\(\\)\\{\\s*:\\|:&\\s*\\};:|\\bcurl\\b[^\\n]{0,400}\\|\\s*(ba)?sh|\\bwget\\b[^\\n]{0,400}\\|\\s*(ba)?sh|"
+                    + "powershell(\\.exe)?[^\\n]{0,200}-enc\\s|certutil\\s+-decode|regsvr32[^\\n]{0,200}https?://)",
+            Pattern.CASE_INSENSITIVE
     );
 
     private final RuleExpressionEvaluator ruleExpressionEvaluator;

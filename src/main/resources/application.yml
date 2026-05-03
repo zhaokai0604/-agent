@@ -5,6 +5,12 @@ server:
   tomcat:
     connection-timeout: 1800000 # 30分钟超时
 
+# 中间件开关：false 时不加载 Kafka/Redis 自动配置、不尝试连接（无相关报错日志）。需要时再改为 true 或设环境变量。
+award:
+  middleware:
+    kafka: ${AWARD_MIDDLEWARE_KAFKA:false}
+    redis: ${AWARD_MIDDLEWARE_REDIS:false}
+
 spring:
   application:
     name: award-log
@@ -30,8 +36,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${DB_URL:jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
-    # 必须通过环境变量或 .env 提供（勿将真实密码提交到仓库）
-    password: ${DB_PASSWORD:}
+    # 本地测试默认值；生产务必用环境变量 DB_PASSWORD 覆盖
+    password: ${DB_PASSWORD:20070604zwk..}
   
   # Redis Configuration
   data:
@@ -57,7 +63,7 @@ spring:
             initialize-schema: never
     openai:
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-      # 必须通过环境变量或 .env 提供
+      # 必须通过环境变量 AI_API_KEY 配置；勿将密钥提交到仓库
       api-key: ${AI_API_KEY:}
       chat:
         options:
@@ -99,9 +105,8 @@ spring:
     username: ${ELASTIC_USERNAME:}
     password: ${ELASTIC_PASSWORD:}
 
-  # Kafka Configuration
+  # Kafka（仅当 award.middleware.kafka=true 时生效；否则不装配客户端与监听器）
   kafka:
-    enabled: true
     bootstrap-servers: localhost:9092
     consumer:
       group-id: award-log-group
@@ -148,7 +153,7 @@ log:
   collector:
     enabled: true
     file:
-      path: ${LOG_COLLECTOR_ROOT:logs}
+      path: ${LOG_COLLECTOR_ROOT:E:\}
       include-extensions: .log,.txt,.out,.err,.debug,.info,.warn,.error,.fatal,.access,.audit,.trace
       exclude-directories: node_modules,target,.git,.idea,.vscode,.cursor
     db:
@@ -253,13 +258,24 @@ agent:
   run-as-user: ${AGENT_RUN_AS_USER:award-agent}
   min-privilege:
     enabled: ${AGENT_MIN_PRIVILEGE:true}
+  # MCP 统一安全门：指令长度、参数个数与单字段体积（防参数炸弹与日志注入）
+  security:
+    max-instruction-length: ${AGENT_MAX_INSTRUCTION_LEN:16384}
+    max-parameter-entries: ${AGENT_MAX_PARAM_ENTRIES:48}
+    max-single-string-param-chars: ${AGENT_MAX_PARAM_STRING_CHARS:131072}
   paths:
     policy-version: path-policy-v1
-    read-prefixes: /var/log,/tmp,/var/log/journal
+    # Linux / 麒麟等：赛题常见日志与部署目录；采集根见 log.collector.file.path 会自动并入
+    read-prefixes: /var/log,/tmp,/var/log/journal,/opt,/usr/local,/run
     clean-roots: /tmp,/var/tmp
     config-prefixes: /etc/nginx/,/etc/ssh/,/etc/default/,/etc/crontab,/etc/cron.
     denied-substrings: /etc/shadow,/etc/gshadow,/.ssh,/root/,/boot/
     privilege-prefixes: /usr/bin,/usr/sbin,/bin,/sbin,/usr/local/bin,/usr/lib
+    # Windows：读日志白名单（须覆盖默认 analyzeLogs 路径如 C:\Windows\*.log，及采集盘 D/E 等）
+    windows-read-prefixes: C:/Windows,C:/Windows/Logs,C:/ProgramData,C:/Windows/System32/winevt/Logs,C:/inetpub/logs,D:/,E:/
+    windows-clean-roots: C:/Windows/Temp,C:/Temp,D:/Temp,E:/Temp,E:/
+    windows-config-prefixes: C:/Windows/System32/drivers/etc,C:/ProgramData,C:/Windows/System32/winevt/Logs
+    windows-privilege-prefixes: C:/Windows/System32,C:/Windows/SysWOW64,C:/Program Files,C:/Program Files (x86)
 
 qdrant:
   url: ${QDRANT_URL:http://localhost:6333}

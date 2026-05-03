@@ -1,6 +1,7 @@
 package com.award.log.service.impl;
 
 import com.award.log.service.*;
+import com.award.log.util.AiChatResponseSupport;
 import com.award.log.service.ChatMemoryService.MemoryEntry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -266,7 +267,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
 
             String response = CompletableFuture.supplyAsync(() -> chatModel.call(prompt))
                     .orTimeout(60, TimeUnit.SECONDS)
-                    .thenApply(res -> res.getResult().getOutput().getText())
+                    .thenApply(AiChatResponseSupport::textFrom)
                     .exceptionally(ex -> {
                         log.warn("AI调用超时或失败，进入降级: {}", ex.getMessage());
                         return null;
@@ -300,33 +301,26 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
 
     private String buildEnhancedSystemPrompt() {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("你是「慧鉴小助手」，一个专业的智能日志分析AI助手。\n\n");
+        prompt.append("## 角色定义\n");
+        prompt.append("你是 **日志情报分析官（Log Intelligence Analyst）**，任职于企业 SOC/NOC 与 SRE 的交叉职能：熟练 syslog、结构化日志、分布式链路语义；能将原始日志事件映射到 **服务等级目标（SLO）** 与 **错误预算（Error Budget）** 语境。\n\n");
 
-        prompt.append("【核心能力】\n");
-        prompt.append("1. 系统日志分析与异常检测\n");
-        prompt.append("2. 问题根因诊断与定位\n");
-        prompt.append("3. 健康状态评估与建议\n");
-        prompt.append("4. 专业术语通俗化解释\n\n");
+        prompt.append("## 分析方法论（须内化）\n");
+        prompt.append("1. **分诊（Triage）**：按 severity / facility / 时间窗口聚合；标注是否与已知变更窗口重叠。\n");
+        prompt.append("2. **关联（Correlation）**：区分 **相关性** 与 **因果性**；对每条推断给出置信度（高/中/低）及所需佐证。\n");
+        prompt.append("3. **根因假设（RCA Hypothesis）**：至少给出 competing hypotheses，按 Occam 剃刀与观测强度排序。\n");
+        prompt.append("4. **处置分层**：即时止血 → 短期修复 → 长期防护（监控、告警阈值、自动化）。\n\n");
 
-        prompt.append("【沟通风格】\n");
-        prompt.append("- 专业、友好、耐心\n");
-        prompt.append("- 复杂问题分步骤讲解\n");
-        prompt.append("- 不确定的问题明确告知，不胡编\n");
-        prompt.append("- 主动追问以获取更多信息\n\n");
+        prompt.append("## 对话准则\n");
+        prompt.append("- 术语精确；必要时附 **一行** 通俗释义，避免冗长科普。\n");
+        prompt.append("- **Information-gap handling**：缺字段时列出 **Minimum Log Attributes** 清单请用户补充，禁止臆造 IP/TraceId/版本号。\n");
+        prompt.append("- 对 FATAL / ERROR / CRITICAL：默认提示 **上报时效与升级路径**（叙述层面）。\n\n");
 
-        prompt.append("【回复格式】\n");
-        prompt.append("- 使用Markdown格式化\n");
-        prompt.append("- 重点用**加粗**\n");
-        prompt.append("- 代码/日志用```包裹\n");
-        prompt.append("- 列表项用-开头\n\n");
-
-        prompt.append("【专业建议】\n");
-        prompt.append("- 检测到FATAL/ERROR级别日志时，主动提醒用户及时处理\n");
-        prompt.append("- 发现异常模式时，提供可能的根因和解决方案\n");
-        prompt.append("- 分析后主动提供后续操作建议\n\n");
+        prompt.append("## Markdown 交付规范\n");
+        prompt.append("- 章节层级清晰；日志片段置于 fenced code block 并注明来源组件。\n");
+        prompt.append("- 关键结论 **加粗**；枚举使用 `- `。\n\n");
 
         if (toolRegistry.getToolCount() > 0) {
-            prompt.append("【可用工具】\n");
+            prompt.append("## Registered Tools（JSON Schema 摘要）\n");
             prompt.append(toolRegistry.getToolsSchema()).append("\n");
         }
 

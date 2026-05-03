@@ -3,6 +3,7 @@ package com.award.log.mcp.tools;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -74,9 +75,26 @@ public class ConfigCheckTool extends AbstractCommandExecutor {
                 configType = "generic";
             }
 
-            AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
-                List.of("sh", "-c", command + " 2>&1")
-            );
+            AbstractCommandExecutor.CommandResult result;
+            if (OsRuntime.isWindows()) {
+                String safe = normalizedPath.replace("'", "''");
+                String ps;
+                if (lowerPath.endsWith(".xml") || lowerPath.endsWith(".config")) {
+                    ps = "try { [void]([xml](Get-Content -LiteralPath '" + safe + "' -Raw)); 'XML_SYNTAX_OK' } catch { $_.Exception.Message }";
+                } else if (lowerPath.endsWith(".ps1")) {
+                    ps = "$errs=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('" + safe + "',[ref]$null,[ref]$errs); if ($errs) { $errs } else { 'PS1_SYNTAX_OK' }";
+                } else if (lowerPath.endsWith(".json")) {
+                    ps = "try { Get-Content -LiteralPath '" + safe + "' -Raw | ConvertFrom-Json | Out-Null; 'JSON_OK' } catch { $_.Exception.Message }";
+                } else {
+                    ps = "if (Test-Path -LiteralPath '" + safe + "') { 'READ_OK' } else { 'MISSING' }";
+                }
+                result = minPrivilegeExecutor.executeSafely(
+                        List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 60_000L);
+            } else {
+                result = minPrivilegeExecutor.executeSafely(
+                        List.of("sh", "-c", command + " 2>&1")
+                );
+            }
 
             String output = result.output() != null ? result.output() : "";
             String error = result.error() != null ? result.error() : "";

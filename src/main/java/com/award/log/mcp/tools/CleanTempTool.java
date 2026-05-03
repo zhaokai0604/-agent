@@ -3,7 +3,9 @@ package com.award.log.mcp.tools;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
@@ -44,7 +46,8 @@ public class CleanTempTool extends AbstractCommandExecutor {
             @ToolParam(description = "必须为 true 才会在 dryRun=false 时执行 rm", required = false) Boolean confirmDelete
     ) throws JsonProcessingException {
         long startTime = System.currentTimeMillis();
-        String targetPath = path != null && !path.isBlank() ? path.trim() : "/tmp";
+        String targetPath = path != null && !path.isBlank() ? path.trim()
+                : (OsRuntime.isWindows() ? "C:\\Windows\\Temp" : "/tmp");
         int targetDays = days != null ? Math.min(Math.max(days, 1), 3650) : 7;
         boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
 
@@ -59,6 +62,10 @@ public class CleanTempTool extends AbstractCommandExecutor {
                 return buildErrorResponse(
                         "安全策略：实际删除需同时设置 dryRun=false 且 confirmDelete=true（或通过 MCP 二次确认流程执行）",
                         startTime);
+            }
+
+            if (OsRuntime.isWindows()) {
+                return cleanTempFilesWindows(targetPath, targetDays, isDryRun, startTime);
             }
 
             AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
@@ -123,6 +130,67 @@ public class CleanTempTool extends AbstractCommandExecutor {
             log.error("执行临时文件清理时发生异常", e);
             return buildErrorResponse("执行临时文件清理时发生异常: " + e.getMessage(), startTime);
         }
+    }
+
+    private String cleanTempFilesWindows(String targetPath, int targetDays, boolean isDryRun, long startTime)
+            throws JsonProcessingException {
+        String safe = targetPath.replace("'", "''");
+        String ps = "$p='" + safe + "';$d=" + targetDays
+                + ";Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue"
+                + "|Where-Object{$_.LastWriteTime -lt (Get-Date).AddDays(-$d)}"
+                + "|Select-Object -ExpandProperty FullName|ConvertTo-Json -Compress";
+        AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
+                List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 120_000L);
+        List<String> fileList = new ArrayList<>();
+        if (result.success() && result.output() != null && !result.output().isBlank()) {
+            try {
+                JsonNode node = objectMapper.readTree(result.output());
+                if (node.isArray()) {
+                    for (JsonNode n : node) {
+                        fileList.add(n.asText());
+                    }
+                } else {
+                    fileList.add(node.asText());
+                }
+            } catch (Exception e) {
+                log.warn("解析 Windows 清理文件列表失败: {}", e.getMessage());
+            }
+        }
+        if (fileList.isEmpty()) {
+            long duration = System.currentTimeMillis() - startTime;
+            String data = String.format("{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"message\":\"没有找到符合条件的文件\",\"platform\":\"windows\"}",
+                    isDryRun ? "DRY-RUN" : "DELETE", targetPath, targetDays);
+            return buildSuccessResponse(data, duration, false);
+        }
+        int filesDeleted = 0;
+        List<String> previewFiles = new ArrayList<>();
+        if (!isDryRun) {
+            for (String file : fileList) {
+                String f = file.replace("'", "''");
+                AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
+                        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                        "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
+                if (delResult.success()) {
+                    filesDeleted++;
+                }
+            }
+        }
+        int previewCount = Math.min(fileList.size(), 20);
+        for (int i = 0; i < previewCount; i++) {
+            previewFiles.add(fileList.get(i));
+        }
+        String data;
+        if (isDryRun) {
+            data = String.format(
+                    "{\"mode\":\"DRY-RUN\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"previewCount\":%d,\"preview\":%s,\"platform\":\"windows\",\"note\":\"默认预览。真实删除：dryRun=false 且 confirmDelete=true\"}",
+                    targetPath, targetDays, fileList.size(), previewCount, toJsonArray(previewFiles));
+        } else {
+            data = String.format(
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"platform\":\"windows\"}",
+                    targetPath, targetDays, fileList.size(), filesDeleted);
+        }
+        long duration = System.currentTimeMillis() - startTime;
+        return buildSuccessResponse(data, duration, false);
     }
 
     private String toJsonArray(List<String> list) throws JsonProcessingException {

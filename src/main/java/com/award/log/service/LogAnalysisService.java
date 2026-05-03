@@ -1,6 +1,10 @@
 package com.award.log.service;
 
+import com.award.log.dto.EnhancedLogParseResultEntity;
+
 import java.io.File;
+import java.io.IOException;
+import java.util.List;
 
 public interface LogAnalysisService {
     /**
@@ -27,4 +31,9 @@ public interface LogAnalysisService {
      * @param taskId 任务ID
      */
     void cancelAnalysis(String taskId);
+
+    /**
+     * 将分析结果写入 {@code target/output/{taskId}/} 下的 HTML/CSV（磁盘文件缺失时供下载接口补救）。
+     */
+    void ensureReportArtifacts(String taskId, List<EnhancedLogParseResultEntity> results) throws IOException;
 }

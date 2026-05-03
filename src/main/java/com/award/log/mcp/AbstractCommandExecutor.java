@@ -1,5 +1,6 @@
 package com.award.log.mcp;
 
+import com.award.log.util.OsRuntime;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.BufferedReader;
@@ -13,6 +14,9 @@ public abstract class AbstractCommandExecutor {
     private static final int ASYNC_COMMAND_TIMEOUT_SECONDS = 10;
     private static final int MAX_RETRIES = 2;
     private static final long RETRY_DELAY_MS = 500;
+    /** 防止 df/journalctl 等洪泛输出撑爆堆内存；超出截断并标记 */
+    private static final int MAX_STDOUT_CHARS = 512 * 1024;
+    private static final int MAX_STDERR_CHARS = 256 * 1024;
 
     protected final ExecutorService executor;
 
@@ -65,6 +69,11 @@ public abstract class AbstractCommandExecutor {
         if (runAsUser == null || runAsUser.isEmpty()) {
             return executeWithRetry(command, timeoutMillis);
         }
+        // Windows 无 sudo -u：直接以当前服务进程用户执行（与 application-dev 关闭 min-privilege 效果一致）
+        if (OsRuntime.isWindows()) {
+            log.debug("Windows 环境：跳过 sudo，直接执行 {}", command);
+            return executeWithRetry(command, timeoutMillis);
+        }
 
         List<String> sudoCommand = new java.util.ArrayList<>();
         sudoCommand.add("sudo");
@@ -98,6 +107,9 @@ public abstract class AbstractCommandExecutor {
     }
 
     protected boolean checkSudoPrivilege(String runAsUser, List<String> command) {
+        if (OsRuntime.isWindows()) {
+            return true;
+        }
         try {
             List<String> checkCommand = List.of(
                 "sudo", "-l", "-U", runAsUser
@@ -159,12 +171,36 @@ public abstract class AbstractCommandExecutor {
                  BufferedReader stderrReader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
 
                 String line;
+                int outChars = 0;
                 while ((line = stdoutReader.readLine()) != null) {
-                    if (output.length() > 0) output.append("\n");
+                    int inc = line.length() + (output.length() > 0 ? 1 : 0);
+                    if (outChars + inc > MAX_STDOUT_CHARS) {
+                        if (output.length() > 0) {
+                            output.append("\n");
+                        }
+                        output.append("...[stdout truncated at ").append(MAX_STDOUT_CHARS).append(" chars]");
+                        break;
+                    }
+                    outChars += inc;
+                    if (output.length() > 0) {
+                        output.append("\n");
+                    }
                     output.append(line);
                 }
+                int errChars = 0;
                 while ((line = stderrReader.readLine()) != null) {
-                    if (errorOutput.length() > 0) errorOutput.append("\n");
+                    int inc = line.length() + (errorOutput.length() > 0 ? 1 : 0);
+                    if (errChars + inc > MAX_STDERR_CHARS) {
+                        if (errorOutput.length() > 0) {
+                            errorOutput.append("\n");
+                        }
+                        errorOutput.append("...[stderr truncated]");
+                        break;
+                    }
+                    errChars += inc;
+                    if (errorOutput.length() > 0) {
+                        errorOutput.append("\n");
+                    }
                     errorOutput.append(line);
                 }
             }

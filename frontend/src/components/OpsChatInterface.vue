@@ -646,10 +646,16 @@ const generateHumanReadableResponse = (toolName, result) => {
           (data.suggestion ? `• 建议: ${data.suggestion}` : '')
 
       case 'DiskInsightTool': {
-        if (!data.success) {
+        if (data && data.success === false) {
           return `磁盘热点扫描失败: ${data.error || ''}`
         }
-        const inner = typeof data.data === 'string' ? JSON.parse(data.data) : data.data
+        let inner = data
+        if (inner && inner.data != null && typeof inner.entries === 'undefined') {
+          inner = typeof inner.data === 'string' ? JSON.parse(inner.data) : inner.data
+        }
+        if (!inner || typeof inner !== 'object') {
+          return '磁盘热点：返回数据格式异常'
+        }
         const entries = inner.entries || []
         if (!entries.length) {
           return `目录 ${inner.root || ''} 下未返回占用条目（可能为空或无权限）。`
@@ -660,7 +666,7 @@ const generateHumanReadableResponse = (toolName, result) => {
           if (n >= 1024) return `${(n / 1024).toFixed(2)} MB`
           return `${n} KB`
         }
-        return `磁盘热点 (${inner.root})，深度 ${inner.maxDepth}，前 ${entries.length} 条：\n` +
+        return `磁盘热点 (${inner.root || inner.rootPath || ''})，深度 ${inner.maxDepth ?? '-'}，前 ${entries.length} 条：\n` +
           entries.map((e, i) => `${i + 1}. ${fmtKb(e.kb)} — ${e.path}`).join('\n')
       }
 
@@ -682,6 +688,20 @@ const generateHumanReadableResponse = (toolName, result) => {
         const head = out.length > 1600 ? out.slice(0, 1600) + '\n...[truncated]' : out
         return `OS 感知 [${p.tool || ''}]${p.command ? `\n命令: ${p.command}` : ''}\n${head || '(无输出)'}`
       }
+
+      default:
+        break
+    }
+
+    try {
+      const shown =
+        typeof data === 'string'
+          ? data
+          : JSON.stringify(data, null, 2)
+      const clipped = shown.length > 10000 ? shown.slice(0, 10000) + '\n…(已截断)' : shown
+      return `### 结构化结果\n\n\`\`\`json\n${clipped}\n\`\`\``
+    } catch {
+      return String(data)
     }
   } catch (e) {
     console.error('格式化结果失败:', e)
@@ -872,6 +892,11 @@ const runNaturalLanguageStream = async (message) => {
   try {
     const response = await assistantChatStream(message, history)
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        messages.value[assistantIdx].content =
+          '助手暂时不可用: 未登录或会话已失效（/api/assistant 受登录保护）。请重新登录后再试；若前后端不同端口，请确认请求带 Cookie（credentials）且后端 CORS 允许当前页面来源。'
+        return
+      }
       const errText = await response.text().catch(() => '')
       let errMsg = `请求失败 (${response.status})`
       try {
@@ -1033,24 +1058,33 @@ const handleSend = async () => {
 
     result = normalizeMcpToolResponse(result)
 
-    const toolResultIndex = messages.value.push({
-      role: 'assistant',
-      toolName: toolName,
-      toolResult: result.data,
-      success: result.success,
-      duration: result.duration || 0,
-      timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    }) - 1
-
     const humanReadable = generateHumanReadableResponse(toolName, result.data)
+    const traceId = result.traceId ? String(result.traceId) : ''
+    const traceLine = traceId
+      ? `\n\n---\n**追踪 ID**（与「运维链路 / 审计」关联）：\`${traceId}\`\n`
+      : ''
+
+    let summaryMd = humanReadable && String(humanReadable).trim() ? humanReadable : ''
+    if (!summaryMd) {
+      summaryMd = result.success
+        ? '工具已正常返回，结构化数据见下方 **原始输出**。'
+        : `**失败说明**\n\n\`\`\`\n${formatToolResult(result.data)}\n\`\`\``
+    }
+
+    const statusTitle = result.success ? '执行成功' : '执行失败'
+    const fullMd =
+      `## ${toolName}\n\n### ${statusTitle}\n\n` +
+      summaryMd +
+      traceLine +
+      `\n\n> **答辩提示**：摘要已在上方；完整 JSON 在下方灰色卡片中可滚动，无需单独打开审计日志。`
 
     messages.value.push({
       role: 'assistant',
-      content:
-        humanReadable ||
-        (!result.success && result.data?.error
-          ? `❌ ${result.data.error}`
-          : '工具执行完成，请查看上方详细信息'),
+      content: fullMd,
+      toolName,
+      toolResult: result.data,
+      success: result.success,
+      duration: result.duration || 0,
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     })
 
@@ -1266,6 +1300,11 @@ const clearChat = () => {
   word-break: break-word;
 }
 
+/* Markdown 气泡：不用 pre-wrap，避免标题/列表排版塌成一团 */
+.message-bubble.assistant-bubble:has(.markdown-content) {
+  white-space: normal;
+}
+
 .user-bubble {
   background: linear-gradient(135deg, #409eff 0%, #66b1ff 100%);
   color: white;
@@ -1436,9 +1475,9 @@ const clearChat = () => {
 }
 
 .assistant-markdown :deep(h2) {
-  font-size: 1.05rem;
+  font-size: 1.12rem;
   font-weight: 600;
-  margin: 0.75em 0 0.4em;
+  margin: 1em 0 0.5em;
   color: #303133;
   border-bottom: 1px solid #ebeef5;
   padding-bottom: 0.25em;

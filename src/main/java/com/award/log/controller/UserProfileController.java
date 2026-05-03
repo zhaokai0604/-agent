@@ -2,26 +2,38 @@ package com.award.log.controller;
 
 import com.award.log.common.Result;
 import com.award.log.model.SysUser;
+import com.award.log.security.AuthInterceptor;
 import com.award.log.service.SysUserService;
+import com.award.log.service.impl.AiAuditLogService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
- * 用户管理控制器
+ * 个人中心 API（与前端 {@code /api/profile/**} 对齐）。
  */
 @Slf4j
-@Tag(name = "User Management")
+@Tag(name = "User Profile")
 @RestController
 @RequestMapping("/api/profile")
 public class UserProfileController {
 
+    private static final String SESSION_API_KEY = "PROFILE_API_KEY";
+    private static final String SESSION_NOTIFICATION = "PROFILE_NOTIFICATION_SETTINGS";
+
     @Autowired
     private SysUserService sysUserService;
+
+    @Autowired
+    private AiAuditLogService aiAuditLogService;
 
     @Operation(summary = "获取当前用户信息")
     @GetMapping("/user-info")
@@ -88,5 +100,86 @@ public class UserProfileController {
         user.setPassword(newPassword);
         boolean result = sysUserService.updateUser(user);
         return Result.success(result);
+    }
+
+    @Operation(summary = "登录与接口访问足迹（来源 ai_audit_log）")
+    @GetMapping("/login-history")
+    public Result<List<Map<String, Object>>> loginHistory(HttpSession session,
+                                                          @RequestParam(defaultValue = "50") int limit) {
+        Object uid = session.getAttribute(AuthInterceptor.SESSION_USER_ID);
+        if (uid == null) {
+            return Result.error(401, "未登录");
+        }
+        return Result.success(aiAuditLogService.listRecentByUserId(String.valueOf(uid), limit));
+    }
+
+    @Operation(summary = "生成演示用 API Key（仅存当前会话）")
+    @PostMapping("/generate-api-key")
+    public Result<Map<String, String>> generateApiKey(HttpSession session) {
+        Object uid = session.getAttribute(AuthInterceptor.SESSION_USER_ID);
+        if (uid == null) {
+            return Result.error(401, "未登录");
+        }
+        String key = "ak_" + UUID.randomUUID().toString().replace("-", "");
+        session.setAttribute(SESSION_API_KEY, key);
+        Map<String, String> body = new LinkedHashMap<>();
+        body.put("apiKey", key);
+        body.put("userId", String.valueOf(uid));
+        return Result.success(body);
+    }
+
+    @Operation(summary = "通知设置（会话内）")
+    @GetMapping("/notification-settings")
+    public Result<Map<String, Object>> getNotificationSettings(HttpSession session) {
+        if (session.getAttribute(AuthInterceptor.SESSION_USER_ID) == null) {
+            return Result.error(401, "未登录");
+        }
+        return Result.success(effectiveNotification(session));
+    }
+
+    @Operation(summary = "更新通知设置（会话内合并）")
+    @PutMapping("/notification-settings")
+    public Result<Map<String, Object>> updateNotificationSettings(HttpSession session,
+                                                                  @RequestBody(required = false) Map<String, Object> body) {
+        if (session.getAttribute(AuthInterceptor.SESSION_USER_ID) == null) {
+            return Result.error(401, "未登录");
+        }
+        LinkedHashMap<String, Object> merged = new LinkedHashMap<>(effectiveNotification(session));
+        if (body != null) {
+            body.forEach((k, v) -> {
+                if (k != null && !k.isBlank()) {
+                    merged.put(k, v);
+                }
+            });
+        }
+        session.setAttribute(SESSION_NOTIFICATION, merged);
+        return Result.success(merged);
+    }
+
+    @Operation(summary = "用户简要统计")
+    @GetMapping("/user-stats")
+    public Result<Map<String, Object>> userStats(HttpSession session) {
+        Object uid = session.getAttribute(AuthInterceptor.SESSION_USER_ID);
+        if (uid == null) {
+            return Result.error(401, "未登录");
+        }
+        String userId = String.valueOf(uid);
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("auditRequestCount", aiAuditLogService.countByUserId(userId));
+        stats.put("hasApiKey", session.getAttribute(SESSION_API_KEY) != null);
+        return Result.success(stats);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> effectiveNotification(HttpSession session) {
+        Object raw = session.getAttribute(SESSION_NOTIFICATION);
+        LinkedHashMap<String, Object> defaults = new LinkedHashMap<>();
+        defaults.put("emailEnabled", false);
+        defaults.put("smsEnabled", false);
+        defaults.put("taskAlerts", true);
+        if (raw instanceof Map) {
+            defaults.putAll((Map<String, Object>) raw);
+        }
+        return defaults;
     }
 }

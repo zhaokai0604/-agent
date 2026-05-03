@@ -5,6 +5,7 @@ import com.award.log.mcp.McpToolRegistry;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.tools.*;
 import com.award.log.security.HttpAuditSubject;
+import com.award.log.security.McpInvocationSecurityGate;
 import com.award.log.security.HighRiskCommandDetector;
 import com.award.log.security.IntentRiskFilter;
 import com.award.log.security.OpsPathPolicy;
@@ -93,9 +94,12 @@ public class ChatController {
     private McpToolRegistry mcpToolRegistry;
 
     @PostMapping("/chat")
-    public Map<String, Object> chat(@RequestBody Map<String, String> request) {
-        String userInput = request.getOrDefault("message", "").trim();
-        String useAiAgent = request.getOrDefault("useAiAgent", "false").trim();
+    public Map<String, Object> chat(@RequestBody Map<String, Object> request) {
+        Object messageObj = request != null ? request.get("message") : null;
+        String rawMessage = messageObj == null ? "" : String.valueOf(messageObj).trim();
+        String userInput = McpInvocationSecurityGate.enforceChatMessageLimit(rawMessage, 32_000);
+        Object agentFlagObj = request != null ? request.get("useAiAgent") : null;
+        String useAiAgent = agentFlagObj == null ? "false" : String.valueOf(agentFlagObj).trim();
         String traceId = UUID.randomUUID().toString();
         long startTime = System.currentTimeMillis();
         RiskLevel riskLevel = RiskLevel.LOW;
@@ -185,10 +189,19 @@ public class ChatController {
             ChatClient chatClient = chatClientBuilder.build();
             
             String systemPrompt = """
-                    你是一个智能运维助手（面向 Windows 与 Linux 服务器场景），使用提供的工具帮助用户解决运维问题。
-                    工具多在类 Unix 环境下调用（如 df、du、journalctl、ss、lsof）；若用户问 Windows 专属操作而当前工具不适用，请明确说明并给出 Windows 侧常用命令或界面路径作为补充。
-                    可用工具包括：磁盘检查、磁盘目录占用排序（热点）、进程管理、系统负载、系统日志与网络洞察、临时文件清理、配置检查、网络诊断、权限检查、日志文件分析等。
-                    请根据用户问题选择合适工具获取信息，再结合结果做条理清晰的回答（必要时并列 Windows / Linux 对照）。
+                    ## 角色
+                    你是面向 **生产级 heterogenous fleet**（GNU/Linux·含麒麟 / Windows Server）的 **Tool-Augmented SRE Copilot**。准则：**Tools-first for facts**——凡涉及主机状态、日志、网络、清理与配置校验，必须先经由已注册工具采集观测数据，再据此推理。
+                    
+                    ## 工具调用与答复契约
+                    - 工具输出（JSON 或结构化字段）须在答复 **首屏摘要**：关键指标名称 + 数值 + 单位/语义；禁止仅以「已执行完毕」「请看 JSON」敷衍收尾。
+                    - 对工具失败或策略拦截：复述 **错误类别**（权限 / 路径策略 / 超时 / 参数），给出 **下一步穷举式排查项**（≤5 条）。
+                    - Linux 典型链路：`df`/`findmnt`、`du`、journald、`ss`/`ip`、`lsof`；Windows：`Get-CimInstance`、`Get-WinEvent`、`Get-NetTCPConnection`、`Test-NetConnection` 等。**禁止**在未经核实宿主 OS 的情况下假定 shell 方言。
+                    
+                    ## 输出形态（Markdown）
+                    使用 `##` `###`、列表与代码围栏；高危操作建议单列 **Verification / Rollback** 小节。
+                    
+                    ## 工具覆盖域（示意）
+                    磁盘容量与热点、进程与资源、系统负载、日志文件解析、临时目录治理、配置静态检查、网络探测、权限探测、OS 深度洞察（journal / socket / fd）。
                     """;
             
             OpsSecurityContext.open(traceId, userInput, false);
