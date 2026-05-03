@@ -1,0 +1,268 @@
+server:
+  port: 8088
+  servlet:
+    context-path: /award-log
+  tomcat:
+    connection-timeout: 1800000 # 30分钟超时
+
+spring:
+  application:
+    name: award-log
+  profiles:
+    active: dev
+  main:
+    allow-circular-references: false
+  autoconfigure:
+    exclude:
+  sql:
+    init:
+      mode: never
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 200MB
+  
+  # Database Configuration
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${DB_URL:jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    # 必须通过环境变量或 .env 提供（勿将真实密码提交到仓库）
+    password: ${DB_PASSWORD:}
+  
+  # Redis Configuration
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: 
+      database: 0
+      timeout: 10000
+      jedis:
+        pool:
+          max-active: 8
+          max-wait: -1
+          max-idle: 8
+          min-idle: 0
+
+   # Spring AI Configuration (Tongyi Qianwen via OpenAI Compatible Interface)
+  ai:
+    chat:
+      memory:
+        repository:
+          jdbc:
+            initialize-schema: never
+    openai:
+      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      # 必须通过环境变量或 .env 提供
+      api-key: ${AI_API_KEY:}
+      chat:
+        options:
+          model: qwen-plus-latest
+      embedding:
+        options:
+          model: text-embedding-v3
+          dimensions: 1024
+  
+  # Prometheus Configuration
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  
+  # Email Configuration
+  mail:
+    host: ${MAIL_HOST:smtp.qq.com}
+    port: ${MAIL_PORT:465}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    protocol: ${MAIL_PROTOCOL:smtp}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+            required: true
+            trust: smtp.qq.com
+          starttls:
+            enable: true
+        debug: false
+  
+  # Elasticsearch Configuration
+  elasticsearch:
+    enabled: ${ELASTIC_ENABLED:false}
+    uris: ${ELASTIC_URIS:http://localhost:9200}
+    username: ${ELASTIC_USERNAME:}
+    password: ${ELASTIC_PASSWORD:}
+
+  # Kafka Configuration
+  kafka:
+    enabled: true
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: award-log-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      enable-auto-commit: true
+      auto-commit-interval: 3000
+      max-poll-records: 500
+      fetch-max-wait: 500
+      fetch-min-size: 1
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 3
+      batch-size: 16384
+      buffer-memory: 33554432
+      linger: 1
+    listener:
+      type: batch
+      concurrency: 3
+    template:
+      default-topic: raw-logs
+
+# WeChat Enterprise Configuration
+wechat:
+  corp-id: ${WECHAT_CORP_ID:}
+  app-secret: ${WECHAT_APP_SECRET:}
+  agent-id: ${WECHAT_AGENT_ID:1000002}
+  
+# Email Alias
+email:
+  alias: 日志分析系统
+  
+# Push Configuration
+push:
+  retry:
+    max-attempts: 3
+    interval-ms: 5000
+
+# Log Collector Configuration
+log:
+  collector:
+    enabled: true
+    file:
+      path: ${LOG_COLLECTOR_ROOT:logs}
+      include-extensions: .log,.txt,.out,.err,.debug,.info,.warn,.error,.fatal,.access,.audit,.trace
+      exclude-directories: node_modules,target,.git,.idea,.vscode,.cursor
+    db:
+      enabled: false
+      query: SELECT id, level, message, created_at FROM system_log WHERE id > {lastId} ORDER BY id ASC LIMIT 500
+      checkpoint-file: ""
+    network:
+      enabled: false
+      port: 514
+      protocol: UDP
+  pipeline:
+    kafka:
+      raw-topic: raw-logs
+      dlq-topic: raw-logs-dlq
+      retry-interval-ms: 1000
+      retry-max-attempts: 3
+    analyzer:
+      drain:
+        engine: plus
+        max-depth: 8
+        # 模板合并最小相似度（百分比 1–100），与 Drain 论文中 st 对应；过低易误合并
+        sim-threshold: 50
+    collector:
+      source-id: file-watcher
+      dispatch-enabled: true
+      dispatch-interval-ms: 1000
+    stream:
+      error-rate-threshold: 0.30
+      min-sample-size: 20
+      cooldown-ms: 300000
+    decision:
+      feature-version: rf-v2
+      rule:
+        high-confidence: 0.90
+      rf:
+        high-confidence: 0.80
+        model-path: src/main/resources/models/random-forest-v2.onnx
+        model-version: rf-onnx-v2
+        alert-threshold: 0.75
+
+# Alarm Configuration
+alarm:
+  aggregation:
+    enabled: true
+    window-minutes: 5
+    dimension: task_level_rootCause
+  error:
+    threshold: 1
+  min:
+    severity: ERROR
+  push:
+    interval: 300000
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.award.log.model
+  configuration:
+    map-underscore-to-camel-case: true
+
+logging:
+  level:
+    com.award.log.mapper: info
+
+# Knife4j / Springdoc Configuration
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+  group-configs:
+    - group: 'default'
+      paths-to-match: '/**'
+      packages-to-scan: com.award.log.controller
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+# Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,engine-health
+  endpoint:
+    health:
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+# 执行审计（/admin/audit/ai/recent）：true 时任意已登录用户可读；生产务必 false（仅管理员）
+app:
+  security:
+    ai-audit-relaxed-read: ${APP_AI_AUDIT_RELAXED_READ:false}
+
+# 智能运维 Agent：最小权限执行（Linux 下配置 sudoers；Windows 开发可设 enabled: false）
+agent:
+  run-as-user: ${AGENT_RUN_AS_USER:award-agent}
+  min-privilege:
+    enabled: ${AGENT_MIN_PRIVILEGE:true}
+  paths:
+    policy-version: path-policy-v1
+    read-prefixes: /var/log,/tmp,/var/log/journal
+    clean-roots: /tmp,/var/tmp
+    config-prefixes: /etc/nginx/,/etc/ssh/,/etc/default/,/etc/crontab,/etc/cron.
+    denied-substrings: /etc/shadow,/etc/gshadow,/.ssh,/root/,/boot/
+    privilege-prefixes: /usr/bin,/usr/sbin,/bin,/sbin,/usr/local/bin,/usr/lib
+
+qdrant:
+  url: ${QDRANT_URL:http://localhost:6333}
+  collection: ${QDRANT_COLLECTION:ops_knowledge}
+
+

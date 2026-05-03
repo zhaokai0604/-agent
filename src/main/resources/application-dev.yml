@@ -1,0 +1,18 @@
+spring:
+  sql:
+    init:
+      mode: always
+
+# 开发阶段：登录即可查看「执行审计」列表（无需管理员角色）
+app:
+  security:
+    ai-audit-relaxed-read: true
+
+# 本地 Windows / 无 sudo 用户时可改为 false，避免 sudo -u 失败
+agent:
+  min-privilege:
+    enabled: false
+
+logging:
+  level:
+    com.award.log.mapper: debug

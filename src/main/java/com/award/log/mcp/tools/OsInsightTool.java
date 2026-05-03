@@ -1,0 +1,112 @@
+package com.award.log.mcp.tools;
+
+import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.MinPrivilegeExecutor;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * 赛题要求的 OS 深度感知：journalctl / ss / lsof（参数与白名单受限）。
+ */
+@Slf4j
+@Component
+public class OsInsightTool extends AbstractCommandExecutor {
+
+    private static final int MAX_LINES = 500;
+    private static final int MAX_SINCE_MIN = 1440;
+
+    private final ObjectMapper objectMapper;
+    private final MinPrivilegeExecutor minPrivilegeExecutor;
+
+    @Autowired
+    public OsInsightTool(
+            @Autowired(required = false) ExecutorService mcpToolExecutor,
+            ObjectMapper objectMapper,
+            MinPrivilegeExecutor minPrivilegeExecutor) {
+        super(mcpToolExecutor != null ? mcpToolExecutor : Executors.newCachedThreadPool());
+        this.objectMapper = objectMapper;
+        this.minPrivilegeExecutor = minPrivilegeExecutor;
+    }
+
+    @Tool(name = "queryJournalLogs", description = "查询 systemd 日志 journalctl，限制时间窗口与最大行数（赛题：日志上下文）")
+    public String queryJournalLogs(
+            @ToolParam(description = "最近多少分钟内的日志，默认 30，最大 1440", required = false) Integer sinceMinutes,
+            @ToolParam(description = "最大行数，默认 200，最大 500", required = false) Integer maxLines
+    ) throws JsonProcessingException {
+        int since = sinceMinutes != null ? Math.min(Math.max(sinceMinutes, 1), MAX_SINCE_MIN) : 30;
+        int lines = maxLines != null ? Math.min(Math.max(maxLines, 1), MAX_LINES) : 200;
+        long start = System.currentTimeMillis();
+        String sinceArg = since + " min ago";
+        List<String> cmd = List.of("journalctl", "--no-pager", "-n", String.valueOf(lines), "--since", sinceArg);
+        CommandResult r = minPrivilegeExecutor.executeSafely(cmd);
+        return buildJsonResponse("journalctl", cmd, r, start);
+    }
+
+    @Tool(name = "listListeningSockets", description = "列出监听套接字（ss -tuln），用于网络上下文感知（替代 netstat）")
+    public String listListeningSockets() throws JsonProcessingException {
+        long start = System.currentTimeMillis();
+        List<String> cmd = List.of("ss", "-tuln");
+        CommandResult r = minPrivilegeExecutor.executeSafely(cmd);
+        return buildJsonResponse("ss", cmd, r, start);
+    }
+
+    @Tool(name = "listProcessOpenFiles", description = "列出指定 PID 的打开文件（lsof -p），PID 必填且为正整数")
+    public String listProcessOpenFiles(
+            @ToolParam(description = "进程 PID", required = true) Integer pid
+    ) throws JsonProcessingException {
+        long start = System.currentTimeMillis();
+        if (pid == null || pid < 1 || pid > 4_194_304) {
+            return objectMapper.writeValueAsString(Map.of(
+                    "success", false,
+                    "error", "无效 PID",
+                    "tool", "lsof"
+            ));
+        }
+        List<String> cmd = List.of("lsof", "-nP", "-p", String.valueOf(pid));
+        CommandResult r = minPrivilegeExecutor.executeSafely(cmd);
+        return buildJsonResponse("lsof", cmd, r, start);
+    }
+
+    /** MCP HTTP 网关：operation = journal | ss | lsof */
+    public String executeGateway(String operation, Integer sinceMinutes, Integer maxLines, Integer pid) throws JsonProcessingException {
+        if (operation == null || operation.isBlank()) {
+            operation = "journal";
+        }
+        return switch (operation.trim().toLowerCase()) {
+            case "journal", "journalctl" -> queryJournalLogs(sinceMinutes, maxLines);
+            case "ss", "sockets" -> listListeningSockets();
+            case "lsof", "openfiles" -> listProcessOpenFiles(pid);
+            default -> objectMapper.writeValueAsString(Map.of("success", false, "error", "未知 operation: " + operation));
+        };
+    }
+
+    private String buildJsonResponse(String tool, List<String> cmd, CommandResult r, long startTime)
+            throws JsonProcessingException {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("tool", tool);
+        body.put("command", String.join(" ", cmd));
+        body.put("success", r.success());
+        body.put("durationMs", System.currentTimeMillis() - startTime);
+        if (r.success()) {
+            String out = r.output();
+            if (out != null && out.length() > 120_000) {
+                out = out.substring(0, 120_000) + "\n...[truncated]";
+            }
+            body.put("output", out);
+        } else {
+            body.put("error", r.error() != null ? r.error() : ("exit=" + r.exitCode()));
+        }
+        return objectMapper.writeValueAsString(body);
+    }
+}

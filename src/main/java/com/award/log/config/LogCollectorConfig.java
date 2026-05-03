@@ -1,0 +1,118 @@
+package com.award.log.config;
+
+import com.award.log.collector.LogCollectorManager;
+import com.award.log.collector.impl.DatabaseLogCollector;
+import com.award.log.collector.impl.FileLogCollector;
+import com.award.log.collector.impl.KafkaLogProducer;
+import com.award.log.collector.impl.NetworkLogCollector;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import javax.sql.DataSource;
+import jakarta.annotation.PreDestroy;
+
+/**
+ * 日志采集器配置类
+ * 用于初始化和管理日志采集器
+ */
+@Slf4j
+@Configuration
+public class LogCollectorConfig {
+
+    private final KafkaLogProducer kafkaLogProducer;
+    private final DataSource dataSource;
+
+    public LogCollectorConfig(KafkaLogProducer kafkaLogProducer, DataSource dataSource) {
+        this.kafkaLogProducer = kafkaLogProducer;
+        this.dataSource = dataSource;
+    }
+
+    @Value("${log.collector.enabled:true}")
+    private boolean enabled;
+
+    @Value("${log.collector.file.path:logs}")
+    private String filePath;
+
+    @Value("${log.collector.file.include-extensions:.log,.txt,.out,.err,.debug,.info,.warn,.error,.fatal,.access,.audit,.trace}")
+    private String includeExtensions;
+
+    @Value("${log.collector.file.exclude-directories:node_modules,target,.git,.idea,.vscode,.cursor}")
+    private String excludeDirectories;
+
+    @Value("${log.collector.network.port:514}")
+    private int networkPort;
+
+    @Value("${log.collector.network.protocol:UDP}")
+    private String networkProtocol;
+
+    @Value("${log.collector.network.enabled:false}")
+    private boolean networkEnabled;
+
+    @Value("${log.collector.db.enabled:false}")
+    private boolean dbEnabled;
+
+    @Value("${log.collector.db.query:SELECT id, level, message, created_at FROM system_log WHERE id > {lastId} ORDER BY id ASC LIMIT 500}")
+    private String dbQuery;
+
+    @Value("${log.collector.db.checkpoint-file:}")
+    private String dbCheckpointFile;
+
+    @Bean
+    public LogCollectorManager logCollectorManager() {
+        LogCollectorManager collectorManager = new LogCollectorManager();
+        collectorManager.setKafkaLogProducer(kafkaLogProducer);
+        
+        if (enabled) {
+            log.info("[采集器配置] 初始化日志采集器");
+
+            // 初始化文件采集器
+            if (!filePath.isEmpty()) {
+                try {
+                    FileLogCollector fileCollector = new FileLogCollector(filePath, "file-collector", includeExtensions, excludeDirectories);
+                    collectorManager.addCollector(fileCollector);
+                    log.info("[采集器配置] 文件采集器初始化成功，路径: {}", filePath);
+                } catch (Exception e) {
+                    log.error("[采集器配置] 初始化文件采集器失败: {}", e.getMessage(), e);
+                }
+            }
+
+            if (networkEnabled) {
+                try {
+                    NetworkLogCollector networkCollector = new NetworkLogCollector(networkPort, networkProtocol, "network-collector");
+                    collectorManager.addCollector(networkCollector);
+                    log.info("[采集器配置] 网络采集器初始化成功，协议: {}, 端口: {}", networkProtocol, networkPort);
+                } catch (Exception e) {
+                    log.error("[采集器配置] 初始化网络采集器失败: {}", e.getMessage(), e);
+                }
+            }
+
+            if (dbEnabled) {
+                try {
+                    DatabaseLogCollector dbCollector = new DatabaseLogCollector(dataSource, dbQuery, "db-collector", dbCheckpointFile);
+                    collectorManager.addCollector(dbCollector);
+                    log.info("[采集器配置] 数据库采集器初始化成功");
+                } catch (Exception e) {
+                    log.error("[采集器配置] 初始化数据库采集器失败: {}", e.getMessage(), e);
+                }
+            }
+
+            // 启动所有采集器
+            try {
+                collectorManager.startAll();
+                log.info("[采集器配置] 所有采集器启动成功，数量: {}", collectorManager.getCollectorCount());
+            } catch (Exception e) {
+                log.error("[采集器配置] 启动采集器失败: {}", e.getMessage(), e);
+            }
+        } else {
+            log.info("[采集器配置] 日志采集器已禁用");
+        }
+        
+        return collectorManager;
+    }
+
+    @PreDestroy
+    public void destroyCollectors() {
+        // No need to implement this since we're not storing a reference to the collectorManager
+    }
+}

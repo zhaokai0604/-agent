@@ -1,0 +1,611 @@
+<template>
+  <div class="mcp-tools-demo">
+    <div class="hero-section">
+      <h1>本地工具控制台</h1>
+      <p class="subtitle">受控执行 · 审计留痕 · 适用于 Linux 服务器日常巡检</p>
+      <div class="tech-tags">
+        <el-tag type="success">Spring AI 1.1.0</el-tag>
+        <el-tag type="info">MCP Protocol</el-tag>
+        <el-tag type="warning">Drain-Plus Parser</el-tag>
+        <el-tag type="danger">Security Guardrail</el-tag>
+      </div>
+    </div>
+
+    <el-tabs v-model="activeTab" type="border-card" class="tools-tabs">
+      <el-tab-pane label="📊 工具概览" name="overview">
+        <div class="tools-grid">
+          <el-card
+            v-for="tool in tools"
+            :key="tool.name"
+            class="tool-card"
+            :class="{ active: selectedTool === tool.name }"
+            @click="selectTool(tool)"
+          >
+            <div class="tool-icon">{{ tool.icon }}</div>
+            <div class="tool-name">{{ tool.name }}</div>
+            <div class="tool-desc">{{ tool.description }}</div>
+            <div class="tool-status" :class="tool.status">
+              <span class="status-dot"></span>
+              {{ tool.statusText }}
+            </div>
+          </el-card>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="🚀 工具执行" name="execute">
+        <div class="execute-panel">
+          <div class="selected-tool-info" v-if="selectedTool">
+            <el-tag size="large" type="success">{{ getToolByName(selectedTool)?.icon }} {{ selectedTool }}</el-tag>
+            <span class="tool-description">{{ getToolByName(selectedTool)?.description }}</span>
+          </div>
+
+          <div v-if="!selectedTool" class="no-selection">
+            <el-empty description="请从左侧选择一个工具进行演示" />
+          </div>
+
+          <div v-else class="tool-execute-area">
+            <div class="tool-params" v-if="getToolByName(selectedTool)?.params?.length">
+              <h4>📥 参数配置</h4>
+              <el-form :model="params" label-width="120px">
+                <el-form-item
+                  v-for="param in getToolByName(selectedTool)?.params"
+                  :key="param.name"
+                  :label="param.label"
+                >
+                  <el-input
+                    v-model="params[param.name]"
+                    :placeholder="param.placeholder"
+                    :type="param.type || 'text'"
+                  />
+                  <span class="param-hint">{{ param.hint }}</span>
+                </el-form-item>
+              </el-form>
+            </div>
+
+            <div class="execute-actions">
+              <el-button
+                type="primary"
+                size="large"
+                @click="executeTool"
+                :loading="executing"
+                :icon="Cpu"
+              >
+                执行工具
+              </el-button>
+              <el-button size="large" @click="resetParams">重置</el-button>
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="📋 执行历史" name="history">
+        <el-table :data="executionHistory" stripe style="width: 100%">
+          <el-table-column prop="toolName" label="工具名称" width="150" />
+          <el-table-column prop="timestamp" label="执行时间" width="180" />
+          <el-table-column prop="duration" label="耗时" width="100">
+            <template #default="scope">
+              <el-tag>{{ scope.row.duration }}ms</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="status" label="状态" width="100">
+            <template #default="scope">
+              <el-tag :type="scope.row.success ? 'success' : 'danger'">
+                {{ scope.row.success ? '成功' : '失败' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="resultPreview" label="结果预览" show-overflow-tooltip />
+          <el-table-column label="操作" width="120">
+            <template #default="scope">
+              <el-button type="primary" link @click="viewDetail(scope.row)">查看详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+    </el-tabs>
+
+    <el-dialog v-model="resultDialogVisible" title="工具执行结果" width="800px" center>
+      <div v-if="currentResult" class="result-detail">
+        <div class="result-header">
+          <el-tag size="large" type="success">{{ getToolByName(currentResult.toolName)?.icon }} {{ currentResult.toolName }}</el-tag>
+          <el-tag :type="currentResult.success ? 'success' : 'danger'">
+            {{ currentResult.success ? '执行成功' : '执行失败' }}
+          </el-tag>
+          <span class="duration">耗时: {{ currentResult.duration }}ms</span>
+        </div>
+
+        <el-divider content-position="left">完整返回数据</el-divider>
+
+        <div class="json-viewer">
+          <pre>{{ formatFullResultJson(currentResult.fullResult) }}</pre>
+        </div>
+      </div>
+    </el-dialog>
+
+    <div v-if="executing" class="execution-overlay">
+      <div class="execution-animation">
+        <div class="spinner"></div>
+        <p>正在执行 {{ selectedTool }}...</p>
+        <p class="hint">调用底层系统命令: {{ getToolCommand(selectedTool) }}</p>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Cpu } from '@element-plus/icons-vue'
+import { executeMcpTool, confirmMcpExecute, getMcpTools, getApiBaseUrl } from '../api'
+import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
+
+const activeTab = ref('overview')
+const selectedTool = ref(null)
+const executing = ref(false)
+const resultDialogVisible = ref(false)
+const currentResult = ref(null)
+const executionHistory = ref([])
+
+const params = reactive({})
+
+const tools = ref([
+  {
+    name: 'DiskTool',
+    icon: '💾',
+    description: '检查磁盘使用情况，df -h 命令',
+    status: 'online',
+    statusText: '在线',
+    params: []
+  },
+  {
+    name: 'DiskInsightTool',
+    icon: '📂',
+    description: '目录占用热点：du 排序（须在路径白名单）',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'rootPath', label: '扫描根路径', placeholder: '/tmp', hint: '如 /tmp、/var/log' },
+      { name: 'maxDepth', label: '深度', placeholder: '2', hint: '1-4，默认 2' },
+      { name: 'topN', label: '前 N 条', placeholder: '15', hint: '5-40，默认 15' }
+    ]
+  },
+  {
+    name: 'ProcessTool',
+    icon: '⚙️',
+    description: '列出系统进程，支持 CPU/内存过滤',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'minCpu', label: '最小CPU%', placeholder: '5.0', hint: '过滤CPU占用超过此值的进程' },
+      { name: 'minMem', label: '最小内存%', placeholder: '5.0', hint: '过滤内存占用超过此值的进程' }
+    ]
+  },
+  {
+    name: 'SystemLoadTool',
+    icon: '📈',
+    description: '检查系统负载和 CPU/内存使用',
+    status: 'online',
+    statusText: '在线',
+    params: []
+  },
+  {
+    name: 'LogAnalysisTool',
+    icon: '📝',
+    description: '分析系统日志，Drain-Plus 引擎',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'logPath', label: '日志路径', placeholder: '/var/log/syslog', hint: '可选，默认 /var/log/syslog' },
+      { name: 'lines', label: '分析行数', placeholder: '100', hint: '可选，默认100行' }
+    ]
+  },
+  {
+    name: 'CleanTempTool',
+    icon: '🧹',
+    description: '清理临时文件，支持 dry-run',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'path', label: '清理路径', placeholder: '/tmp', hint: '须在白名单（如 /tmp,/var/tmp）' },
+      { name: 'days', label: '文件天数', placeholder: '7', hint: '删除多少天前的文件' },
+      { name: 'dryRun', label: 'Dry Run', placeholder: 'true', hint: '默认预览；false=删除须 confirmDelete=true' },
+      { name: 'confirmDelete', label: '确认删除', placeholder: 'false', hint: '真实删除必须为 true' }
+    ]
+  },
+  {
+    name: 'ConfigCheckTool',
+    icon: '✅',
+    description: '检查配置文件语法',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'configPath', label: '配置文件路径', placeholder: '/etc/nginx/nginx.conf', hint: '必填，配置文件完整路径' }
+    ]
+  },
+  {
+    name: 'NetworkTool',
+    icon: '🌐',
+    description: '网络诊断，ping/traceroute',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'target', label: '目标主机', placeholder: '8.8.8.8', hint: '必填，目标 IP 或域名' },
+      { name: 'type', label: '诊断类型', placeholder: 'ping', hint: 'ping 或 traceroute' },
+      { name: 'count', label: '包数量', placeholder: '4', hint: '可选，默认4' }
+    ]
+  },
+  {
+    name: 'PrivilegeTool',
+    icon: '🔐',
+    description: '检查文件/命令权限',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'resource', label: '资源路径', placeholder: '/usr/bin/nginx', hint: '必填，文件路径或命令名' },
+      { name: 'action', label: '操作类型', placeholder: 'execute', hint: 'read/write/execute' }
+    ]
+  },
+  {
+    name: 'OsInsightTool',
+    icon: '📡',
+    description: 'journalctl / ss / lsof（系统排查）',
+    status: 'online',
+    statusText: '在线',
+    params: [
+      { name: 'operation', label: '操作', placeholder: 'journal', hint: 'journal | ss | lsof' },
+      { name: 'sinceMinutes', label: '最近分钟(journal)', placeholder: '30', hint: '可选' },
+      { name: 'maxLines', label: '最大行数(journal)', placeholder: '200', hint: '可选，≤500' },
+      { name: 'pid', label: '进程PID(lsof)', placeholder: '1', hint: 'lsof 时必填' }
+    ]
+  }
+])
+
+const getToolByName = (name) => {
+  return tools.value.find(t => t.name === name)
+}
+
+const selectTool = (tool) => {
+  selectedTool.value = tool.name
+  activeTab.value = 'execute'
+  resetParams()
+}
+
+const resetParams = () => {
+  Object.keys(params).forEach(key => delete params[key])
+}
+
+const getToolCommand = (toolName) => {
+  const commands = {
+    DiskTool: 'df -h',
+    DiskInsightTool: 'du -xk --max-depth=2',
+    ProcessTool: 'ps aux',
+    SystemLoadTool: 'top -bn1 + /proc/loadavg',
+    LogAnalysisTool: 'tail -n 100 /var/log/syslog',
+    CleanTempTool: 'find /tmp -type f -mtime +7',
+    ConfigCheckTool: 'nginx -t / etc/nginx/nginx.conf',
+    NetworkTool: 'ping -c 4 target',
+    PrivilegeTool: 'test -x /path/to/file',
+    OsInsightTool: 'journalctl | ss -tuln | lsof -p PID'
+  }
+  return commands[toolName] || 'system command'
+}
+
+const executeTool = async () => {
+  if (!selectedTool.value) return
+
+  executing.value = true
+
+  try {
+    let data = await executeMcpTool(selectedTool.value, { ...params })
+
+    if (data && data.needConfirm === true) {
+      try {
+        await ElMessageBox.confirm(
+          data.message ||
+            '该操作存在中等风险：确认后将调用 /api/mcp/confirmExecute 真正执行（等同口令「确认执行」）。',
+          '安全护栏 · 二次确认',
+          {
+            confirmButtonText: '确认执行',
+            cancelButtonText: '取消',
+            type: 'warning',
+            closeOnClickModal: false
+          }
+        )
+      } catch {
+        ElMessage.info('已取消')
+        executionHistory.value.unshift({
+          toolName: selectedTool.value,
+          timestamp: new Date().toLocaleString('zh-CN'),
+          duration: 0,
+          success: false,
+          resultPreview: '用户取消中等风险二次确认',
+          fullResult: { success: false, needConfirm: true, cancelled: true }
+        })
+        return
+      }
+      data = await confirmMcpExecute(selectedTool.value, { ...params }, '确认执行')
+    }
+
+    data = normalizeMcpToolResponse(data)
+
+    const previewRaw = data.success ? data.data : (data.data?.error ?? data.error ?? data.message)
+    const previewStr =
+      typeof previewRaw === 'string'
+        ? previewRaw
+        : previewRaw != null
+          ? JSON.stringify(previewRaw)
+          : ''
+
+    const result = {
+      toolName: selectedTool.value,
+      timestamp: new Date().toLocaleString('zh-CN'),
+      duration: data.duration || 0,
+      success: data.success,
+      resultPreview: (previewStr || '').length > 140 ? previewStr.slice(0, 140) + '…' : previewStr || '-',
+      fullResult: data
+    }
+
+    executionHistory.value.unshift(result)
+
+    if (data.success) {
+      ElMessage.success(`${selectedTool.value} 执行成功，耗时 ${result.duration}ms`)
+    } else {
+      const errMsg = data.error || data.message || data.data?.error || '未知错误'
+      ElMessage.error(`${selectedTool.value} 执行失败: ${errMsg}`)
+    }
+
+  } catch (error) {
+    ElMessage.error('工具执行失败: ' + error.message)
+    executionHistory.value.unshift({
+      toolName: selectedTool.value,
+      timestamp: new Date().toLocaleString('zh-CN'),
+      duration: 0,
+      success: false,
+      resultPreview: error.message,
+      fullResult: { success: false, error: error.message }
+    })
+  } finally {
+    executing.value = false
+  }
+}
+
+const viewDetail = (row) => {
+  currentResult.value = row
+  resultDialogVisible.value = true
+}
+
+const formatFullResultJson = (fr) => {
+  if (fr == null) return ''
+  try {
+    const obj = typeof fr === 'string' ? JSON.parse(fr) : fr
+    return JSON.stringify(obj, null, 2)
+  } catch {
+    return String(fr)
+  }
+}
+</script>
+
+<style scoped>
+.mcp-tools-demo {
+  padding: 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+}
+
+.hero-section {
+  text-align: center;
+  padding: 40px 20px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 16px;
+  margin-bottom: 20px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+.hero-section h1 {
+  font-size: 32px;
+  color: #1a1a2e;
+  margin-bottom: 10px;
+}
+
+.subtitle {
+  font-size: 16px;
+  color: #666;
+  margin-bottom: 20px;
+}
+
+.tech-tags {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tools-tabs {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  padding: 20px;
+}
+
+.tool-card {
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+  background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
+}
+
+.tool-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+}
+
+.tool-card.active {
+  border-color: #409eff;
+  background: linear-gradient(135deg, #ecf5ff 0%, #ffffff 100%);
+}
+
+.tool-icon {
+  font-size: 48px;
+  margin-bottom: 10px;
+}
+
+.tool-name {
+  font-size: 20px;
+  font-weight: bold;
+  color: #303133;
+  margin-bottom: 8px;
+}
+
+.tool-desc {
+  font-size: 14px;
+  color: #909399;
+  margin-bottom: 15px;
+  min-height: 40px;
+}
+
+.tool-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #67c23a;
+}
+
+.tool-status.online .status-dot {
+  background: #67c23a;
+}
+
+.execute-panel {
+  padding: 20px;
+}
+
+.selected-tool-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.tool-description {
+  color: #606266;
+}
+
+.no-selection {
+  padding: 60px 20px;
+}
+
+.tool-params {
+  margin-bottom: 20px;
+}
+
+.tool-params h4 {
+  margin-bottom: 15px;
+  color: #303133;
+}
+
+.param-hint {
+  display: block;
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+.execute-actions {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+  margin-top: 30px;
+}
+
+.result-detail {
+  padding: 10px;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.duration {
+  color: #909399;
+  font-size: 14px;
+}
+
+.json-viewer {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 20px;
+  overflow-x: auto;
+}
+
+.json-viewer pre {
+  color: #d4d4d4;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  margin: 0;
+}
+
+.execution-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.execution-animation {
+  background: white;
+  padding: 40px 60px;
+  border-radius: 16px;
+  text-align: center;
+}
+
+.spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #409eff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 20px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.execution-animation p {
+  margin: 10px 0;
+  font-size: 16px;
+  color: #303133;
+}
+
+.execution-animation .hint {
+  font-size: 12px;
+  color: #909399;
+}
+</style>
