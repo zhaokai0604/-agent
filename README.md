@@ -117,7 +117,7 @@ flowchart LR
     LLM[兼容 OpenAI 的大模型 API]
     QD[(Qdrant 可选)]
   end
-  FE -->|HTTP(S) /award-log| GW
+  FE -->|HTTP /award-log| GW
   GW --> REST
   GW --> WS
   REST --> JOB
