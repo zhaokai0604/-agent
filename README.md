@@ -72,9 +72,9 @@ Award Log 是一套 **日志上传 → 异步分析 → 模板与异常检测 �
 | CSV / HTML 导出 | 按任务 ID 下载 | `target/output/<taskId>/`、`/log/download/{taskId}/{type}` |
 | AI 全盘 / 单行诊断 | 按钮与弹窗 | `AiDiagnosisService`、`/log/diagnose` |
 | 工作台自然语言对话 | 「工作台对话」Tab，SSE | `UnifiedAssistantController`、`/api/assistant` |
-| MCP 工具台 | 「工具控制台」Tab | `McpExecuteController`、`/api/mcp` |
+| MCP 工具台 | 「工具控制台」Tab（动态拉取工具列表；Agentic 风险二次确认） | `McpExecuteController`、`/api/mcp` |
 | AI 执行审计列表 | 「执行审计」Tab | `AiAuditController`、`/admin/audit/ai` |
-| 运维链路审计 | 「运维链路审计」Tab | `OpsTraceController`、`/api/ops-trace` |
+| 运维链路审计 | 「运维链路审计」Tab（列表 + 按 traceId 查看思维链 CoT） | `OpsTraceController`、`/api/ops-trace`、`OpsAuditTraceService` |
 | 告警配置 / 历史 / 统计 | 顶部「告警配置」与各分析页 | `AlarmConfigController`、`AlarmHistoryController` 等 |
 | 用户 / 角色 / 权限 / 统计 | 管理类接口 | `/admin/user`、`/admin/role`、`/admin/permission`、`/admin/statistics` |
 | 决策反馈与再训练入口 | API + Python 脚本 | `DecisionFeedbackController`、`scripts/ml/` |
@@ -199,13 +199,24 @@ flowchart LR
 | `ops-chat` | 工作台对话 | 自然语言运维助手，流式输出；可接收其它页发来的预填问题（自定义事件）。 |
 | `mcp-tools` | 工具控制台 | 列出可调 MCP 工具、参数表单、执行与确认流。 |
 | `audit` | 执行审计 | AI/MCP 执行记录只读列表（受后端 `app.security.ai-audit-relaxed-read` 影响）。 |
-| `ops-audit-trace` | 运维链路审计 | 分布式或本地运维链路追踪数据展示。 |
+| `ops-audit-trace` | 运维链路审计 | 运维 Agent/MCP 落库审计；支持按 traceId 拉详情（含 `steps_json` 解析后的思维链步骤）。 |
 | `analysis` | 日志分析 | 上传、进度、报告、导出、单行诊断等主流程。 |
 | `history` | 任务记录 | 历史任务分页与筛选。 |
 | `dashboard` | 日志分析仪表盘 | 汇总图表与统计。 |
 | `alarm-history` | 告警历史分析 | 告警列表与趋势类视图。 |
 
 **API 基地址**：`frontend/src/api/index.js` 中根据浏览器 `hostname` 与固定端口 `8088` 拼接 `http(s)://<host>:8088/award-log`（与后端 `server.servlet.context-path` 一致）。若前后端不同域或端口，需改此处或通过反向代理统一域名。
+
+**与 MCP/助手对齐的前端模块**（名称与后端工具名一致，避免两套清单分叉）：
+
+| 文件 | 作用 |
+|------|------|
+| `frontend/src/utils/mcpToolsMeta.js` | 工具展示元数据、命令提示、`mergeToolRegistry()` 与服务端 `/api/mcp/tools` 合并 |
+| `frontend/src/utils/mcpRiskConfirm.js` | 二次确认框文案（风险分、维度、说明） |
+| `frontend/src/utils/mcpToolResult.js` | 统一解析 MCP 返回（含 `riskScore` 等） |
+| `McpToolsDemo.vue` | 工具控制台：动态列表 + Agentic 确认 UI |
+| `OpsChatInterface.vue` | 工作台：快捷意图映射到新工具 + 安全拦截展示 |
+| `OpsTraceCenter.vue` | 调用 `/api/ops-trace/detail` 查看思维链步骤 |
 
 **Cookie / 会话**：需携带登录态的请求（含部分流式 `fetch`）应设置 **`credentials: 'include'`**，并与上述 **`/award-log`** 前缀一致，否则易出现 401 或路径错位。
 
@@ -231,7 +242,7 @@ flowchart LR
 | `/api/assistant` | `UnifiedAssistantController` | 统一助手上下文、流式对话 |
 | `/api/mcp` | `McpExecuteController` | MCP 工具列表、执行、确认 |
 | `/api/ops-schedule` | `OpsScheduleController` | 延时运维任务 |
-| `/api/ops-trace` | `OpsTraceController` | 运维链路 |
+| `/api/ops-trace` | `OpsTraceController` | 运维链路列表（`/recent`）与单条详情（`/detail?traceId=`，含思维链） |
 | `/api/alarm` | `AlarmConfigController` | 告警配置读写 |
 | `/api/alarm-rule` | `AlarmRuleCompatController` | 与前端路径对齐的告警规则兼容接口（内存存储，重启清空） |
 | `/api/alarm/history` | `AlarmHistoryController` | 告警历史与统计接口 |
@@ -299,26 +310,34 @@ flowchart LR
 
 ## 10. MCP 工具链与主机侧能力
 
-**注册表**：`McpToolRegistry` 将下列 Spring Bean 暴露为可调工具（名称与描述以各 `@Tool` / 注解为准）：
+**注册表**：`McpToolRegistry` 将下列 Spring Bean 暴露为可调工具（HTTP 执行名需与下表 **Bean/工具名** 一致；Spring AI `@Tool` 方法名另见各类内注解）：
 
-| Bean | 源文件 | 能力方向 |
-|------|--------|-----------|
+| Bean（HTTP `toolName`） | 源文件 | 能力方向 |
+|-------------------------|--------|-----------|
 | `LogAnalysisTool` | `mcp/tools/LogAnalysisTool.java` | 主机日志路径读取与分析入口 |
-| `DiskTool` | `DiskTool.java` | 磁盘占用、热点路径等 |
+| `DiskTool` | `DiskTool.java` | 磁盘占用（df 类） |
+| `DiskInsightTool` | `DiskTool.java`（排行接口） | 目录热点 du 排序（白名单路径） |
+| `DiskAnalyzeTool` | `mcp/tools/DiskAnalyzeTool.java` | **只读**：磁盘压力综合诊断（全局概览 + 可选热点） |
 | `ProcessTool` | `ProcessTool.java` | 进程列表与资源占用筛选 |
 | `SystemLoadTool` | `SystemLoadTool.java` | 系统负载 |
-| `CleanTempTool` | `CleanTempTool.java` | 临时目录清理（通常含 dry-run / 确认流） |
+| `CleanTempTool` | `CleanTempTool.java` | 临时目录清理（dry-run / 二次确认） |
+| `LogCleanupTool` | `mcp/tools/LogCleanupTool.java` | **写操作**：日志根目录下陈旧文件清理（白名单路径，默认预览） |
+| `ServiceRestartTool` | `mcp/tools/ServiceRestartTool.java` | **写操作**：白名单服务重启（默认预览；Linux `systemctl` 等） |
 | `ConfigCheckTool` | `ConfigCheckTool.java` | 配置文件只读检查 |
-| `NetworkTool` | `NetworkTool.java` | 网络连接 / 端口等 |
+| `NetworkTool` | `NetworkTool.java` | 网络诊断（ping / traceroute） |
 | `PrivilegeTool` | `PrivilegeTool.java` | 权限与 sudo 探测类能力 |
-| `OsInsightTool` | `OsInsightTool.java` | OS 侧综合洞察 |
+| `OsInsightTool` | `OsInsightTool.java` | OS 侧综合洞察（journalctl / ss / lsof） |
 | `FirstMcpTools` | `mcp/FirstMcpTools.java` | 基础示例/聚合工具 |
 
-**执行控制器**：`McpExecuteController`（`/api/mcp`）负责列出工具、执行、二次确认等；与 `McpToolSecurityAspect`、`OpsPathPolicy`、`MinPrivilegeExecutor` 协同实现**路径白名单、禁止敏感路径、最小权限用户**（`agent.*` 配置段）。
+**执行控制器**：`McpExecuteController`（`/api/mcp`）负责列出工具、执行、二次确认等；与 `McpToolSecurityAspect`、`OpsPathPolicy`、`MinPrivilegeExecutor` 协同实现**路径白名单、禁止敏感路径、最小权限用户**（`agent.*` 配置段）。成功/拦截/需确认路径会将 **思维链（CoT）四步**（接收 → 感知 → 推理 → 校验与执行摘要）写入 `ops_audit_trace.steps_json`，供「运维链路审计」详情查看。
 
-**统一安全门**：`McpInvocationSecurityGate` 在控制器层汇总校验：**工具名允许列表**、参数条目数与单字段长度上限、拼接后的「指令串」长度上限；并结合 `PromptInjectionGuard`、`IntentRiskFilter`、`HighRiskCommandDetector`。信任边界由 `McpSecurityProfile` 区分——**首次请求**（`INITIAL_REQUEST`）遇中等意图风险会要求前端二次确认；**已确认执行**（`POST_CONFIRMATION`）与**延时任务**（`DEFERRED`）不再因 MEDIUM 重复阻断。聊天入口 `/api/chat` 对用户消息长度另由 `enforceChatMessageLimit` 约束。
+**统一安全门**：`McpInvocationSecurityGate` 在控制器层汇总校验：**工具名允许列表**、参数条目数与单字段长度上限、拼接后的「指令串」长度上限；并结合 `PromptInjectionGuard`、`IntentRiskFilter`、`HighRiskCommandDetector`。在此基础上叠加 **`AgenticRiskScoreEngine`**（0–10 分，多维度：工具基线、路径敏感度、命令模式、运行用户是否为 root 等）：低于 `agent.security.risk-score-auto-max` 倾向自动执行；处于 `[autoMax, confirmMax]` 且为首次请求时需前端二次确认（响应中带 `riskScore`、`riskDimensions`、`riskExplanation`）；高于 `risk-score-confirm-max` 直接拒绝（`RISK_SCORE_HIGH`）。信任边界仍由 `McpSecurityProfile` 区分——**首次请求**（`INITIAL_REQUEST`）遇中等意图风险或分数落入确认区间会要求二次确认；**已确认执行**（`POST_CONFIRMATION`）与**延时任务**（`DEFERRED_SCHEDULED`）不因 MEDIUM 重复阻断，但若分数仍超过确认上限仍会拒绝。聊天入口 `/api/chat` 对用户消息长度另由 `enforceChatMessageLimit` 约束。
+
+**路径与重启策略**：日志清理允许根路径由 `agent.paths.log-cleanup-roots` / `windows-log-cleanup-roots` 与 `OpsPathPolicy#isAllowedLogCleanupPath` 约束；可重启服务列表见 `agent.service-restart.allowlist`。**延时任务**（`/api/ops-schedule`）白名单默认可调度只读类工具及既有巡检工具；含 **`DiskAnalyzeTool`**；高风险写操作默认不放入延时列表（以 `OpsDeferredTaskService` 为准）。
 
 **命令输出**：`AbstractCommandExecutor` 对 stdout/stderr 做长度截断，避免超大回显撑爆内存或日志。
+
+**统一助手对齐**：流式对话所用的 `UnifiedAssistantService` 系统提示中包含 **与本节点 `/api/mcp` 白名单一致的 MCP 工具英文名**，减少模型编造工具名；实际执行仍以控制器与安全门为准。
 
 **运维注意**：Linux 生产建议配置专用用户与 `sudoers`；Windows 本地开发可在 `application-dev.yml` 将 `agent.min-privilege.enabled` 设为 `false` 以减少权限错误（仅开发环境）。`OpsPathPolicy` 在 Linux 下会将 `log.collector.file.path` 并入可读前缀；Windows 侧依赖 `agent.paths.windows-*` 覆盖常见日志盘符与目录。
 
@@ -330,12 +349,14 @@ flowchart LR
 |------|----------------|------|
 | 登录拦截 | `security.AuthInterceptor` + `WebMvcConfig` | 保护业务与日志接口 |
 | MCP 调用切面 | `security.McpToolSecurityAspect` | 工具层安检 |
-| MCP 统一门控 | `security.McpInvocationSecurityGate`、`McpSecurityProfile` | 工具允许列表、参数/指令尺度、注入与意图/高危命令；确认流与延时任务信任边界 |
+| MCP 统一门控 | `security.McpInvocationSecurityGate`、`McpSecurityProfile` | 工具允许列表、参数/指令尺度、注入与意图/高危命令；**Agentic 风险分**与确认流；延时任务信任边界 |
+| Agentic 风险评分 | `security.AgenticRiskScoreEngine` | 工具调用 0–10 分，与 `agent.security.risk-score-*` 阈值联动 |
 | 路径策略 | `security.OpsPathPolicy`、`application.yml` → `agent.paths` | 可读/可清/禁止路径 |
 | 高风险命令 | `security.HighRiskCommandDetector`、`HighRiskCommandRule` | 命令级拦截 |
 | 提示注入防护 | `security.PromptInjectionGuard`、`IntentRiskFilter` | 对话与意图风险 |
 | WebSocket 握手 | `security.WebSocketAuthHandshakeInterceptor` | WS 鉴权 |
 | 执行审计 | `AiAuditController` + 相关 service | 记录敏感操作供合规查看 |
+| MCP/运维链路审计表 | `service.OpsAuditTraceService`、`trace.TraceService` | `ops_audit_trace` 落库；含 CoT `steps_json` |
 
 `app.security.ai-audit-relaxed-read`：为 `true` 时，已登录用户可读执行审计列表（**开发便利**）；**生产务必为 `false`**，仅管理员可见。
 
@@ -407,6 +428,10 @@ flowchart LR
 | `agent.security.max-instruction-length` | MCP 拼接指令串最大字符数（环境变量 `AGENT_MAX_INSTRUCTION_LEN`） |
 | `agent.security.max-parameter-entries` | 单次工具调用参数键值对数量上限（`AGENT_MAX_PARAM_ENTRIES`） |
 | `agent.security.max-single-string-param-chars` | 单个字符串参数最大字符数（`AGENT_MAX_PARAM_STRING_CHARS`，防参数炸弹） |
+| `agent.security.risk-score-auto-max` | Agentic 风险分「倾向自动」上限（默认与赛题示例一致时可设为 `3`） |
+| `agent.security.risk-score-confirm-max` | 超过则拒绝；区间内首次请求需二次确认（默认 `7`） |
+| `agent.service-restart.allowlist` | 允许重启的服务单元名（逗号分隔） |
+| `agent.paths.log-cleanup-roots` / `agent.paths.windows-log-cleanup-roots` | 日志清理允许根路径列表 |
 
 ---
 
