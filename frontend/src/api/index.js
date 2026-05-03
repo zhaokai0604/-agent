@@ -298,6 +298,10 @@ export const getAiAuditRecent = (limit = 100) =>
 export const getOpsTraceRecent = (limit = 100) =>
   request.get('/api/ops-trace/recent', { params: { limit } })
 
+/** 单条审计含 steps_json（思维链） */
+export const getOpsTraceDetail = (traceId) =>
+  request.get('/api/ops-trace/detail', { params: { traceId } })
+
 export const getRunbookList = () => request.get('/api/runbook/list')
 export const submitRunbook = (payload) => request.post('/api/runbook/submit', payload)
 export const approveRunbook = (id) => request.post(`/api/runbook/${id}/approve`)

@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -36,6 +37,9 @@ public class McpExecuteController {
     private final NetworkTool networkTool;
     private final PrivilegeTool privilegeTool;
     private final OsInsightTool osInsightTool;
+    private final LogCleanupTool logCleanupTool;
+    private final ServiceRestartTool serviceRestartTool;
+    private final DiskAnalyzeTool diskAnalyzeTool;
 
     private final McpInvocationSecurityGate mcpInvocationSecurityGate;
     private final OpsAuditTraceService opsAuditTraceService;
@@ -57,6 +61,9 @@ public class McpExecuteController {
         tools.add(createToolInfo("NetworkTool", "网络诊断工具", "诊断网络连接", "/mcp/execute"));
         tools.add(createToolInfo("PrivilegeTool", "权限验证工具", "验证文件权限", "/mcp/execute"));
         tools.add(createToolInfo("OsInsightTool", "OS 深度感知", "journalctl / ss / lsof", "/mcp/execute"));
+        tools.add(createToolInfo("LogCleanupTool", "日志清理（写）", "清理 /var/log 等白名单下过旧日志，默认仅预览", "/mcp/execute"));
+        tools.add(createToolInfo("ServiceRestartTool", "服务重启（写）", "白名单内非关键服务重启，默认仅预览", "/mcp/execute"));
+        tools.add(createToolInfo("DiskAnalyzeTool", "磁盘分析", "综合 df + 热点目录，诊断空间与 I/O 相关线索", "/mcp/execute"));
 
         response.put("success", true);
         response.put("data", tools);
@@ -91,14 +98,23 @@ public class McpExecuteController {
             return gateBlockResponse(traceId, startTime, decision);
         }
         if (decision.getType() == GateDecision.Type.NEED_CONFIRM) {
-            log.info("MCP 中等风险，需二次确认: tool={}", toolName);
-            persistMcpReject(traceId, userInstruction, decision.getRiskLevel(), toolName, "NEED_CONFIRM",
-                    decision.getMessage(), startTime);
+            log.info("MCP 中等风险，需二次确认: tool={} score={}", toolName, decision.getAgenticRiskScore());
+            persistCotNeedConfirm(traceId, userInstruction, toolName, decision, startTime);
             Map<String, Object> response = new HashMap<>();
             response.put("success", false);
             response.put("needConfirm", true);
-            response.put("message", "该操作存在中等风险，请在界面点击确认（等同口令「确认执行」）");
+            response.put("message", decision.getMessage() != null ? decision.getMessage()
+                    : "该操作存在风险，请在界面点击确认（等同口令「确认执行」）");
             response.put("riskLevel", decision.getRiskLevel().name());
+            if (decision.getAgenticRiskScore() != null) {
+                response.put("riskScore", decision.getAgenticRiskScore());
+            }
+            if (decision.getAgenticRiskDimensions() != null) {
+                response.put("riskDimensions", decision.getAgenticRiskDimensions());
+            }
+            if (decision.getAgenticRiskExplanation() != null) {
+                response.put("riskExplanation", decision.getAgenticRiskExplanation());
+            }
             response.put("toolName", toolName);
             response.put("parameters", parameters);
             response.put("traceId", traceId);
@@ -106,16 +122,22 @@ public class McpExecuteController {
             return response;
         }
 
-        RiskLevel evaluatedRisk = decision.getRiskLevel();
         Map<String, Object> execResponse = doExecuteTool(toolName, parameters, startTime, traceId, userInstruction);
         execResponse.put("traceId", traceId);
-        persistMcpSuccess(traceId, userInstruction, evaluatedRisk, toolName, execResponse, startTime);
+        persistMcpSuccess(traceId, userInstruction, decision, toolName, execResponse, startTime);
         return execResponse;
     }
 
     private void persistGateReject(String traceId, String userInstruction, String toolName, GateDecision d, long startTime) {
-        persistMcpReject(traceId, userInstruction, RiskLevel.HIGH, toolName, mapGateCodeToOutcome(d.getCode()),
-                d.getMessage(), startTime);
+        String outcome = mapGateCodeToOutcome(d.getCode());
+        String step4 = d.getAgenticRiskScore() != null
+                ? String.format(Locale.ROOT, "风险评分 %.1f/10。安全门代码 %s，拒绝原因: %s",
+                d.getAgenticRiskScore(), d.getCode(), d.getMessage())
+                : String.format(Locale.ROOT, "安全门代码 %s，拒绝: %s", d.getCode(), d.getMessage());
+        List<Map<String, Object>> steps = buildCotTrace(userInstruction, toolName, d, step4);
+        opsAuditTraceService.save(traceId, "MCP", userInstruction, RiskLevel.HIGH.name(), outcome, toolName, false,
+                d.getMessage(), steps, System.currentTimeMillis() - startTime,
+                httpAuditSubject.currentOperatorId(), opsPathPolicy.getPolicyVersion());
     }
 
     private static String mapGateCodeToOutcome(String code) {
@@ -126,6 +148,7 @@ public class McpExecuteController {
             case "INJECTION" -> "REJECT_INJECTION";
             case "HIGH_INTENT" -> "REJECT_HIGH_INTENT";
             case "HIGH_RISK_COMMAND" -> "REJECT_HIGH_RISK_COMMAND";
+            case "RISK_SCORE_HIGH" -> "REJECT_RISK_SCORE";
             default -> "SECURITY_REJECT";
         };
     }
@@ -137,31 +160,74 @@ public class McpExecuteController {
         response.put("securityCode", d.getCode());
         response.put("traceId", traceId);
         response.put("duration", System.currentTimeMillis() - startTime);
+        attachAgenticRisk(response, d);
         return response;
     }
 
-    private void persistMcpReject(String traceId, String userInstruction, RiskLevel risk, String toolName,
-                                  String outcome, String summary, long startTime) {
-        List<Map<String, Object>> steps = new ArrayList<>();
-        steps.add(TraceService.step("receive", userInstruction));
-        steps.add(TraceService.step("security", outcome));
-        opsAuditTraceService.save(traceId, "MCP", userInstruction, risk.name(), outcome, toolName, false,
+    private static void attachAgenticRisk(Map<String, Object> response, GateDecision d) {
+        if (d.getAgenticRiskScore() != null) {
+            response.put("riskScore", d.getAgenticRiskScore());
+        }
+        if (d.getAgenticRiskDimensions() != null) {
+            response.put("riskDimensions", d.getAgenticRiskDimensions());
+        }
+        if (d.getAgenticRiskExplanation() != null) {
+            response.put("riskExplanation", d.getAgenticRiskExplanation());
+        }
+    }
+
+    private void persistCotNeedConfirm(String traceId, String userInstruction, String toolName, GateDecision d, long startTime) {
+        double s = d.getAgenticRiskScore() != null ? d.getAgenticRiskScore() : 0.0;
+        String step4 = String.format(Locale.ROOT,
+                "风险评分 %.1f/10，需在前端二次确认后执行。%s",
+                s, d.getMessage() != null ? d.getMessage() : "");
+        List<Map<String, Object>> steps = buildCotTrace(userInstruction, toolName, d, step4);
+        opsAuditTraceService.save(traceId, "MCP", userInstruction, d.getRiskLevel().name(), "NEED_CONFIRM", toolName, false,
+                d.getMessage(), steps, System.currentTimeMillis() - startTime,
+                httpAuditSubject.currentOperatorId(), opsPathPolicy.getPolicyVersion());
+    }
+
+    private void persistMcpSuccess(String traceId, String userInstruction, GateDecision decision, String toolName,
+                                   Map<String, Object> resp, long startTime) {
+        boolean ok = Boolean.TRUE.equals(resp.get("success"));
+        String summary = ok ? String.valueOf(resp.get("data")) : String.valueOf(resp.get("error"));
+        String rs = formatRiskScoreLine(decision);
+        String resultBrief = summary.length() > 600 ? summary.substring(0, 600) + "…" : summary;
+        String step4 = String.format(Locale.ROOT,
+                "%s 已执行 %s。结果: %s。摘要: %s",
+                rs, toolName, ok ? "成功" : "失败", resultBrief);
+        List<Map<String, Object>> steps = buildCotTrace(userInstruction, toolName, decision, step4);
+        opsAuditTraceService.save(traceId, "MCP", userInstruction, decision.getRiskLevel().name(), "PASS", toolName, ok,
                 summary, steps, System.currentTimeMillis() - startTime,
                 httpAuditSubject.currentOperatorId(), opsPathPolicy.getPolicyVersion());
     }
 
-    private void persistMcpSuccess(String traceId, String userInstruction, RiskLevel risk, String toolName,
-                                   Map<String, Object> resp, long startTime) {
-        boolean ok = Boolean.TRUE.equals(resp.get("success"));
-        String summary = ok ? String.valueOf(resp.get("data")) : String.valueOf(resp.get("error"));
+    private String perceptionNarrative() {
+        try {
+            return "系统磁盘与分区概览: " + diskTool.checkDiskUsage();
+        } catch (Exception e) {
+            return "系统状态快照暂不可用: " + e.getMessage();
+        }
+    }
+
+    private static String formatRiskScoreLine(GateDecision d) {
+        if (d.getAgenticRiskScore() != null) {
+            return String.format(Locale.ROOT, "风险评分 %.1f/10 已通过门控", d.getAgenticRiskScore());
+        }
+        return "门控已放行";
+    }
+
+    private List<Map<String, Object>> buildCotTrace(String userInstruction, String toolName, GateDecision d, String step4) {
+        String s3 = String.format("AI 推理：根据用户指令，将调用工具 %s 完成目标。", toolName);
+        if (d != null && d.getAgenticRiskDimensions() != null && !d.getAgenticRiskDimensions().isEmpty()) {
+            s3 = s3 + " 评分明细: " + d.getAgenticRiskDimensions();
+        }
         List<Map<String, Object>> steps = new ArrayList<>();
-        steps.add(TraceService.step("receive", userInstruction));
-        steps.add(TraceService.step("security", "PASS"));
-        steps.add(TraceService.step("execute", toolName));
-        steps.add(TraceService.step("result", ok ? "OK" : "FAIL"));
-        opsAuditTraceService.save(traceId, "MCP", userInstruction, risk.name(), "PASS", toolName, ok,
-                summary, steps, System.currentTimeMillis() - startTime,
-                httpAuditSubject.currentOperatorId(), opsPathPolicy.getPolicyVersion());
+        steps.add(TraceService.cotStep(1, "接收", "接收并解析为: " + userInstruction));
+        steps.add(TraceService.cotStep(2, "感知", perceptionNarrative()));
+        steps.add(TraceService.cotStep(3, "推理", s3));
+        steps.add(TraceService.cotStep(4, "校验", step4));
+        return steps;
     }
     
     @PostMapping("/confirmExecute")
@@ -203,13 +269,14 @@ public class McpExecuteController {
             response.put("securityCode", decision.getCode());
             response.put("traceId", traceId);
             response.put("duration", System.currentTimeMillis() - startTime);
+            attachAgenticRisk(response, decision);
             return response;
         }
 
         log.info("用户已确认，执行工具: {}", toolName);
         Map<String, Object> execResponse = doExecuteTool(toolName, parameters, startTime, traceId, userInstruction);
         execResponse.put("traceId", traceId);
-        persistMcpSuccess(traceId, userInstruction, decision.getRiskLevel(), toolName, execResponse, startTime);
+        persistMcpSuccess(traceId, userInstruction, decision, toolName, execResponse, startTime);
         return execResponse;
     }
 
@@ -240,11 +307,10 @@ public class McpExecuteController {
             reject.put("duration", System.currentTimeMillis() - startTime);
             return reject;
         }
-        RiskLevel evaluatedRisk = decision.getRiskLevel();
         String deferredInstruction = "[DEFERRED_SCHEDULE] " + userInstruction;
         Map<String, Object> execResponse = doExecuteTool(toolName, parameters, startTime, traceId, deferredInstruction);
         execResponse.put("traceId", traceId);
-        persistMcpSuccess(traceId, deferredInstruction, evaluatedRisk, toolName, execResponse, startTime);
+        persistMcpSuccess(traceId, deferredInstruction, decision, toolName, execResponse, startTime);
         return execResponse;
     }
     
@@ -270,6 +336,13 @@ public class McpExecuteController {
                         result = diskTool.rankDiskUsageUnderPath(rootPath, maxDepth, topN);
                         break;
 
+                    case "DiskAnalyzeTool":
+                        String daRoot = getStringParam(parameters, "rootPath");
+                        Boolean includeHotspots = getBooleanParam(parameters, "includeHotspots");
+                        Integer daTopN = getIntegerParam(parameters, "topN");
+                        result = diskAnalyzeTool.analyzeDiskPressure(daRoot, includeHotspots, daTopN);
+                        break;
+
                     case "ProcessTool":
                         Double minCpu = getDoubleParam(parameters, "minCpu");
                         Double minMem = getDoubleParam(parameters, "minMem");
@@ -293,6 +366,21 @@ public class McpExecuteController {
                     Boolean confirmDelete = getBooleanParam(parameters, "confirmDelete");
                     result = cleanTempTool.cleanTempFiles(path, days, dryRun, confirmDelete);
                     break;
+
+                    case "LogCleanupTool":
+                        String lcPath = getStringParam(parameters, "path");
+                        Integer lcDays = getIntegerParam(parameters, "days");
+                        Boolean lcDry = getBooleanParam(parameters, "dryRun");
+                        Boolean lcConfirm = getBooleanParam(parameters, "confirmDelete");
+                        result = logCleanupTool.cleanupOldLogs(lcPath, lcDays, lcDry, lcConfirm);
+                        break;
+
+                    case "ServiceRestartTool":
+                        String svc = getStringParam(parameters, "serviceName");
+                        Boolean srDry = getBooleanParam(parameters, "dryRun");
+                        Boolean srConfirm = getBooleanParam(parameters, "confirmRestart");
+                        result = serviceRestartTool.restartService(svc, srDry, srConfirm);
+                        break;
 
                     case "ConfigCheckTool":
                         String configPath = getStringParam(parameters, "configPath");

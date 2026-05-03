@@ -72,6 +72,18 @@
             <span class="cap-icon">🧹</span>
             <span>文件清理</span>
           </div>
+          <div class="capability-item" @click="sendQuickCommand('磁盘压力综合分析（含热点）')">
+            <span class="cap-icon">📊</span>
+            <span>磁盘综合诊断</span>
+          </div>
+          <div class="capability-item" @click="sendQuickCommand('预览清理 /var/log 下 30 天前的陈旧日志文件')">
+            <span class="cap-icon">🗂️</span>
+            <span>日志清理预览</span>
+          </div>
+          <div class="capability-item" @click="sendQuickCommand('预览重启 nginx 服务（dry-run）')">
+            <span class="cap-icon">🔁</span>
+            <span>服务重启预览</span>
+          </div>
           <div class="capability-item" @click="sendQuickCommand('30分钟之后帮我预览清理临时文件')">
             <span class="cap-icon">⏱️</span>
             <span>延时清理</span>
@@ -197,6 +209,8 @@ import {
   scheduleDeferredOpsTask
 } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
+import { getMcpToolCommandHint } from '../utils/mcpToolsMeta'
+import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
 import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
 import MarkdownIt from 'markdown-it'
 
@@ -296,48 +310,14 @@ const toggleVoiceInput = () => {
   }
 }
 
-const toolNameMap = {
-  'disk': 'DiskTool',
-  '磁盘': 'DiskTool',
-  'checkDiskUsage': 'DiskTool',
-  'process': 'ProcessTool',
-  '进程': 'ProcessTool',
-  'listProcesses': 'ProcessTool',
-  'load': 'SystemLoadTool',
-  '负载': 'SystemLoadTool',
-  '系统': 'SystemLoadTool',
-  'checkSystemLoad': 'SystemLoadTool',
-  'log': 'LogAnalysisTool',
-  '日志': 'LogAnalysisTool',
-  'analyzeLogs': 'LogAnalysisTool',
-  'clean': 'CleanTempTool',
-  '清理': 'CleanTempTool',
-  'cleanTempFiles': 'CleanTempTool',
-  'config': 'ConfigCheckTool',
-  '配置': 'ConfigCheckTool',
-  'checkConfig': 'ConfigCheckTool',
-  'network': 'NetworkTool',
-  '网络': 'NetworkTool',
-  'ping': 'NetworkTool',
-  'traceroute': 'NetworkTool',
-  'diagnoseNetwork': 'NetworkTool',
-  'privilege': 'PrivilegeTool',
-  '权限': 'PrivilegeTool',
-  'checkPrivilege': 'PrivilegeTool',
-  'diskInsight': 'DiskInsightTool',
-  '热点': 'DiskInsightTool',
-  'rankDiskUsage': 'DiskInsightTool',
-  'journalctl': 'OsInsightTool',
-  'osinsight': 'OsInsightTool',
-  'lsof': 'OsInsightTool'
-}
-
 const TOOLS_UNWRAP_INNER = new Set([
   'DiskTool',
   'ProcessTool',
   'SystemLoadTool',
   'LogAnalysisTool',
   'CleanTempTool',
+  'LogCleanupTool',
+  'ServiceRestartTool',
   'ConfigCheckTool',
   'NetworkTool',
   'PrivilegeTool'
@@ -354,24 +334,38 @@ function parseMaybeJsonString(val) {
   }
 }
 
-const getToolCommand = (toolName) => {
-  const commands = {
-    'DiskTool': 'df -h',
-    'ProcessTool': 'ps aux --sort=-%cpu',
-    'SystemLoadTool': 'top -bn1 + cat /proc/loadavg',
-    'LogAnalysisTool': 'tail -n 100 /var/log/syslog',
-    'CleanTempTool': 'find /tmp -type f -mtime +7 -print',
-    'ConfigCheckTool': 'nginx -t -c /etc/nginx/nginx.conf',
-    'NetworkTool': 'ping -c 4 target',
-    'PrivilegeTool': 'test -x /path/to/file',
-    'DiskInsightTool': 'du -xk --max-depth=2（白名单路径）',
-    'OsInsightTool': 'journalctl | ss -tuln | lsof -p PID'
-  }
-  return commands[toolName] || 'system command'
-}
+const getToolCommand = (toolName) => getMcpToolCommandHint(toolName)
 
 const parseUserIntent = (message) => {
   const lowerMsg = message.toLowerCase()
+
+  if (
+    /重启|重新启动/i.test(message) &&
+    (/nginx|rsyslog|\.service/i.test(message) || (/服务/.test(lowerMsg) && /nginx|rsyslog/i.test(message)))
+  ) {
+    return 'ServiceRestartTool'
+  }
+
+  if (
+    (lowerMsg.includes('/var/log') ||
+      lowerMsg.includes('日志目录') ||
+      lowerMsg.includes('陈旧日志') ||
+      (lowerMsg.includes('日志') && lowerMsg.includes('清理'))) &&
+    (lowerMsg.includes('清理') || lowerMsg.includes('删除') || lowerMsg.includes('清除'))
+  ) {
+    return 'LogCleanupTool'
+  }
+
+  if (
+    lowerMsg.includes('磁盘压力') ||
+    lowerMsg.includes('磁盘综合') ||
+    lowerMsg.includes('磁盘诊断') ||
+    (lowerMsg.includes('磁盘') &&
+      (lowerMsg.includes('满了') || lowerMsg.includes('占满') || lowerMsg.includes('空间不足'))) ||
+    /io\s*异常|i\s*\/\s*o/i.test(lowerMsg)
+  ) {
+    return 'DiskAnalyzeTool'
+  }
 
   if (
     lowerMsg.includes('热点') ||
@@ -497,6 +491,42 @@ const extractParameters = (message, toolName) => {
     }
   }
 
+  if (toolName === 'DiskAnalyzeTool') {
+    const pathMatch = message.match(/\/[\w\/\.-]+/)
+    if (pathMatch) {
+      params.rootPath = pathMatch[0]
+    }
+    params.includeHotspots = !/不要热点|仅\s*df|只看分区/i.test(message)
+    const topMatch = message.match(/前\s*(\d+)\s*条/)
+    if (topMatch) {
+      params.topN = parseInt(topMatch[1], 10)
+    }
+  }
+
+  if (toolName === 'LogCleanupTool') {
+    const pathMatch = message.match(/\/[\w\/\.-]+/)
+    if (pathMatch) {
+      params.path = pathMatch[0]
+    }
+    const daysMatch = message.match(/(\d+)\s*天/)
+    params.days = daysMatch ? parseInt(daysMatch[1], 10) : 30
+    params.dryRun = !/真实删除|执行删除|立即删除/i.test(lowerMsg)
+    params.confirmDelete = /真实删除|执行删除|立即删除/i.test(lowerMsg)
+  }
+
+  if (toolName === 'ServiceRestartTool') {
+    let svc = null
+    if (/nginx/i.test(message)) {
+      svc = 'nginx'
+    }
+    if (/rsyslog/i.test(message)) {
+      svc = 'rsyslog'
+    }
+    params.serviceName = svc || 'nginx'
+    params.dryRun = !/真实重启|立即重启|执行重启/i.test(lowerMsg)
+    params.confirmRestart = /真实重启|立即重启|执行重启/i.test(lowerMsg)
+  }
+
   if (toolName === 'OsInsightTool') {
     params.operation = 'journal'
     if (/\blsof\b/i.test(lowerMsg) || /pid\s*[:：]?\s*\d+/i.test(message)) {
@@ -611,6 +641,45 @@ const generateHumanReadableResponse = (toolName, result) => {
             `• 发现文件: ${data.filesFound}\n` +
             `• 实际删除: ${data.filesDeleted} 个文件`
         }
+
+      case 'LogCleanupTool':
+        if (data.mode === 'DRY-RUN') {
+          return `日志清理 Dry-Run:\n` +
+            `• 路径: ${data.path}\n` +
+            `• 候选文件: ${data.filesFound}\n` +
+            `• 预览 ${data.previewCount ?? '-'} 条:\n` +
+            (data.preview || []).map(f => `  - ${f}`).join('\n')
+        }
+        return `日志清理执行:\n• 路径: ${data.path}\n• 候选: ${data.filesFound}\n• 已删: ${data.filesDeleted}`
+
+      case 'ServiceRestartTool':
+        if (data.mode === 'DRY-RUN') {
+          return `服务重启预览:\n• ${data.service}\n• ${data.plan || ''}`
+        }
+        return `服务重启结果:\n• ${data.service}\n• success=${data.success}\n• ${data.stderr || ''}`
+
+      case 'DiskAnalyzeTool': {
+        let d = data
+        if (typeof d === 'string') {
+          try {
+            d = JSON.parse(d)
+          } catch {
+            break
+          }
+        }
+        const ov = d?.overview
+        const hot = d?.hotspotsRank
+        let text = '磁盘综合诊断\n'
+        text += typeof ov === 'string' ? ov : JSON.stringify(ov ?? {}, null, 2)
+        if (hot != null) {
+          text += '\n\n热点扫描\n'
+          text += typeof hot === 'string' ? hot : JSON.stringify(hot, null, 2)
+        }
+        if (d?.hint) {
+          text += '\n\n' + d.hint
+        }
+        return text
+      }
 
       case 'ConfigCheckTool':
         const passed = data.passed ? '✅ 通过' : '❌ 失败'
@@ -1021,17 +1090,13 @@ const handleSend = async () => {
       messages.value.splice(toolCallingIndex, 1)
       loading.value = false
       try {
-        await ElMessageBox.confirm(
-          result.message ||
-            '该操作存在中等风险：需在界面二次确认后才会真正下发到本机工具（等同输入「确认执行」）。',
-          '安全护栏 · 二次确认',
-          {
-            confirmButtonText: '确认执行',
-            cancelButtonText: '取消',
-            type: 'warning',
-            closeOnClickModal: false
-          }
-        )
+        await ElMessageBox.confirm(buildMcpRiskConfirmMessage(result), '安全护栏 · Agentic 风险 · 二次确认', {
+          confirmButtonText: '确认执行',
+          cancelButtonText: '取消',
+          type: 'warning',
+          closeOnClickModal: false,
+          customClass: 'mcp-risk-confirm-box'
+        })
       } catch {
         messages.value.push({
           role: 'assistant',
@@ -1069,6 +1134,14 @@ const handleSend = async () => {
       summaryMd = result.success
         ? '工具已正常返回，结构化数据见下方 **原始输出**。'
         : `**失败说明**\n\n\`\`\`\n${formatToolResult(result.data)}\n\`\`\``
+    }
+    if (!result.success && (result.securityCode != null || result.riskScore != null)) {
+      const gate = []
+      if (result.error) gate.push(`- ${String(result.error)}`)
+      if (result.securityCode) gate.push(`- 安全码: \`${result.securityCode}\``)
+      if (result.riskScore != null) gate.push(`- Agentic 风险分: **${result.riskScore} / 10**`)
+      if (result.riskExplanation) gate.push(`- ${result.riskExplanation}`)
+      summaryMd = `### 安全门拦截\n\n${gate.join('\n')}\n\n---\n\n` + summaryMd
     }
 
     const statusTitle = result.success ? '执行成功' : '执行失败'
@@ -1555,5 +1628,15 @@ const clearChat = () => {
   white-space: pre-wrap;
   font-family: inherit;
   line-height: 1.6;
+}
+</style>
+
+<style>
+/* MessageBox 挂载在 body，须非 scoped */
+.mcp-risk-confirm-box .el-message-box__message {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: min(48vh, 420px);
+  overflow-y: auto;
 }
 </style>

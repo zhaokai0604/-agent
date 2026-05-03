@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -19,11 +20,14 @@ public class McpInvocationSecurityGate {
 
     private static final Set<String> ALLOWED_TOOLS = Set.of(
             "DiskTool",
+            "DiskAnalyzeTool",
             "DiskInsightTool",
             "ProcessTool",
             "SystemLoadTool",
             "LogAnalysisTool",
             "CleanTempTool",
+            "LogCleanupTool",
+            "ServiceRestartTool",
             "ConfigCheckTool",
             "NetworkTool",
             "PrivilegeTool",
@@ -33,6 +37,7 @@ public class McpInvocationSecurityGate {
     private final PromptInjectionGuard promptInjectionGuard;
     private final IntentRiskFilter intentRiskFilter;
     private final HighRiskCommandDetector highRiskCommandDetector;
+    private final AgenticRiskScoreEngine agenticRiskScoreEngine;
 
     private final int maxInstructionLength;
     private final int maxParameterEntries;
@@ -42,6 +47,7 @@ public class McpInvocationSecurityGate {
             PromptInjectionGuard promptInjectionGuard,
             IntentRiskFilter intentRiskFilter,
             HighRiskCommandDetector highRiskCommandDetector,
+            AgenticRiskScoreEngine agenticRiskScoreEngine,
             @Value("${agent.security.max-instruction-length:16384}") int maxInstructionLength,
             @Value("${agent.security.max-parameter-entries:48}") int maxParameterEntries,
             @Value("${agent.security.max-single-string-param-chars:131072}") int maxSingleStringParamChars
@@ -49,6 +55,7 @@ public class McpInvocationSecurityGate {
         this.promptInjectionGuard = promptInjectionGuard;
         this.intentRiskFilter = intentRiskFilter;
         this.highRiskCommandDetector = highRiskCommandDetector;
+        this.agenticRiskScoreEngine = agenticRiskScoreEngine;
         this.maxInstructionLength = Math.max(4096, maxInstructionLength);
         this.maxParameterEntries = Math.max(8, maxParameterEntries);
         this.maxSingleStringParamChars = Math.max(4096, maxSingleStringParamChars);
@@ -97,20 +104,43 @@ public class McpInvocationSecurityGate {
             return GateDecision.block("INJECTION", "安全拦截：检测到提示注入特征");
         }
 
-        RiskLevel risk = intentRiskFilter.evaluate(instruction);
-        if (risk == RiskLevel.HIGH) {
-            return GateDecision.block("HIGH_INTENT", "安全拦截：高风险意图，禁止自动执行");
-        }
+        AgenticRiskScoreEngine.ScoreResult scoreResult = agenticRiskScoreEngine.score(toolName, parameters, instruction);
+        double autoMax = agenticRiskScoreEngine.getAutoMax();
+        double confirmMax = agenticRiskScoreEngine.getConfirmMax();
 
+        RiskLevel intentRisk = intentRiskFilter.evaluate(instruction);
+        if (intentRisk == RiskLevel.HIGH) {
+            return GateDecision.block("HIGH_INTENT", "安全拦截：高风险意图，禁止自动执行",
+                    scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
+        }
+        if (scoreResult.total() > confirmMax) {
+            return GateDecision.block("RISK_SCORE_HIGH", String.format(Locale.ROOT,
+                    "风险评分 %.1f/10 超过可执行上限 %.0f，已拒绝。%s",
+                    scoreResult.total(), confirmMax, scoreResult.explanation()),
+                    scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
+        }
         if (highRiskCommandDetector.isHighRiskCommand(instruction)) {
-            return GateDecision.block("HIGH_RISK_COMMAND", "安全拦截：指令构造命中高危命令模式");
+            return GateDecision.block("HIGH_RISK_COMMAND", "安全拦截：指令构造命中高危命令模式",
+                    scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
 
-        if (profile == McpSecurityProfile.INITIAL_REQUEST && risk == RiskLevel.MEDIUM) {
-            return GateDecision.needConfirm(risk);
+        boolean needByScore = profile == McpSecurityProfile.INITIAL_REQUEST
+                && scoreResult.total() >= autoMax
+                && scoreResult.total() <= confirmMax;
+        boolean needByIntent = profile == McpSecurityProfile.INITIAL_REQUEST
+                && intentRisk == RiskLevel.MEDIUM;
+        if (needByScore || needByIntent) {
+            String extra = needByIntent && !needByScore ? "意图为中等风险；" : "";
+            String msg = String.format(Locale.ROOT,
+                    "Agentic 风险分 %.1f/10（<%.0f 倾向自动，[%.0f,%.0f] 为确认区间）。%s请在界面点击确认后执行。",
+                    scoreResult.total(), autoMax, autoMax, confirmMax, extra);
+            return GateDecision.needConfirm(
+                    needByIntent ? intentRisk : RiskLevel.MEDIUM,
+                    msg,
+                    scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
 
-        return GateDecision.allow(risk);
+        return GateDecision.allow(intentRisk, scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
     }
 
     private String findOversizedParameter(Map<String, Object> parameters) {
@@ -143,25 +173,38 @@ public class McpInvocationSecurityGate {
         private final RiskLevel riskLevel;
         private final String code;
         private final String message;
+        private final Double agenticRiskScore;
+        private final Map<String, Double> agenticRiskDimensions;
+        private final String agenticRiskExplanation;
 
-        private GateDecision(Type type, RiskLevel riskLevel, String code, String message) {
+        private GateDecision(Type type, RiskLevel riskLevel, String code, String message,
+                             Double agenticRiskScore, Map<String, Double> agenticRiskDimensions,
+                             String agenticRiskExplanation) {
             this.type = type;
             this.riskLevel = riskLevel;
             this.code = code;
             this.message = message;
+            this.agenticRiskScore = agenticRiskScore;
+            this.agenticRiskDimensions = agenticRiskDimensions;
+            this.agenticRiskExplanation = agenticRiskExplanation;
         }
 
-        public static GateDecision allow(RiskLevel risk) {
-            return new GateDecision(Type.ALLOW, risk, "OK", null);
+        public static GateDecision allow(RiskLevel risk, double score, Map<String, Double> dimensions, String explanation) {
+            return new GateDecision(Type.ALLOW, risk, "OK", null, score, dimensions, explanation);
         }
 
-        public static GateDecision needConfirm(RiskLevel risk) {
-            return new GateDecision(Type.NEED_CONFIRM, risk, "NEED_CONFIRM",
-                    "中等风险操作需在界面二次确认后方可执行");
+        public static GateDecision needConfirm(RiskLevel risk, String userMessage, double score,
+                                              Map<String, Double> dimensions, String explanation) {
+            return new GateDecision(Type.NEED_CONFIRM, risk, "NEED_CONFIRM", userMessage, score, dimensions, explanation);
         }
 
         public static GateDecision block(String code, String message) {
-            return new GateDecision(Type.BLOCK, RiskLevel.HIGH, code, message);
+            return new GateDecision(Type.BLOCK, RiskLevel.HIGH, code, message, null, null, null);
+        }
+
+        public static GateDecision block(String code, String message, Double score, Map<String, Double> dimensions,
+                                        String explanation) {
+            return new GateDecision(Type.BLOCK, RiskLevel.HIGH, code, message, score, dimensions, explanation);
         }
 
         public Type getType() {
@@ -178,6 +221,18 @@ public class McpInvocationSecurityGate {
 
         public String getMessage() {
             return message;
+        }
+
+        public Double getAgenticRiskScore() {
+            return agenticRiskScore;
+        }
+
+        public Map<String, Double> getAgenticRiskDimensions() {
+            return agenticRiskDimensions;
+        }
+
+        public String getAgenticRiskExplanation() {
+            return agenticRiskExplanation;
         }
 
         public enum Type {

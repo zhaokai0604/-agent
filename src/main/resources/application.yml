@@ -63,8 +63,8 @@ spring:
             initialize-schema: never
     openai:
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-      # 必须通过环境变量 AI_API_KEY 配置；勿将密钥提交到仓库
-      api-key: ${AI_API_KEY:}
+      # 本地联调默认值；生产务必用环境变量 AI_API_KEY 覆盖，勿依赖仓库内默认值
+      api-key: ${AI_API_KEY:sk-d85baf9884424ff8b76176b6787d9056}
       chat:
         options:
           model: qwen-plus-latest
@@ -263,11 +263,20 @@ agent:
     max-instruction-length: ${AGENT_MAX_INSTRUCTION_LEN:16384}
     max-parameter-entries: ${AGENT_MAX_PARAM_ENTRIES:48}
     max-single-string-param-chars: ${AGENT_MAX_PARAM_STRING_CHARS:131072}
+    # Agentic 风险分：<autoMax 倾向自动执行；[autoMax, confirmMax] 需二次确认；>confirmMax 拒绝
+    risk-score-auto-max: ${AGENT_RISK_AUTO_MAX:3}
+    risk-score-confirm-max: ${AGENT_RISK_CONFIRM_MAX:7}
+  service-restart:
+    # 仅允许重启列表内服务（逗号分隔），用于演示可控「写操作」
+    allowlist: ${AGENT_SERVICE_RESTART_ALLOWLIST:nginx,rsyslog,cups}
   paths:
     policy-version: path-policy-v1
     # Linux / 麒麟等：赛题常见日志与部署目录；采集根见 log.collector.file.path 会自动并入
     read-prefixes: /var/log,/tmp,/var/log/journal,/opt,/usr/local,/run
     clean-roots: /tmp,/var/tmp
+    # LogCleanupTool：仅允许在这些根下删除陈旧日志文件（与临时目录清理分离）
+    log-cleanup-roots: /var/log,/var/log/journal
+    windows-log-cleanup-roots: C:/Windows/Logs,C:/ProgramData
     config-prefixes: /etc/nginx/,/etc/ssh/,/etc/default/,/etc/crontab,/etc/cron.
     denied-substrings: /etc/shadow,/etc/gshadow,/.ssh,/root/,/boot/
     privilege-prefixes: /usr/bin,/usr/sbin,/bin,/sbin,/usr/local/bin,/usr/lib

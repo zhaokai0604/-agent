@@ -2,7 +2,7 @@
   <div class="mcp-tools-demo">
     <div class="hero-section">
       <h1>本地工具控制台</h1>
-      <p class="subtitle">受控执行 · 审计留痕 · 适用于 Linux 服务器日常巡检</p>
+      <p class="subtitle">受控执行 · Agentic 风险分 · 思维链审计 · Windows / Linux 节点</p>
       <div class="tech-tags">
         <el-tag type="success">Spring AI 1.1.0</el-tag>
         <el-tag type="info">MCP Protocol</el-tag>
@@ -18,7 +18,7 @@
             v-for="tool in tools"
             :key="tool.name"
             class="tool-card"
-            :class="{ active: selectedTool === tool.name }"
+            :class="{ active: selectedTool === tool.name, offline: tool.status === 'offline' }"
             @click="selectTool(tool)"
           >
             <div class="tool-icon">{{ tool.icon }}</div>
@@ -136,8 +136,10 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu } from '@element-plus/icons-vue'
-import { executeMcpTool, confirmMcpExecute, getMcpTools, getApiBaseUrl } from '../api'
+import { executeMcpTool, confirmMcpExecute, getMcpTools } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
+import { mergeToolRegistry, getMcpToolCommandHint } from '../utils/mcpToolsMeta'
+import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
 
 const activeTab = ref('overview')
 const selectedTool = ref(null)
@@ -148,117 +150,17 @@ const executionHistory = ref([])
 
 const params = reactive({})
 
-const tools = ref([
-  {
-    name: 'DiskTool',
-    icon: '💾',
-    description: '检查磁盘使用情况，df -h 命令',
-    status: 'online',
-    statusText: '在线',
-    params: []
-  },
-  {
-    name: 'DiskInsightTool',
-    icon: '📂',
-    description: '目录占用热点：du 排序（须在路径白名单）',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'rootPath', label: '扫描根路径', placeholder: '/tmp', hint: '如 /tmp、/var/log' },
-      { name: 'maxDepth', label: '深度', placeholder: '2', hint: '1-4，默认 2' },
-      { name: 'topN', label: '前 N 条', placeholder: '15', hint: '5-40，默认 15' }
-    ]
-  },
-  {
-    name: 'ProcessTool',
-    icon: '⚙️',
-    description: '列出系统进程，支持 CPU/内存过滤',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'minCpu', label: '最小CPU%', placeholder: '5.0', hint: '过滤CPU占用超过此值的进程' },
-      { name: 'minMem', label: '最小内存%', placeholder: '5.0', hint: '过滤内存占用超过此值的进程' }
-    ]
-  },
-  {
-    name: 'SystemLoadTool',
-    icon: '📈',
-    description: '检查系统负载和 CPU/内存使用',
-    status: 'online',
-    statusText: '在线',
-    params: []
-  },
-  {
-    name: 'LogAnalysisTool',
-    icon: '📝',
-    description: '分析系统日志，Drain-Plus 引擎',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'logPath', label: '日志路径', placeholder: '/var/log/syslog', hint: '可选，默认 /var/log/syslog' },
-      { name: 'lines', label: '分析行数', placeholder: '100', hint: '可选，默认100行' }
-    ]
-  },
-  {
-    name: 'CleanTempTool',
-    icon: '🧹',
-    description: '清理临时文件，支持 dry-run',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'path', label: '清理路径', placeholder: '/tmp', hint: '须在白名单（如 /tmp,/var/tmp）' },
-      { name: 'days', label: '文件天数', placeholder: '7', hint: '删除多少天前的文件' },
-      { name: 'dryRun', label: 'Dry Run', placeholder: 'true', hint: '默认预览；false=删除须 confirmDelete=true' },
-      { name: 'confirmDelete', label: '确认删除', placeholder: 'false', hint: '真实删除必须为 true' }
-    ]
-  },
-  {
-    name: 'ConfigCheckTool',
-    icon: '✅',
-    description: '检查配置文件语法',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'configPath', label: '配置文件路径', placeholder: '/etc/nginx/nginx.conf', hint: '必填，配置文件完整路径' }
-    ]
-  },
-  {
-    name: 'NetworkTool',
-    icon: '🌐',
-    description: '网络诊断，ping/traceroute',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'target', label: '目标主机', placeholder: '8.8.8.8', hint: '必填，目标 IP 或域名' },
-      { name: 'type', label: '诊断类型', placeholder: 'ping', hint: 'ping 或 traceroute' },
-      { name: 'count', label: '包数量', placeholder: '4', hint: '可选，默认4' }
-    ]
-  },
-  {
-    name: 'PrivilegeTool',
-    icon: '🔐',
-    description: '检查文件/命令权限',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'resource', label: '资源路径', placeholder: '/usr/bin/nginx', hint: '必填，文件路径或命令名' },
-      { name: 'action', label: '操作类型', placeholder: 'execute', hint: 'read/write/execute' }
-    ]
-  },
-  {
-    name: 'OsInsightTool',
-    icon: '📡',
-    description: 'journalctl / ss / lsof（系统排查）',
-    status: 'online',
-    statusText: '在线',
-    params: [
-      { name: 'operation', label: '操作', placeholder: 'journal', hint: 'journal | ss | lsof' },
-      { name: 'sinceMinutes', label: '最近分钟(journal)', placeholder: '30', hint: '可选' },
-      { name: 'maxLines', label: '最大行数(journal)', placeholder: '200', hint: '可选，≤500' },
-      { name: 'pid', label: '进程PID(lsof)', placeholder: '1', hint: 'lsof 时必填' }
-    ]
+const tools = ref([])
+
+onMounted(async () => {
+  try {
+    const raw = await getMcpTools()
+    tools.value = mergeToolRegistry(raw)
+  } catch {
+    tools.value = mergeToolRegistry(null)
+    ElMessage.warning('未能拉取服务端工具列表，已显示本地定义（状态可能不准）')
   }
-])
+})
 
 const getToolByName = (name) => {
   return tools.value.find(t => t.name === name)
@@ -274,21 +176,7 @@ const resetParams = () => {
   Object.keys(params).forEach(key => delete params[key])
 }
 
-const getToolCommand = (toolName) => {
-  const commands = {
-    DiskTool: 'df -h',
-    DiskInsightTool: 'du -xk --max-depth=2',
-    ProcessTool: 'ps aux',
-    SystemLoadTool: 'top -bn1 + /proc/loadavg',
-    LogAnalysisTool: 'tail -n 100 /var/log/syslog',
-    CleanTempTool: 'find /tmp -type f -mtime +7',
-    ConfigCheckTool: 'nginx -t / etc/nginx/nginx.conf',
-    NetworkTool: 'ping -c 4 target',
-    PrivilegeTool: 'test -x /path/to/file',
-    OsInsightTool: 'journalctl | ss -tuln | lsof -p PID'
-  }
-  return commands[toolName] || 'system command'
-}
+const getToolCommand = (toolName) => getMcpToolCommandHint(toolName)
 
 const executeTool = async () => {
   if (!selectedTool.value) return
@@ -300,17 +188,13 @@ const executeTool = async () => {
 
     if (data && data.needConfirm === true) {
       try {
-        await ElMessageBox.confirm(
-          data.message ||
-            '该操作存在中等风险：确认后将调用 /api/mcp/confirmExecute 真正执行（等同口令「确认执行」）。',
-          '安全护栏 · 二次确认',
-          {
-            confirmButtonText: '确认执行',
-            cancelButtonText: '取消',
-            type: 'warning',
-            closeOnClickModal: false
-          }
-        )
+        await ElMessageBox.confirm(buildMcpRiskConfirmMessage(data), '安全护栏 · Agentic 风险 · 二次确认', {
+          confirmButtonText: '确认执行',
+          cancelButtonText: '取消',
+          type: 'warning',
+          closeOnClickModal: false,
+          customClass: 'mcp-risk-confirm-box'
+        })
       } catch {
         ElMessage.info('已取消')
         executionHistory.value.unshift({
@@ -449,6 +333,14 @@ const formatFullResultJson = (fr) => {
 .tool-card.active {
   border-color: #409eff;
   background: linear-gradient(135deg, #ecf5ff 0%, #ffffff 100%);
+}
+
+.tool-card.offline {
+  opacity: 0.72;
+}
+
+.tool-card.offline .status-dot {
+  background: #909399;
 }
 
 .tool-icon {
@@ -607,5 +499,14 @@ const formatFullResultJson = (fr) => {
 .execution-animation .hint {
   font-size: 12px;
   color: #909399;
+}
+</style>
+
+<style>
+.mcp-risk-confirm-box .el-message-box__message {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: min(48vh, 420px);
+  overflow-y: auto;
 }
 </style>

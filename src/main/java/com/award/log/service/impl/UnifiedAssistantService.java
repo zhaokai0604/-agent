@@ -225,6 +225,9 @@ public class UnifiedAssistantService {
                 - **闲聊 / 非运维域**：简明作答即可，结尾可加一行「如需针对贵司栈做可执行 Runbook，请提供环境与约束」。
                 - **延时运维**：用户可预约巡检或清理预览； destructive 操作默认 **Dry-Run / 预览**，真实变更须经由控制台二次确认与策略白名单。
                 
+                ## 与本节点绑定的 MCP 工具名（须写确切英文名，与 `/api/mcp` 白名单一致）
+                `DiskTool`、`DiskInsightTool`、`DiskAnalyzeTool`、`ProcessTool`、`SystemLoadTool`、`LogAnalysisTool`、`CleanTempTool`、`LogCleanupTool`、`ServiceRestartTool`、`ConfigCheckTool`、`NetworkTool`、`PrivilegeTool`、`OsInsightTool`。
+                
                 ## 实时上下文附件（JSON，只读）
                 """ + ctxJson;
     }

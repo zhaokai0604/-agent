@@ -25,4 +25,14 @@ public class OpsTraceController {
     public Result<List<Map<String, Object>>> recent(@RequestParam(defaultValue = "100") int limit) {
         return Result.success(opsAuditTraceService.listRecent(limit));
     }
+
+    /** 按 traceId 拉取完整记录（含思维链 steps_json） */
+    @GetMapping("/detail")
+    public Result<Map<String, Object>> detail(@RequestParam String traceId) {
+        Map<String, Object> row = opsAuditTraceService.findByTraceId(traceId);
+        if (row == null || row.isEmpty()) {
+            return Result.error(404, "未找到该 traceId 的审计记录");
+        }
+        return Result.success(row);
+    }
 }

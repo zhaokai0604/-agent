@@ -19,6 +19,9 @@ public class McpToolRegistry {
             ProcessTool processTool,
             SystemLoadTool systemLoadTool,
             CleanTempTool cleanTempTool,
+            LogCleanupTool logCleanupTool,
+            ServiceRestartTool serviceRestartTool,
+            DiskAnalyzeTool diskAnalyzeTool,
             ConfigCheckTool configCheckTool,
             NetworkTool networkTool,
             PrivilegeTool privilegeTool,
@@ -34,6 +37,9 @@ public class McpToolRegistry {
         this.toolBeans.add(processTool);
         this.toolBeans.add(systemLoadTool);
         this.toolBeans.add(cleanTempTool);
+        this.toolBeans.add(logCleanupTool);
+        this.toolBeans.add(serviceRestartTool);
+        this.toolBeans.add(diskAnalyzeTool);
         this.toolBeans.add(configCheckTool);
         this.toolBeans.add(networkTool);
         this.toolBeans.add(privilegeTool);

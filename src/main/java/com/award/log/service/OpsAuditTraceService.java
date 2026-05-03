@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -119,30 +121,74 @@ public class OpsAuditTraceService {
                             "execution_ok, LEFT(result_summary, 512) AS result_summary, duration_ms, " +
                             "operator_user_id, policy_version, created_at " +
                             "FROM ops_audit_trace ORDER BY id DESC LIMIT ?",
-                    (rs, rowNum) -> {
-                        Map<String, Object> m = new HashMap<>();
-                        m.put("id", rs.getLong("id"));
-                        m.put("traceId", rs.getString("trace_id"));
-                        m.put("channel", rs.getString("channel"));
-                        m.put("userInput", rs.getString("user_input"));
-                        m.put("riskLevel", rs.getString("risk_level"));
-                        m.put("securityOutcome", rs.getString("security_outcome"));
-                        m.put("toolName", rs.getString("tool_name"));
-                        m.put("executionOk", rs.getInt("execution_ok") == 1);
-                        m.put("resultSummary", rs.getString("result_summary"));
-                        m.put("durationMs", rs.getLong("duration_ms"));
-                        m.put("operatorUserId", rs.getString("operator_user_id"));
-                        m.put("policyVersion", rs.getString("policy_version"));
-                        m.put("createdAt", rs.getTimestamp("created_at") != null
-                                ? rs.getTimestamp("created_at").toInstant().toString()
-                                : null);
-                        return m;
-                    },
+                    (rs, rowNum) -> mapTraceRow(rs, false),
                     cap
             );
         } catch (Exception e) {
             log.warn("查询审计列表失败: {}", e.getMessage());
             return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 单条追溯：含完整摘要与 steps_json（思维链审计）。
+     */
+    public Map<String, Object> findByTraceId(String traceId) {
+        if (traceId == null || traceId.isBlank()) {
+            return Map.of();
+        }
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.query(
+                    "SELECT id, trace_id, channel, user_input, risk_level, security_outcome, tool_name, " +
+                            "execution_ok, result_summary, duration_ms, operator_user_id, policy_version, " +
+                            "created_at, steps_json FROM ops_audit_trace WHERE trace_id = ? ORDER BY id DESC LIMIT 1",
+                    (rs, rowNum) -> mapTraceRow(rs, true),
+                    traceId.trim()
+            );
+            return rows.isEmpty() ? Map.of() : rows.get(0);
+        } catch (Exception e) {
+            log.warn("查询审计详情失败: {}", e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private Map<String, Object> mapTraceRow(ResultSet rs, boolean includeStepsJson) throws SQLException {
+        Map<String, Object> m = new HashMap<>();
+        m.put("id", rs.getLong("id"));
+        m.put("traceId", rs.getString("trace_id"));
+        m.put("channel", rs.getString("channel"));
+        m.put("userInput", rs.getString("user_input"));
+        m.put("riskLevel", rs.getString("risk_level"));
+        m.put("securityOutcome", rs.getString("security_outcome"));
+        m.put("toolName", rs.getString("tool_name"));
+        m.put("executionOk", rs.getInt("execution_ok") == 1);
+        m.put("durationMs", rs.getLong("duration_ms"));
+        m.put("operatorUserId", rs.getString("operator_user_id"));
+        m.put("policyVersion", rs.getString("policy_version"));
+        m.put("createdAt", rs.getTimestamp("created_at") != null
+                ? rs.getTimestamp("created_at").toInstant().toString()
+                : null);
+        if (includeStepsJson) {
+            m.put("resultSummary", rs.getString("result_summary"));
+            String stepsRaw = rs.getString("steps_json");
+            m.put("steps", parseStepsJson(stepsRaw));
+            m.put("stepsJsonRaw", stepsRaw);
+        } else {
+            m.put("resultSummary", rs.getString("result_summary"));
+        }
+        return m;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseStepsJson(String stepsRaw) {
+        if (stepsRaw == null || stepsRaw.isBlank()) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(stepsRaw, List.class);
+        } catch (Exception e) {
+            log.debug("steps_json 解析降级为字符串: {}", e.getMessage());
+            return List.of(Map.of("phase", "raw", "detail", stepsRaw));
         }
     }
 }

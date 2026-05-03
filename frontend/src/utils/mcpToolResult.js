@@ -39,12 +39,17 @@ export function normalizeMcpToolResponse(raw) {
       /* 保留原始字符串 */
     }
   }
+  const riskScore = raw.riskScore != null ? Number(raw.riskScore) : undefined
   return {
     ...raw,
     success,
     data,
     duration,
     traceId: raw.traceId ?? raw.trace_id,
-    needConfirm: raw.needConfirm === true
+    needConfirm: raw.needConfirm === true,
+    riskScore: Number.isFinite(riskScore) ? riskScore : raw.riskScore,
+    riskDimensions: raw.riskDimensions,
+    riskExplanation: raw.riskExplanation,
+    securityCode: raw.securityCode
   }
 }

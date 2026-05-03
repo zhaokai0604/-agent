@@ -26,7 +26,7 @@ import java.util.concurrent.ScheduledFuture;
 public class OpsDeferredTaskService {
 
     private static final Set<String> ALLOWED_DEFERRED_TOOLS = Set.of(
-            "DiskTool", "DiskInsightTool", "ProcessTool", "SystemLoadTool", "LogAnalysisTool",
+            "DiskTool", "DiskAnalyzeTool", "DiskInsightTool", "ProcessTool", "SystemLoadTool", "LogAnalysisTool",
             "CleanTempTool", "ConfigCheckTool", "NetworkTool", "PrivilegeTool", "OsInsightTool");
 
     private static final int MIN_DELAY_MIN = 1;

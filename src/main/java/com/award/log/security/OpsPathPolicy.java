@@ -28,6 +28,12 @@ public class OpsPathPolicy {
     @Value("${agent.paths.clean-roots:/tmp,/var/tmp}")
     private String cleanRootsRaw;
 
+    @Value("${agent.paths.log-cleanup-roots:/var/log}")
+    private String logCleanupRootsRaw;
+
+    @Value("${agent.paths.windows-log-cleanup-roots:C:/Windows/Logs}")
+    private String windowsLogCleanupRootsRaw;
+
     @Value("${agent.paths.config-prefixes:/etc/nginx/,/etc/ssh/,/etc/default/}")
     private String configPrefixesRaw;
 
@@ -71,6 +77,9 @@ public class OpsPathPolicy {
     private List<String> windowsConfigPrefixes = List.of();
     private List<String> windowsPrivilegePrefixes = List.of();
 
+    private List<String> logCleanupRoots = List.of();
+    private List<String> windowsLogCleanupRoots = List.of();
+
     @PostConstruct
     void init() {
         readPrefixes = split(readPrefixesRaw);
@@ -92,6 +101,8 @@ public class OpsPathPolicy {
             }
         }
         cleanRoots = split(cleanRootsRaw);
+        logCleanupRoots = new ArrayList<>(split(logCleanupRootsRaw));
+        windowsLogCleanupRoots = new ArrayList<>(split(windowsLogCleanupRootsRaw));
         configPrefixes = split(configPrefixesRaw);
         deniedSubstrings = split(deniedRaw);
         privilegePrefixes = split(privilegePrefixesRaw);
@@ -109,8 +120,8 @@ public class OpsPathPolicy {
                 addIfAbsent(windowsReadPrefixes, logCollectorFilePath.trim());
             }
         }
-        log.info("OpsPathPolicy [{}] read={} clean={} config={} privilege={} winRead={} winClean={}",
-                policyVersion, readPrefixes, cleanRoots, configPrefixes, privilegePrefixes,
+        log.info("OpsPathPolicy [{}] read={} clean={} logCleanup={} config={} privilege={} winRead={} winClean={}",
+                policyVersion, readPrefixes, cleanRoots, logCleanupRoots, configPrefixes, privilegePrefixes,
                 windowsReadPrefixes, windowsCleanRoots);
     }
 
@@ -273,6 +284,36 @@ public class OpsPathPolicy {
             return false;
         }
         for (String root : cleanRoots) {
+            String rt = normalizeUnixPath(root);
+            if (norm.equals(rt) || norm.startsWith(rt + "/")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** LogCleanupTool：仅允许在配置的日志根目录下删除陈旧日志文件。 */
+    public boolean isAllowedLogCleanupPath(String path) {
+        if (hasTraversalOrNullBytes(path) || matchesDenied(path)) {
+            return false;
+        }
+        if (OsRuntime.isWindows()) {
+            String wn = normalizeWindowsPath(path);
+            if (wn.isEmpty() || wn.startsWith("//")) {
+                return false;
+            }
+            for (String root : windowsLogCleanupRoots) {
+                if (startsWithWindowsPrefix(wn, root)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        String norm = normalizeUnixPath(path);
+        if (norm.isEmpty()) {
+            return false;
+        }
+        for (String root : logCleanupRoots) {
             String rt = normalizeUnixPath(root);
             if (norm.equals(rt) || norm.startsWith(rt + "/")) {
                 return true;

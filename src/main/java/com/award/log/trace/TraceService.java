@@ -81,4 +81,16 @@ public class TraceService {
         m.put("detail", detail);
         return m;
     }
+
+    /**
+     * 思维链（CoT）单步，便于赛题“闭环可回溯”审计展示。
+     */
+    public static Map<String, Object> cotStep(int index, String titleCn, String narrative) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("phase", "cot");
+        m.put("step", index);
+        m.put("title", titleCn);
+        m.put("detail", String.format("[Step %d - %s] %s", index, titleCn, narrative));
+        return m;
+    }
 }
