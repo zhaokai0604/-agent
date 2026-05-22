@@ -14,10 +14,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
-
 import com.award.log.dto.EnhancedLogParseResultEntity;
-import com.award.log.model.LogSeverityLevel;
 import com.award.log.service.AiDiagnosisService;
 
 @Slf4j
@@ -218,15 +215,8 @@ public class LogAnalysisController {
                 return Result.error("任务不存在或尚未完成分析。");
             }
 
-            // 筛选异常日志作为上下文
-            List<EnhancedLogParseResultEntity> anomalies = task.getResult().stream()
-                    .filter(l -> l.isAnomaly() || l.getSeverity() == LogSeverityLevel.ERROR_LEVEL || l.getSeverity() == LogSeverityLevel.FATAL_LEVEL)
-                    .sorted((o1, o2) -> Double.compare(o2.getAnomalyScore(), o1.getAnomalyScore()))
-                    .limit(15)
-                    .collect(Collectors.toList());
-
-            log.info("提取到 [{}] 条关键异常日志用于 AI 分析", anomalies.size());
-            String diagnosis = aiDiagnosisService.generateDiagnosis(anomalies);
+            log.info("使用完整任务结果构造 AI 诊断上下文（多样模板 + 正常对照 + 时间序）");
+            String diagnosis = aiDiagnosisService.generateDiagnosisFromFullResult(task.getResult());
             taskManager.updateAiDiagnosis(taskId, diagnosis);
             task.setAiDiagnosis(diagnosis); 
             

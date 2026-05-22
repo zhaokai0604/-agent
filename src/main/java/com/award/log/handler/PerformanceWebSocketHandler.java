@@ -17,9 +17,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import com.award.log.service.StatisticsService;
 
 /**
  * 性能监控WebSocket处理器
@@ -34,9 +37,12 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
     private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
     private volatile ScheduledFuture<?> periodicPushTask;
 
-    // 性能分析服务
     @Resource
     private PerformanceAnalysisService performanceAnalysisService;
+
+    /** 与本机实时监控同源：oshi + MXBean（与 {@code StatisticsController#/admin/statistics/performance} 一致） */
+    @Resource
+    private StatisticsService statisticsService;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -104,15 +110,22 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
      */
     private void pushPerformanceData() {
         try {
-            // 构建推送消息
             Map<String, Object> messageData = new HashMap<>();
             messageData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
 
-            // 设置默认值
-            messageData.put("cpuUsage", 0.0);
-            messageData.put("memoryUsage", 0.0);
-            messageData.put("diskUsage", 0.0);
-            messageData.put("networkUsage", 0.0);
+            Map<String, Object> perf = Collections.emptyMap();
+            try {
+                if (statisticsService != null) {
+                    perf = statisticsService.getSystemPerformance(null);
+                }
+            } catch (Exception ex) {
+                log.debug("推送前采集性能快照失败: {}", ex.getMessage());
+            }
+            messageData.put("cpuUsage", toDouble(perf.get("cpuUsage")));
+            messageData.put("memoryUsage", toDouble(perf.get("memoryUsage")));
+            messageData.put("diskUsage", toDouble(perf.get("diskUsage")));
+            messageData.put("networkUsage", toDouble(perf.get("networkUsage")));
+            messageData.put("channel", "performance");
 
             // 转换为JSON字符串
             String jsonMessage = com.alibaba.fastjson.JSON.toJSONString(messageData);
@@ -129,5 +142,29 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
         } catch (Exception e) {
             log.error("推送性能数据失败", e);
         }
+    }
+
+    /**
+     * 主动巡检等子系统向已连接客户端推送结构化告警（与周期性 performance 消息共用连接）。
+     */
+    public void broadcastJson(Map<String, Object> envelope) {
+        if (sessions.isEmpty()) {
+            return;
+        }
+        try {
+            String json = com.alibaba.fastjson.JSON.toJSONString(envelope);
+            TextMessage textMessage = new TextMessage(json);
+            for (WebSocketSession session : sessions) {
+                if (session.isOpen()) {
+                    session.sendMessage(textMessage);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("WebSocket 广播失败: {}", e.getMessage());
+        }
+    }
+
+    private static double toDouble(Object raw) {
+        return raw instanceof Number ? ((Number) raw).doubleValue() : 0.0;
     }
 }

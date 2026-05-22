@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="ops-page log-analysis-page">
       <!-- 1. 初始上传状态 -->
       <transition name="el-fade-in-linear">
         <div v-if="!reportData && taskStatus.status !== 'PROCESSING' && taskStatus.status !== 'FAILED'" class="upload-section">
@@ -208,7 +208,7 @@
     <el-dialog v-model="aiDialogVisible" title="AI 系统故障智能诊断助手" width="700px" center custom-class="ai-dialog">
       <div class="ai-content">
         <div class="ai-header">
-          <div class="ai-avatar">🤖</div>
+          <div class="ai-avatar"><el-icon :size="28"><Service /></el-icon></div>
           <div class="ai-bubble">
             <p v-if="aiThinking">正在深度分析关键异常日志，生成专业诊断报告...</p>
             <p v-else>基于 <strong>AI大模型 (Qwen-Max)</strong> 的诊断结果如下：</p>
@@ -278,7 +278,7 @@
 
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, defineExpose } from 'vue'
-import { UploadFilled, WarningFilled, Warning, CircleCheck, Refresh, Download, Cpu, Timer, CircleCheckFilled, ArrowDown, CircleClose, Setting } from '@element-plus/icons-vue'
+import { UploadFilled, WarningFilled, Warning, CircleCheck, Refresh, Download, Cpu, Timer, CircleCheckFilled, ArrowDown, CircleClose, Setting, Service } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { uploadLog, uploadLogs, getTaskStatus, getReport, performDiagnosis, cancelTask, getAlarmConfig as getAlarmConfigApi, saveAlarmConfig as saveAlarmConfigApi, downloadReport, getApiBaseUrl } from '../api'
 import { ElMessage } from 'element-plus'
@@ -818,12 +818,36 @@ const showAlarmConfig = () => {
   alarmConfigVisible.value = true
 }
 
+/** 接口返回 WECHAT/EMAIL，复选框 label 为 wechat/email */
+function normalizePushChannelsForUi(channels) {
+  if (!Array.isArray(channels)) return ['email']
+  const mapped = channels
+    .map((c) => {
+      const u = String(c).trim().toUpperCase()
+      if (u === 'WECHAT') return 'wechat'
+      if (u === 'EMAIL') return 'email'
+      return String(c).toLowerCase()
+    })
+    .filter((c) => c === 'wechat' || c === 'email')
+  return mapped.length ? mapped : ['email']
+}
+
 // 保存告警配置
 const saveAlarmConfig = async () => {
   if (!alarmConfigRef.value) return
   
   try {
     await alarmConfigRef.value.validate()
+
+    const channels = alarmConfig.pushChannels || []
+    if (channels.includes('email') && !(alarmConfig.email || '').trim()) {
+      ElMessage.warning('已勾选邮箱推送，请填写邮箱地址')
+      return
+    }
+    if (channels.includes('wechat') && !(alarmConfig.wechatUserId || '').trim()) {
+      ElMessage.warning('已勾选企业微信，请填写企业微信用户 ID')
+      return
+    }
     
     const payload = {
       enabled: alarmConfig.enabled,
@@ -875,7 +899,7 @@ const initAlarmConfig = async () => {
     const data = await getAlarmConfigApi(taskId.value || '')
     if (!data) return
     alarmConfig.enabled = data.enabled ?? true
-    alarmConfig.pushChannels = data.pushChannels || ['WECHAT', 'EMAIL']
+    alarmConfig.pushChannels = normalizePushChannelsForUi(data.pushChannels)
     alarmConfig.minSeverity = `${(data.alarmLevel || 'ERROR').toUpperCase()}_LEVEL`
     alarmConfig.errorThreshold = data.errorThreshold ?? 5
     alarmConfig.wechatUserId = data.wechatUserId || ''

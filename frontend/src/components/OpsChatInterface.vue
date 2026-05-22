@@ -1,102 +1,75 @@
 <template>
-  <div class="ops-chat-container">
+  <div class="ops-page ops-chat-container">
     <div class="chat-header">
       <div class="header-left">
-        <span class="robot-icon">🤖</span>
+        <div class="header-mark">
+          <el-icon :size="20"><ChatLineRound /></el-icon>
+        </div>
         <div class="header-info">
           <h3>工作台助手</h3>
           <span class="status-text">
             <span class="online-dot"></span>
-            Windows / Linux · 本地工具 · 延时任务
+            Agent · MCP 工具 · 路径白名单 · 延时任务
           </span>
         </div>
       </div>
       <div class="header-actions">
-        <el-button :icon="Refresh" circle @click="clearChat" title="清空对话" />
+        <el-button text :icon="Refresh" @click="clearChat">清空会话</el-button>
       </div>
+    </div>
+
+    <div v-if="patrolPending?.hasPending" class="patrol-pending-banner">
+      <div class="patrol-pending-text">
+        <strong>巡检待处理</strong>
+        <span class="patrol-summary">{{ patrolPending.summary || '有待确认修复步骤' }}</span>
+      </div>
+      <el-button type="primary" size="small" :loading="patrolContinueLoading" @click="continuePatrolPending">
+        继续处理
+      </el-button>
     </div>
 
     <div class="chat-messages" ref="messagesContainer">
       <div v-if="messages.length === 0" class="welcome-area">
-        <div class="welcome-icon">🛡️</div>
-        <h2>本地工作台</h2>
-        <p>
-          支持 <strong>Windows 与 Linux</strong> 部署节点：多轮对话（含当前机器上下文），工具在
-          <strong>服务端所在操作系统</strong> 上执行；支持语音与文本附件。
-        </p>
-        <div class="capability-list">
-          <div class="capability-item" @click="sendQuickCommand('检查磁盘使用情况')">
-            <span class="cap-icon">💾</span>
-            <span>磁盘检查</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('扫描 /tmp 磁盘占用热点')">
-            <span class="cap-icon">📂</span>
-            <span>磁盘热点 (Linux)</span>
-          </div>
-          <div
-            class="capability-item"
-            @click="
-              sendQuickCommand(
-                '请对比说明 Linux 与 Windows 服务器上如何排查磁盘占满：常用命令、临时目录路径与安全注意点？'
-              )
-            "
-          >
-            <span class="cap-icon">📁</span>
-            <span>磁盘排查 (Win/Linux)</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('查看系统负载')">
-            <span class="cap-icon">📈</span>
-            <span>系统负载</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('分析最近的系统日志')">
-            <span class="cap-icon">📝</span>
-            <span>日志分析</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('查看 journalctl 最近30分钟日志')">
-            <span class="cap-icon">📡</span>
-            <span>OS 日志 (Linux)</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('查看本机监听端口与网络套接字概况')">
-            <span class="cap-icon">🔌</span>
-            <span>端口 / 套接字</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('检查网络连通性 ping 8.8.8.8')">
-            <span class="cap-icon">🌐</span>
-            <span>网络诊断</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('查看占用资源最多的进程')">
-            <span class="cap-icon">⚙️</span>
-            <span>进程管理</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('清理7天前的临时文件')">
-            <span class="cap-icon">🧹</span>
-            <span>文件清理</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('磁盘压力综合分析（含热点）')">
-            <span class="cap-icon">📊</span>
-            <span>磁盘综合诊断</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('预览清理 /var/log 下 30 天前的陈旧日志文件')">
-            <span class="cap-icon">🗂️</span>
-            <span>日志清理预览</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('预览重启 nginx 服务（dry-run）')">
-            <span class="cap-icon">🔁</span>
-            <span>服务重启预览</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('30分钟之后帮我预览清理临时文件')">
-            <span class="cap-icon">⏱️</span>
-            <span>延时清理</span>
-          </div>
-          <div class="capability-item" @click="sendQuickCommand('20分钟之后检查磁盘使用情况')">
-            <span class="cap-icon">⏲️</span>
-            <span>延时巡检</span>
+        <div class="welcome-intro">
+          <h2>运维工作台</h2>
+          <p>
+            基于当前宿主的上下文进行多轮对话；工具在<strong>服务端操作系统</strong>上执行，写操作默认预览并受路径白名单约束。
+          </p>
+        </div>
+        <div
+          v-for="group in workbenchQuickGroups"
+          :key="group.name"
+          class="quick-group"
+        >
+          <div class="quick-group-title">{{ group.name }}</div>
+          <div class="capability-list">
+            <button
+              v-for="(item, idx) in group.items"
+              :key="group.name + idx"
+              type="button"
+              class="capability-item"
+              @click="sendQuickCommand(item.cmd)"
+            >
+              <el-icon class="cap-icon"><component :is="item.icon" /></el-icon>
+              <span class="cap-label">{{ item.label }}</span>
+            </button>
+            <button
+              v-if="group.name === '处置与自动化' && patrolPending?.hasPending"
+              type="button"
+              class="capability-item capability-item--alert"
+              @click="continuePatrolPending"
+            >
+              <el-icon class="cap-icon"><component :is="patrolQuickItem.icon" /></el-icon>
+              <span class="cap-label">{{ patrolQuickItem.label }}</span>
+            </button>
           </div>
         </div>
       </div>
 
       <div v-for="(msg, index) in messages" :key="index" :class="['message-wrapper', msg.role]">
-        <div class="message-avatar" v-if="msg.role === 'assistant'">🤖</div>
+        <div class="message-avatar" v-if="msg.role === 'assistant'">
+          <el-icon :size="18"><Service /></el-icon>
+        </div>
         <div class="message-content">
           <div class="message-header">
             <span class="sender-name">{{ msg.role === 'user' ? '你' : '助手' }}</span>
@@ -121,28 +94,25 @@
               v-html="renderAssistantMarkdown(msg.content)"
             />
             <pre v-else class="plain-content">{{ msg.content }}</pre>
+            <div v-if="msg.traceId" class="trace-id-hint">
+              链路 traceId: <code>{{ msg.traceId }}</code>
+              <span class="trace-hint">（可在「运维链路审计」Tab 查询）</span>
+            </div>
           </div>
           <div v-else class="message-bubble user-bubble">
             {{ msg.content }}
           </div>
 
-          <div v-if="msg.toolResult" class="tool-result">
-            <div class="tool-result-header">
-              <span class="tool-badge">{{ msg.toolName }}</span>
-              <span class="duration-badge">{{ msg.duration }}ms</span>
-              <el-tag v-if="msg.success" type="success" size="small">成功</el-tag>
-              <el-tag v-else type="danger" size="small">失败</el-tag>
-            </div>
-            <div class="tool-result-content">
-              <pre>{{ formatToolResult(msg.toolResult) }}</pre>
-            </div>
-          </div>
         </div>
-        <div class="message-avatar" v-if="msg.role === 'user'">👤</div>
+        <div class="message-avatar message-avatar--user" v-if="msg.role === 'user'">
+          <el-icon :size="16"><User /></el-icon>
+        </div>
       </div>
 
       <div v-if="loading" class="message-wrapper assistant">
-        <div class="message-avatar">🤖</div>
+        <div class="message-avatar">
+          <el-icon :size="18"><Service /></el-icon>
+        </div>
         <div class="message-content">
           <div class="message-header">
             <span class="sender-name">助手</span>
@@ -199,20 +169,25 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onUnmounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Promotion, Loading, Microphone, FolderOpened } from '@element-plus/icons-vue'
+import { Refresh, Promotion, Loading, Microphone, FolderOpened, ChatLineRound, Service, User } from '@element-plus/icons-vue'
+import { WORKBENCH_QUICK_GROUPS, PATROL_QUICK_ITEM } from '../constants/workbenchQuickActions'
 import {
   executeMcpTool,
   confirmMcpExecute,
   assistantChatStream,
+  getPatrolRemediationPending,
   scheduleDeferredOpsTask
 } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
-import { getMcpToolCommandHint } from '../utils/mcpToolsMeta'
+import { getMcpToolCommandHint, applyMcpWriteConfirmParams } from '../utils/mcpToolsMeta'
 import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
 import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
 import MarkdownIt from 'markdown-it'
+
+const workbenchQuickGroups = WORKBENCH_QUICK_GROUPS
+const patrolQuickItem = PATROL_QUICK_ITEM
 
 const assistantMd = new MarkdownIt({
   html: false,
@@ -233,8 +208,36 @@ const loading = ref(false)
 const messagesContainer = ref(null)
 const fileInputRef = ref(null)
 const pendingAttachment = ref(null)
+const patrolPending = ref({ hasPending: false })
+const patrolContinueLoading = ref(false)
 const listeningVoice = ref(false)
 let speechRecognition = null
+
+const refreshPatrolPending = async () => {
+  try {
+    const data = await getPatrolRemediationPending()
+    patrolPending.value = data && typeof data === 'object' ? data : { hasPending: false }
+  } catch {
+    patrolPending.value = { hasPending: false }
+  }
+}
+
+const continuePatrolPending = async () => {
+  patrolContinueLoading.value = true
+  try {
+    await sendQuickCommand('继续处理巡检待办')
+    await refreshPatrolPending()
+  } finally {
+    patrolContinueLoading.value = false
+  }
+}
+
+let patrolPollTimer = null
+
+onMounted(() => {
+  refreshPatrolPending()
+  patrolPollTimer = setInterval(refreshPatrolPending, 120000)
+})
 
 const openFilePicker = () => fileInputRef.value?.click()
 
@@ -549,15 +552,79 @@ const extractParameters = (message, toolName) => {
   return params
 }
 
-const formatToolResult = (result) => {
-  if (typeof result === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(result), null, 2)
-    } catch {
-      return result
+/** 将工具返回对象转成可读中文，避免对话里出现大段 JSON */
+const formatObjectAsNaturalLanguage = (obj, depth = 0) => {
+  if (obj == null) return '（无返回内容）'
+  if (typeof obj === 'string') {
+    const t = obj.trim()
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try {
+        return formatObjectAsNaturalLanguage(JSON.parse(t), depth)
+      } catch {
+        /* 非 JSON 字符串 */
+      }
     }
+    return t.length > 3500 ? t.slice(0, 3500) + '\n…（输出已截断）' : t
   }
-  return JSON.stringify(result, null, 2)
+  if (typeof obj === 'number' || typeof obj === 'boolean') {
+    return String(obj)
+  }
+  if (Array.isArray(obj)) {
+    if (!obj.length) return '（空列表）'
+    return obj
+      .slice(0, 20)
+      .map((item, i) => `${i + 1}. ${formatObjectAsNaturalLanguage(item, depth + 1)}`)
+      .join('\n')
+  }
+  if (typeof obj === 'object') {
+    const lines = []
+    for (const [key, val] of Object.entries(obj)) {
+      if (val == null || val === '') continue
+      const label = {
+        mode: '模式',
+        path: '路径',
+        plan: '将执行',
+        note: '说明',
+        filesFound: '发现文件数',
+        filesDeleted: '已删除文件数',
+        deletableCount: '可删除数',
+        protectedSkipped: '已跳过受保护',
+        previewCount: '预览条数',
+        success: '是否成功',
+        error: '错误',
+        service: '服务',
+        stderr: '错误输出',
+        command: '命令',
+        tool: '子工具',
+        output: '输出',
+        root: '扫描根',
+        entries: '条目'
+      }[key] || key
+      if (key === 'preview' && Array.isArray(val)) {
+        lines.push(
+          `${label}（${val.length} 条）:\n` + val.slice(0, 8).map((p) => `  · ${p}`).join('\n')
+        )
+      } else if (key === 'protectedSamples' && Array.isArray(val)) {
+        lines.push(`${label}: ${val.slice(0, 5).join('；')}`)
+      } else if (key === 'entries' && Array.isArray(val)) {
+        lines.push(
+          val
+            .slice(0, 12)
+            .map((e, i) => {
+              const kb = e.kb != null ? `${e.kb} KB` : ''
+              return `  ${i + 1}. ${kb} ${e.path || ''}`.trim()
+            })
+            .join('\n')
+        )
+      } else if (typeof val === 'object' && depth < 2) {
+        lines.push(`${label}:\n${formatObjectAsNaturalLanguage(val, depth + 1)}`)
+      } else {
+        lines.push(`${label}: ${val}`)
+      }
+    }
+    return lines.length ? lines.join('\n') : '（无有效字段）'
+  }
+  return String(obj)
 }
 
 const generateHumanReadableResponse = (toolName, result) => {
@@ -667,18 +734,23 @@ const generateHumanReadableResponse = (toolName, result) => {
             break
           }
         }
-        const ov = d?.overview
-        const hot = d?.hotspotsRank
-        let text = '磁盘综合诊断\n'
-        text += typeof ov === 'string' ? ov : JSON.stringify(ov ?? {}, null, 2)
-        if (hot != null) {
-          text += '\n\n热点扫描\n'
-          text += typeof hot === 'string' ? hot : JSON.stringify(hot, null, 2)
+        const parts = ['**磁盘综合诊断**']
+        if (d?.overview != null) {
+          parts.push(
+            typeof d.overview === 'string' ? d.overview : formatObjectAsNaturalLanguage(d.overview)
+          )
         }
-        if (d?.hint) {
-          text += '\n\n' + d.hint
+        if (d?.hotspotsRank != null) {
+          parts.push(
+            '**目录热点**\n' +
+              (typeof d.hotspotsRank === 'string'
+                ? d.hotspotsRank
+                : formatObjectAsNaturalLanguage(d.hotspotsRank))
+          )
         }
-        return text
+        if (d?.hint) parts.push(String(d.hint))
+        if (parts.length > 1) return parts.join('\n\n')
+        break
       }
 
       case 'ConfigCheckTool':
@@ -762,16 +834,7 @@ const generateHumanReadableResponse = (toolName, result) => {
         break
     }
 
-    try {
-      const shown =
-        typeof data === 'string'
-          ? data
-          : JSON.stringify(data, null, 2)
-      const clipped = shown.length > 10000 ? shown.slice(0, 10000) + '\n…(已截断)' : shown
-      return `### 结构化结果\n\n\`\`\`json\n${clipped}\n\`\`\``
-    } catch {
-      return String(data)
-    }
+    return formatObjectAsNaturalLanguage(data)
   } catch (e) {
     console.error('格式化结果失败:', e)
   }
@@ -939,7 +1002,7 @@ const buildConversationHistory = (priorMessages) => {
     if (msg.role === 'assistant') {
       let text = typeof msg.content === 'string' ? msg.content.trim() : ''
       if (!text && msg.toolResult != null && msg.toolName) {
-        text = `[${msg.toolName}] ${formatToolResult(msg.toolResult)}`.trim()
+        text = generateHumanReadableResponse(msg.toolName, msg.toolResult) || `[${msg.toolName}] 已执行`
       }
       if (text) out.push({ role: 'assistant', content: text.slice(0, 4000) })
     }
@@ -959,7 +1022,7 @@ const runNaturalLanguageStream = async (message) => {
   loading.value = false
 
   try {
-    const response = await assistantChatStream(message, history)
+    const response = await assistantChatStream(message, history, { useToolAgent: true })
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         messages.value[assistantIdx].content =
@@ -997,6 +1060,10 @@ const runNaturalLanguageStream = async (message) => {
     })
     if (!messages.value[assistantIdx].content.trim()) {
       messages.value[assistantIdx].content = '（未返回内容，请检查模型服务）'
+    }
+    const traceMatch = messages.value[assistantIdx].content.match(/>\s*\*\*traceId:\*\*\s*`([^`]+)`/i)
+    if (traceMatch) {
+      messages.value[assistantIdx].traceId = traceMatch[1]
     }
   } catch (e) {
     console.error('自然语言对话失败', e)
@@ -1115,7 +1182,7 @@ const handleSend = async () => {
         timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
       }) - 1
       scrollToBottom()
-      result = await confirmMcpExecute(toolName, params, '确认执行')
+      result = await confirmMcpExecute(toolName, applyMcpWriteConfirmParams(toolName, params), '确认执行')
       messages.value.splice(confirmCallingIndex, 1)
     } else {
       messages.value.splice(toolCallingIndex, 1)
@@ -1132,8 +1199,8 @@ const handleSend = async () => {
     let summaryMd = humanReadable && String(humanReadable).trim() ? humanReadable : ''
     if (!summaryMd) {
       summaryMd = result.success
-        ? '工具已正常返回，结构化数据见下方 **原始输出**。'
-        : `**失败说明**\n\n\`\`\`\n${formatToolResult(result.data)}\n\`\`\``
+        ? '工具已执行完成，但未解析到可展示字段。'
+        : `**失败说明**\n\n${result.error || formatObjectAsNaturalLanguage(result.data) || '未知错误'}`
     }
     if (!result.success && (result.securityCode != null || result.riskScore != null)) {
       const gate = []
@@ -1145,17 +1212,15 @@ const handleSend = async () => {
     }
 
     const statusTitle = result.success ? '执行成功' : '执行失败'
+    const durationLine =
+      result.duration != null && result.duration > 0 ? `\n\n*耗时约 ${result.duration} ms*` : ''
     const fullMd =
-      `## ${toolName}\n\n### ${statusTitle}\n\n` +
-      summaryMd +
-      traceLine +
-      `\n\n> **答辩提示**：摘要已在上方；完整 JSON 在下方灰色卡片中可滚动，无需单独打开审计日志。`
+      `## ${toolName}\n\n### ${statusTitle}\n\n` + summaryMd + durationLine + traceLine
 
     messages.value.push({
       role: 'assistant',
       content: fullMd,
       toolName,
-      toolResult: result.data,
       success: result.success,
       duration: result.duration || 0,
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -1190,6 +1255,9 @@ function applyPrefill(text) {
 defineExpose({ applyPrefill })
 
 onUnmounted(() => {
+  if (patrolPollTimer) {
+    clearInterval(patrolPollTimer)
+  }
   if (speechRecognition) {
     try {
       speechRecognition.stop()
@@ -1209,17 +1277,21 @@ const clearChat = () => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: linear-gradient(180deg, #f5f7fa 0%, #e4e8eb 100%);
+  min-height: 480px;
+  background: var(--ops-panel);
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius);
+  box-shadow: var(--ops-shadow-sm);
+  overflow: hidden;
 }
 
 .chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  padding: 12px 18px;
+  background: var(--ops-panel-soft);
+  border-bottom: 1px solid var(--ops-border);
 }
 
 .header-left {
@@ -1228,92 +1300,129 @@ const clearChat = () => {
   gap: 12px;
 }
 
-.robot-icon {
-  font-size: 40px;
+.header-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(13, 148, 136, 0.1);
+  color: var(--ops-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .header-info h3 {
-  margin: 0 0 4px 0;
-  font-size: 18px;
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ops-text);
 }
 
 .status-text {
   font-size: 12px;
-  opacity: 0.9;
+  color: var(--ops-text-subtle);
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
 .online-dot {
-  width: 8px;
-  height: 8px;
-  background: #67c23a;
+  width: 6px;
+  height: 6px;
+  background: #10b981;
   border-radius: 50%;
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
 }
 
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 16px 18px;
+  background: var(--ops-bg);
 }
 
 .welcome-area {
-  text-align: center;
-  padding: 60px 20px;
-  max-width: 600px;
+  max-width: 920px;
   margin: 0 auto;
+  padding: 8px 4px 24px;
+  text-align: left;
 }
 
-.welcome-icon {
-  font-size: 64px;
-  margin-bottom: 20px;
+.welcome-intro h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ops-text);
+  letter-spacing: -0.02em;
 }
 
-.welcome-area h2 {
-  color: #303133;
-  margin-bottom: 10px;
+.welcome-intro p {
+  margin: 0 0 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ops-text-subtle);
+  max-width: 56ch;
 }
 
-.welcome-area p {
-  color: #606266;
-  margin-bottom: 30px;
+.quick-group {
+  margin-bottom: 18px;
+}
+
+.quick-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ops-text-subtle);
+  margin-bottom: 8px;
 }
 
 .capability-list {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-
-.capability-item {
-  background: white;
-  padding: 16px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 8px;
 }
 
+.capability-item {
+  appearance: none;
+  border: 1px solid var(--ops-border);
+  background: var(--ops-panel);
+  padding: 10px 12px;
+  border-radius: var(--ops-radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ops-text);
+  text-align: left;
+}
+
 .capability-item:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  border-color: #94a3b8;
+  background: var(--ops-panel-soft);
+}
+
+.capability-item--alert {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: #fffbeb;
+}
+
+.capability-item--alert:hover {
+  border-color: #f59e0b;
 }
 
 .cap-icon {
-  font-size: 28px;
+  font-size: 16px;
+  color: var(--ops-primary);
+  flex-shrink: 0;
+}
+
+.cap-label {
+  line-height: 1.3;
+  font-weight: 500;
 }
 
 .message-wrapper {
@@ -1328,15 +1437,20 @@ const clearChat = () => {
 }
 
 .message-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: #f0f2f5;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(13, 148, 136, 0.1);
+  color: var(--ops-primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
   flex-shrink: 0;
+}
+
+.message-avatar--user {
+  background: #e2e8f0;
+  color: #475569;
 }
 
 .message-content {
@@ -1379,16 +1493,17 @@ const clearChat = () => {
 }
 
 .user-bubble {
-  background: linear-gradient(135deg, #409eff 0%, #66b1ff 100%);
-  color: white;
+  background: var(--ops-primary);
+  color: #f8fafc;
   border-bottom-right-radius: 4px;
 }
 
 .assistant-bubble {
-  background: white;
-  color: #303133;
+  background: var(--ops-panel);
+  color: var(--ops-text);
+  border: 1px solid var(--ops-border);
   border-bottom-left-radius: 4px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--ops-shadow-sm);
 }
 
 .typing {
@@ -1415,19 +1530,20 @@ const clearChat = () => {
 }
 
 .tool-calling {
-  background: linear-gradient(135deg, #fdf6ec 0%, #fef0e6 100%);
-  border: 1px solid #f5dab3;
-  border-radius: 12px;
-  padding: 12px 16px;
-  margin-bottom: 12px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: var(--ops-radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
 }
 
 .tool-calling-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #e6a23c;
+  color: #b45309;
   font-weight: 500;
+  font-size: 13px;
 }
 
 .tool-command {
@@ -1490,9 +1606,9 @@ const clearChat = () => {
 }
 
 .chat-input-area {
-  padding: 16px 24px;
-  background: white;
-  border-top: 1px solid #e4e8eb;
+  padding: 12px 16px 14px;
+  background: var(--ops-panel);
+  border-top: 1px solid var(--ops-border);
 }
 
 .attachment-chip {
@@ -1523,14 +1639,14 @@ const clearChat = () => {
 }
 
 .input-wrapper :deep(.el-textarea__inner) {
-  border-radius: 20px;
-  padding: 10px 16px;
+  border-radius: var(--ops-radius-sm);
+  padding: 10px 12px;
   resize: none;
 }
 
 .send-btn {
-  border-radius: 20px;
-  padding: 10px 20px;
+  border-radius: var(--ops-radius-sm);
+  padding: 10px 16px;
 }
 
 .input-hints {
@@ -1628,6 +1744,52 @@ const clearChat = () => {
   white-space: pre-wrap;
   font-family: inherit;
   line-height: 1.6;
+}
+
+.trace-id-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.trace-id-hint code {
+  font-size: 11px;
+}
+
+.trace-hint {
+  opacity: 0.85;
+}
+
+.patrol-pending-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9, #fdf6ec);
+  border: 1px solid var(--el-color-warning-light-5, #f5dab1);
+}
+
+.patrol-pending-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.patrol-summary {
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 520px;
+}
+
+.capability-item.patrol-cap {
+  border-color: var(--el-color-warning);
 }
 </style>
 

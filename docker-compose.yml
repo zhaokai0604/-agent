@@ -1,0 +1,41 @@
+# 本地/演示用依赖栈（应用进程仍建议本机 mvn / jar 启动，便于调试 MCP 与宿主路径）
+#
+# 启动：docker compose up -d mysql
+# 建表：首次需对库执行 src/main/resources/schema.sql（及所需增量 SQL）
+#
+# 环境变量可复制根目录 .env.example
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: threshcore-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-log_analysis}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PUBLISH_PORT:-3306}:3306"
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 8s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: threshcore-qdrant
+    restart: unless-stopped
+    profiles: ["vector"]
+    ports:
+      - "${QDRANT_PUBLISH_PORT:-6333}:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:

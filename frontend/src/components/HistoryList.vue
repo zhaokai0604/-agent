@@ -1,5 +1,5 @@
 <template>
-  <div class="history-container">
+  <div class="ops-page history-container">
     <el-card shadow="never">
       <template #header>
         <div class="card-header">

@@ -22,7 +22,7 @@ public class EmailPushUtil {
     @Value("${spring.mail.username}")
     private String fromEmail;
     
-    @Value("${email.alias:日志分析系统}")
+    @Value("${email.alias:ThreshCore}")
     private String emailAlias;
     
     private final JavaMailSender mailSender;
@@ -136,7 +136,7 @@ public class EmailPushUtil {
         
         html.append("</div>");
         html.append("<div class=\"footer\">");
-        html.append("<p>此邮件由日志分析系统自动发送，请勿直接回复</p>");
+        html.append("<p>此邮件由 ThreshCore 系统自动发送，请勿直接回复</p>");
         html.append("</div>");
         html.append("</div>");
         html.append("</body>");

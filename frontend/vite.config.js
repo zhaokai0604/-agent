@@ -1,9 +1,13 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-export default defineConfig({
-  plugins: [vue()],
-  build: {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const proxyTarget = env.VITE_DEV_PROXY_TARGET || 'http://localhost:8088'
+
+  return {
+    plugins: [vue()],
+    build: {
     sourcemap: false,
     rollupOptions: {
       output: {
@@ -23,18 +27,25 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // 整块转发（OpenAPI / Knife4j / 静态挂载），避免 3000→8088 跨域导致 fetch /v3/api-docs 失败
+      '/award-log': {
+        target: proxyTarget,
+        changeOrigin: true,
+        ws: true
+      },
       '/api': {
-        target: 'http://localhost:8088',
+        target: proxyTarget,
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path.replace(/^\/api/, '/award-log/api')
       },
       '/mcp': {
-        target: 'http://localhost:8088',
+        target: proxyTarget,
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path.replace(/^\/mcp/, '/award-log/api/mcp')
       }
     }
+  }
   }
 })

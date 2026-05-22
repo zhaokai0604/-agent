@@ -40,13 +40,15 @@ public class OsInsightTool extends AbstractCommandExecutor {
         this.minPrivilegeExecutor = minPrivilegeExecutor;
     }
 
-    @Tool(name = "queryJournalLogs", description = "查询 systemd 日志 journalctl，限制时间窗口与最大行数（赛题：日志上下文）")
+    @Tool(name = "queryJournalLogs", description = "查询 systemd 日志 journalctl，限制时间窗口与最大行数；可选 JSON 行输出以便解析 __REALTIME_TIMESTAMP")
     public String queryJournalLogs(
             @ToolParam(description = "最近多少分钟内的日志，默认 30，最大 1440", required = false) Integer sinceMinutes,
-            @ToolParam(description = "最大行数，默认 200，最大 500", required = false) Integer maxLines
+            @ToolParam(description = "最大行数，默认 200，最大 500", required = false) Integer maxLines,
+            @ToolParam(description = "为 true 时使用 -o json（每行一条 JSON，含 Linux 专用时间戳字段）", required = false) Boolean jsonOutput
     ) throws JsonProcessingException {
         int since = sinceMinutes != null ? Math.min(Math.max(sinceMinutes, 1), MAX_SINCE_MIN) : 30;
         int lines = maxLines != null ? Math.min(Math.max(maxLines, 1), MAX_LINES) : 200;
+        boolean asJson = Boolean.TRUE.equals(jsonOutput);
         long start = System.currentTimeMillis();
         if (OsRuntime.isWindows()) {
             String ps = "Get-WinEvent -LogName System -MaxEvents " + lines
@@ -57,7 +59,9 @@ public class OsInsightTool extends AbstractCommandExecutor {
             return buildJsonResponse("Get-WinEvent-System", cmd, r, start);
         }
         String sinceArg = since + " min ago";
-        List<String> cmd = List.of("journalctl", "--no-pager", "-n", String.valueOf(lines), "--since", sinceArg);
+        List<String> cmd = asJson
+                ? List.of("journalctl", "--no-pager", "-n", String.valueOf(lines), "--since", sinceArg, "-o", "json")
+                : List.of("journalctl", "--no-pager", "-n", String.valueOf(lines), "--since", sinceArg);
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd);
         return buildJsonResponse("journalctl", cmd, r, start);
     }
@@ -105,11 +109,15 @@ public class OsInsightTool extends AbstractCommandExecutor {
 
     /** MCP HTTP 网关：operation = journal | ss | lsof */
     public String executeGateway(String operation, Integer sinceMinutes, Integer maxLines, Integer pid) throws JsonProcessingException {
+        return executeGateway(operation, sinceMinutes, maxLines, pid, null);
+    }
+
+    public String executeGateway(String operation, Integer sinceMinutes, Integer maxLines, Integer pid, Boolean jsonOutput) throws JsonProcessingException {
         if (operation == null || operation.isBlank()) {
             operation = "journal";
         }
         return switch (operation.trim().toLowerCase()) {
-            case "journal", "journalctl" -> queryJournalLogs(sinceMinutes, maxLines);
+            case "journal", "journalctl" -> queryJournalLogs(sinceMinutes, maxLines, jsonOutput);
             case "ss", "sockets" -> listListeningSockets();
             case "lsof", "openfiles" -> listProcessOpenFiles(pid);
             default -> objectMapper.writeValueAsString(Map.of("success", false, "error", "未知 operation: " + operation));

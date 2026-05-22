@@ -76,9 +76,16 @@ frontend/miniprogram_npm/
 application-prod.yml
 application-prod.properties
 
+# 本机 QQ 邮箱授权码等（由 application-local.example.yml 复制改名，切勿提交）
+src/main/resources/application-local.yml
+
 # 运行时/本地数据
 logs/
 storage/
 
+# 一键部署脚本输出（含 Jar 与 dist）
+deploy/release/
+
 # 告警运行时配置（含邮箱等，用 alarm-config.example.json 为模板本地复制）
 alarm-config.json
+agent-path-policy-overrides.json

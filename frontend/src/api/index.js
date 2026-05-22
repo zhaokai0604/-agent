@@ -3,11 +3,26 @@ import { ElMessage } from 'element-plus'
 
 const runtimeHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
 const runtimeProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
-const runtimeBaseUrl = `${runtimeProtocol}//${runtimeHost}:8088/award-log`
+
+/** 生产/同源部署：构建或 .env 中设置 VITE_AWARD_LOG_BASE_URL（须含 /award-log 后缀，无末尾斜杠） */
+const viteAwardBase =
+  typeof import.meta !== 'undefined' && import.meta.env?.VITE_AWARD_LOG_BASE_URL
+    ? String(import.meta.env.VITE_AWARD_LOG_BASE_URL).trim().replace(/\/$/, '')
+    : ''
+
+const runtimeBaseUrl =
+  viteAwardBase ||
+  `${runtimeProtocol}//${runtimeHost}:8088/award-log`
+
+const API_TIMEOUT_MS = (() => {
+  const raw = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_API_TIMEOUT_MS : undefined
+  const n = parseInt(String(raw ?? '600000'), 10)
+  return Number.isFinite(n) && n >= 30000 ? n : 600000
+})()
 
 const request = axios.create({
   baseURL: runtimeBaseUrl,
-  timeout: 1800000, // 30分钟超时
+  timeout: API_TIMEOUT_MS,
   withCredentials: true
 })
 
@@ -108,6 +123,20 @@ export const getTaskStatusStatistics = () => {
 
 // 性能分析相关API
 export const getPerformanceData = () => request.get('/admin/statistics/performance')
+export const getPatrolAlertsRecent = (limit = 12) =>
+  request.get('/api/ops/patrol/alerts/recent', { params: { limit } })
+
+export const getPatrolCorrelationLatest = () =>
+  request.get('/api/ops/patrol/correlation/latest')
+
+export const getPatrolRemediationPending = () =>
+  request.get('/api/ops/patrol/remediation/pending')
+
+export const confirmPatrolRemediation = (proposalId, confirmCode = '确认执行') =>
+  request.post('/api/ops/patrol/remediation/confirm', { proposalId, confirmCode })
+
+export const getPatrolRemediationCoverage = () =>
+  request.get('/api/ops/patrol/remediation/coverage')
 
 export const collectSystemPerformanceData = () => request.post('/api/performance/collect-system-data')
 
@@ -133,14 +162,15 @@ export const listDeferredOpsTasks = () => request.get('/api/ops-schedule/tasks')
 export const cancelDeferredOpsTask = (taskId) =>
   request.delete(`/api/ops-schedule/tasks/${taskId}`)
 
-export const assistantChatStream = (message, history = []) =>
+export const assistantChatStream = (message, history = [], options = {}) =>
   fetch(`${runtimeBaseUrl}/api/assistant/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify({
       message,
-      history: Array.isArray(history) ? history : []
+      history: Array.isArray(history) ? history : [],
+      useToolAgent: options.useToolAgent !== false
     })
   })
 export const getApiBaseUrl = () => runtimeBaseUrl
@@ -158,6 +188,10 @@ export const getAlarmConfig = (taskId = '') =>
 
 export const saveAlarmConfig = (config, taskId = '') =>
   taskId ? request.post(`/api/alarm/config/${taskId}`, config) : request.post('/api/alarm/config', config)
+
+/** MCP 路径/服务白名单（控制台「路径白名单」弹窗） */
+export const getAgentPathPolicy = () => request.get('/api/agent/path-policy')
+export const saveAgentPathPolicy = (body) => request.put('/api/agent/path-policy', body)
 
 // 角色管理相关接口
 export const getRoleById = (roleId) => request.get(`/admin/role/${roleId}`)

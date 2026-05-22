@@ -3,6 +3,7 @@ import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import './styles/ops-console-theme.css'
+import './styles/ops-page-layout.css'
 import App from './App.vue'
 
 // 创建Vue应用

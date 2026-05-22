@@ -313,6 +313,8 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         prompt.append("## 对话准则\n");
         prompt.append("- 术语精确；必要时附 **一行** 通俗释义，避免冗长科普。\n");
         prompt.append("- **Information-gap handling**：缺字段时列出 **Minimum Log Attributes** 清单请用户补充，禁止臆造 IP/TraceId/版本号。\n");
+        prompt.append("- **时间与数量**：禁止编造日志中未出现的时刻、条数或时段；须直接引用用户粘贴日志里的时间戳与异常原文；多时间点问题分开叙述，勿混为一谈；不确定根因时写「可能原因」，禁止虚构「集中爆发」。\n");
+        prompt.append("- **回答范围**：结论与建议只能围绕用户提供的日志/上下文；禁止引用、编造或与当前片段无关的外部事件、系统或数据。\n");
         prompt.append("- 对 FATAL / ERROR / CRITICAL：默认提示 **上报时效与升级路径**（叙述层面）。\n\n");
 
         prompt.append("## Markdown 交付规范\n");

@@ -1,11 +1,28 @@
 package com.award.log.service.impl;
 
+import com.award.log.agent.AssistantAuditRecorder;
+import com.award.log.agent.AssistantOrchestrator;
+import com.award.log.agent.MultiAgentContextBuilder;
+import com.award.log.mcp.McpToolRegistry;
+import com.award.log.security.AgenticRiskScoreEngine;
+import com.award.log.security.HighRiskCommandDetector;
+import com.award.log.security.IntentRiskFilter;
+import com.award.log.security.McpInvocationSecurityGate;
+import com.award.log.security.McpToolSurface;
+import com.award.log.security.OpsSecurityContext;
+import com.award.log.security.OpsSecurityRejectedException;
+import com.award.log.security.PromptInjectionGuard;
+import com.award.log.security.ReadOnlySurfaceDenylist;
+import com.award.log.security.RiskLevel;
+import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.service.AiLogAlarmService;
+import com.award.log.service.OpsOpenIncidentService;
 import com.award.log.service.StatisticsService;
 import com.award.log.util.AiChatResponseSupport;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -13,14 +30,19 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
@@ -42,7 +64,52 @@ public class UnifiedAssistantService {
     private AiLogAlarmService aiLogAlarmService;
 
     @Autowired
+    private MultiAgentContextBuilder multiAgentContextBuilder;
+
+    @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private IntentRiskFilter intentRiskFilter;
+
+    @Autowired
+    private ToolSurfaceResolver toolSurfaceResolver;
+
+    @Autowired
+    private AgenticRiskScoreEngine agenticRiskScoreEngine;
+
+    @Autowired(required = false)
+    private ChatClient.Builder chatClientBuilder;
+
+    @Autowired
+    private McpToolRegistry mcpToolRegistry;
+
+    @Autowired
+    private PromptInjectionGuard promptInjectionGuard;
+
+    @Autowired
+    private HighRiskCommandDetector highRiskCommandDetector;
+
+    @Autowired
+    private ReadOnlySurfaceDenylist readOnlySurfaceDenylist;
+
+    @Autowired(required = false)
+    private AssistantOrchestrator assistantOrchestrator;
+
+    @Autowired
+    private AssistantAuditRecorder assistantAuditRecorder;
+
+    @Autowired
+    private OpsOpenIncidentService opsOpenIncidentService;
+
+    @Value("${agent.assistant.use-tool-agent-default:true}")
+    private boolean defaultUseToolAgent;
+
+    @Value("${agent.assistant.orchestrator.enabled:true}")
+    private boolean orchestratorEnabled;
+
+    @Value("${agent.assistant.tool-agent-stream-chunk-chars:900}")
+    private int toolAgentStreamChunkChars;
 
     public Map<String, Object> getAssistantContext() {
         Map<String, Object> context = new HashMap<>();
@@ -88,6 +155,18 @@ public class UnifiedAssistantService {
             log.warn("助手上下文：Runbook 建议生成失败: {}", e.getMessage());
             context.put("runbooks", List.of());
         }
+        try {
+            context.put("agentMultiTeam", multiAgentContextBuilder.build());
+        } catch (Exception e) {
+            log.warn("助手上下文：多 Agent 摘要不可用: {}", e.getMessage());
+            context.put("agentMultiTeam", Map.of("unavailable", true));
+        }
+        try {
+            context.put("openIncident", opsOpenIncidentService.buildOpenIncidentContext());
+        } catch (Exception e) {
+            log.warn("助手上下文：openIncident 不可用: {}", e.getMessage());
+            context.put("openIncident", Map.of("hasOpenIncident", false));
+        }
         return context;
     }
 
@@ -113,15 +192,61 @@ public class UnifiedAssistantService {
         return m;
     }
 
+    private void augmentContextWithSessionSecurity(String userMessage, Map<String, Object> context) {
+        try {
+            RiskLevel rl = intentRiskFilter.evaluate(userMessage);
+            McpToolSurface surf = toolSurfaceResolver.resolve(userMessage, rl);
+            AgenticRiskScoreEngine.ScoreResult utter = agenticRiskScoreEngine.scoreNaturalLanguageUtterance(userMessage);
+            Map<String, Object> sec = new LinkedHashMap<>();
+            sec.put("intentRisk", rl.name());
+            sec.put("toolSurface", surf.name());
+            Map<String, Object> utterMap = new LinkedHashMap<>();
+            utterMap.put("total", utter.total());
+            utterMap.put("dimensions", utter.dimensions());
+            utterMap.put("explanation", utter.explanation());
+            sec.put("utteranceRiskScore", utterMap);
+            if (surf == McpToolSurface.READ_ONLY) {
+                sec.put("toolingHint",
+                        "本会话为只读工具面：答复中仅规划观测/分析类步骤；勿假定可自动执行临时清理、日志删除、服务重启或提权探测。");
+            } else {
+                sec.put("toolingHint",
+                        "本会话为完整工具面：在遵守 cleanupAgentPolicy 与 OpsPathPolicy 前提下，可通过本节点 MCP 调用 CleanTempTool、LogCleanupTool、ServiceRestartTool 等写类工具；"
+                                + "须在答复中说明操作范围、Dry-Run/预览与回滚建议，并避免超出白名单路径。");
+            }
+            context.put("sessionSecurityPolicy", sec);
+        } catch (Exception e) {
+            log.debug("会话安全策略附加失败: {}", e.getMessage());
+        }
+    }
+
     public Flux<String> chatStream(String userMessage) {
         return chatStream(userMessage, List.of());
     }
 
     /**
      * 流式对话：system（含实时上下文）+ 可选多轮 history + 当前用户消息。
+     * 默认是否走「工具增强」见 {@code agent.assistant.use-tool-agent-default}；单次请求可由 Controller 覆盖。
      */
     public Flux<String> chatStream(String userMessage, List<ChatTurn> history) {
+        return chatStream(userMessage, history, defaultUseToolAgent);
+    }
+
+    /**
+     * @param useToolAgent true：与 /api/chat 的 AI Agent 类似，经 ChatClient 多步调用本机 MCP 工具后再总结（阻塞 call，按块模拟流式）；
+     *                     false：仅 ChatModel 流式，不执行工具。
+     */
+    public Flux<String> chatStream(String userMessage, List<ChatTurn> history, boolean useToolAgent) {
+        String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
+                userMessage == null ? "" : userMessage.trim(), 32_000);
+        if (useToolAgent && chatClientBuilder != null) {
+            return chatStreamWithToolAgent(safe, history);
+        }
+        return chatStreamPlain(safe, history);
+    }
+
+    private Flux<String> chatStreamPlain(String userMessage, List<ChatTurn> history) {
         Map<String, Object> context = getAssistantContext();
+        augmentContextWithSessionSecurity(userMessage, context);
         String systemPrompt = buildSystemPrompt(context);
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(systemPrompt));
@@ -152,6 +277,167 @@ public class UnifiedAssistantService {
                     log.error("统一助手流式回答失败", e);
                     return Flux.just("统一助手暂时不可用: " + e.getMessage());
                 });
+    }
+
+    /**
+     * Spring AI 在「工具多步」场景多为阻塞 {@code call()}，此处放到 boundedElastic 并在完成后分块推送，兼顾 SSE 体验与本机真实运维能力。
+     */
+    private Flux<String> chatStreamWithToolAgent(String userMessage, List<ChatTurn> history) {
+        if (promptInjectionGuard != null && promptInjectionGuard.isInjection(userMessage)) {
+            return Flux.just("检测到提示注入特征，已拦截本轮 **自动工具** 链路。请用自然语言直接描述运维目标。");
+        }
+        if (highRiskCommandDetector != null && highRiskCommandDetector.isHighRiskCommand(userMessage)) {
+            return Flux.just("检测到高危命令表述，已暂停自动工具调用。请改为观测/分析类需求，或通过 MCP 控制台在确认后执行。");
+        }
+        RiskLevel rl = intentRiskFilter.evaluate(userMessage);
+        if (rl == RiskLevel.HIGH) {
+            return Flux.just("检测到高风险意图，与对话入口风控一致：已暂停 **自动工具多步** 。请拆分需求、降低操作范围，或联系管理员走审批与 MCP 确认执行。");
+        }
+        if (orchestratorEnabled && assistantOrchestrator != null && assistantOrchestrator.supports(userMessage)) {
+            McpToolSurface surface = toolSurfaceResolver.resolve(userMessage, rl);
+            return Flux.concat(
+                    Flux.just("> 已启用 **运维闭环编排**（感知 → 预览 → 策略内执行 → 验证）…\n\n"),
+                    Mono.fromCallable(() -> assistantOrchestrator.run(userMessage, surface, rl).markdown())
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .timeout(Duration.ofMinutes(5))
+                            .flatMapMany(this::chunkTextForSse)
+            ).onErrorResume(e -> {
+                log.error("运维闭环编排失败", e);
+                return Flux.just("运维闭环编排失败: " + e.getMessage());
+            });
+        }
+        return Flux.concat(
+                Flux.just("> 已启用 **本机 MCP 工具增强**（采集/分析可能需数十秒），请稍候…\n\n"),
+                Mono.fromCallable(() -> runBlockingToolAugmentedCompletion(userMessage, history))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .timeout(Duration.ofMinutes(4))
+                        .flatMapMany(this::chunkTextForSse)
+        ).onErrorResume(e -> {
+            log.error("统一助手工具增强失败", e);
+            Throwable c = e;
+            while (c != null) {
+                if (c instanceof OpsSecurityRejectedException ore) {
+                    return Flux.just("工具安全门拦截: " + ore.getMessage());
+                }
+                c = c.getCause();
+            }
+            if (e instanceof java.util.concurrent.TimeoutException) {
+                return Flux.just("工具增强阶段超时（4min），请缩小日志范围或稍后重试。");
+            }
+            return Flux.just("统一助手（工具增强）暂时不可用: " + e.getMessage());
+        });
+    }
+
+    private String runBlockingToolAugmentedCompletion(String userMessage, List<ChatTurn> history) {
+        Map<String, Object> context = getAssistantContext();
+        augmentContextWithSessionSecurity(userMessage, context);
+        context.put("assistantToolLoop", Boolean.TRUE);
+        McpToolSurface surface = parseToolSurface(context);
+        List<Object> tools = mcpToolRegistry.getToolBeansForSurface(surface, readOnlySurfaceDenylist);
+        String traceId = UUID.randomUUID().toString();
+        long t0 = System.currentTimeMillis();
+        OpsSecurityContext.open(traceId, userMessage, false, surface);
+        try {
+            ChatClient client = chatClientBuilder.build();
+            String systemPrompt = buildSystemPrompt(context);
+            String bundledUser = bundleHistoryAndUser(history, userMessage);
+            String content = client.prompt()
+                    .system(systemPrompt)
+                    .user(bundledUser)
+                    .tools(tools)
+                    .call()
+                    .content();
+            List<Map<String, Object>> steps = assistantAuditRecorder.newSteps();
+            assistantAuditRecorder.addCot(steps, 1, "接收", userMessage);
+            assistantAuditRecorder.addCot(steps, 2, "感知", "会话上下文已注入 getAssistantContext");
+            assistantAuditRecorder.addCot(steps, 3, "推理", "ChatClient 多步 MCP 工具调用");
+            assistantAuditRecorder.addCot(steps, 4, "校验", "toolSurface=" + surface.name());
+            assistantAuditRecorder.addStep(steps, "result", truncateForAudit(content, 600));
+            assistantAuditRecorder.record(
+                    traceId,
+                    userMessage,
+                    parseIntentRisk(context).name(),
+                    "TOOL_AGENT",
+                    "ChatClient.tools",
+                    true,
+                    truncateForAudit(content, 400),
+                    steps,
+                    System.currentTimeMillis() - t0
+            );
+            if (content != null && !content.contains("traceId")) {
+                content = "> **traceId:** `" + traceId + "`\n\n" + content;
+            }
+            return content;
+        } finally {
+            OpsSecurityContext.clear();
+        }
+    }
+
+    private RiskLevel parseIntentRisk(Map<String, Object> context) {
+        Object raw = context.get("sessionSecurityPolicy");
+        if (raw instanceof Map<?, ?> m) {
+            Object ir = m.get("intentRisk");
+            if (ir != null) {
+                try {
+                    return RiskLevel.valueOf(String.valueOf(ir).trim());
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return RiskLevel.MEDIUM;
+    }
+
+    private static String truncateForAudit(String s, int max) {
+        if (s == null) {
+            return "";
+        }
+        return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    private McpToolSurface parseToolSurface(Map<String, Object> context) {
+        Object raw = context.get("sessionSecurityPolicy");
+        if (!(raw instanceof Map<?, ?> m)) {
+            return McpToolSurface.FULL;
+        }
+        Object ts = m.get("toolSurface");
+        if (ts == null) {
+            return McpToolSurface.FULL;
+        }
+        try {
+            return McpToolSurface.valueOf(String.valueOf(ts).trim());
+        } catch (Exception e) {
+            log.debug("解析 toolSurface 失败，使用 FULL: {}", ts);
+            return McpToolSurface.FULL;
+        }
+    }
+
+    private String bundleHistoryAndUser(List<ChatTurn> history, String userMessage) {
+        StringBuilder sb = new StringBuilder();
+        for (ChatTurn t : trimHistory(history)) {
+            String r = t.role() == null ? "" : t.role().trim();
+            String c = t.content() == null ? "" : t.content().trim();
+            if (c.isEmpty()) {
+                continue;
+            }
+            sb.append("[").append(r).append("]\n").append(c).append("\n\n");
+        }
+        sb.append("[user]\n").append(userMessage);
+        return sb.toString();
+    }
+
+    private Flux<String> chunkTextForSse(String text) {
+        if (text == null || text.isEmpty()) {
+            return Flux.empty();
+        }
+        int step = Math.max(200, toolAgentStreamChunkChars);
+        if (text.length() <= step) {
+            return Flux.just(text);
+        }
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < text.length(); i += step) {
+            parts.add(text.substring(i, Math.min(text.length(), i + step)));
+        }
+        return Flux.fromIterable(parts);
     }
 
     private List<ChatTurn> trimHistory(List<ChatTurn> history) {
@@ -221,12 +507,27 @@ public class UnifiedAssistantService {
                 - 对照信息优先 **标准 Markdown 表格**；禁用错位对齐的「伪表格」。
                 - 表情符号非必要不使用；若使用，密度 ≤ 每 **两节** 一枚。
                 
+                ## 对用户回复（硬性）
+                - 使用 **简体中文** 自然语言，结构清晰；禁止大段粘贴原始 JSON、`ToolResult` 或 `{"success":...}` 类机器输出。
+                - 工具或上下文已返回结构化数据时：提炼为 **结论、关键指标、建议动作**；需要细节时用 Markdown 列表或表格，勿整段 dump。
+                - 仅在用户明确要求「原始 JSON / 调试输出」时方可附 fenced JSON。
+                
                 ## 任务类型提示
                 - **闲聊 / 非运维域**：简明作答即可，结尾可加一行「如需针对贵司栈做可执行 Runbook，请提供环境与约束」。
                 - **延时运维**：用户可预约巡检或清理预览； destructive 操作默认 **Dry-Run / 预览**，真实变更须经由控制台二次确认与策略白名单。
                 
+                ## 多 Agent 协作（逻辑角色，JSON 字段 `agentMultiTeam`）
+                - `perceptionAgent`：只读环境快照；`diagnosisAgent`：告警/异常/相似案例；`cleanupAgentPolicy`：写操作边界；`orchestratorAgent`：你如何汇总与分派。
+                - 回答时可用小节标题区分「感知事实 / 诊断推断 / 处置建议」；**仅在** `sessionSecurityPolicy.toolSurface=FULL` 且工具调用已成功返回时，可陈述已发生的写操作事实；只读面或未实际调用工具时勿虚构已执行变更。
+                
+                ## 当前用户轮次安全策略（JSON `sessionSecurityPolicy`）
+                - `toolSurface=READ_ONLY`：仅观测/分析类 MCP 能力适用；禁止在答复中假定已执行或可直接调用配置项 `agent.security.read-only-extra-denied-tool-beans` 所列工具（默认含 CleanTemp / LogCleanup / ServiceRestart / Privilege）。
+                - `toolSurface=FULL`：允许在路径白名单与审计前提下规划并调用写类 MCP（临时清理、日志裁剪、受控服务重启等）；仍须拒绝明显破坏性行为，并优先 Dry-Run / 预览。
+                - 结合 `intentRisk` 与 `utteranceRiskScore` 调整措辞激进程度；高风险时优先给止血建议与人工升级路径。
+                
                 ## 与本节点绑定的 MCP 工具名（须写确切英文名，与 `/api/mcp` 白名单一致）
                 `DiskTool`、`DiskInsightTool`、`DiskAnalyzeTool`、`ProcessTool`、`SystemLoadTool`、`LogAnalysisTool`、`CleanTempTool`、`LogCleanupTool`、`ServiceRestartTool`、`ConfigCheckTool`、`NetworkTool`、`PrivilegeTool`、`OsInsightTool`。
+                """ + toolAugmentedSection(context) + """
                 
                 ## 实时上下文附件（JSON，只读）
                 """ + ctxJson;
@@ -267,6 +568,19 @@ public class UnifiedAssistantService {
                     "关注 CPU/内存/磁盘与错误率趋势；Linux 可看 vmstat/iostat；Windows 可看性能监视器与事件日志"));
         }
         return runbooks;
+    }
+
+    private String toolAugmentedSection(Map<String, Object> context) {
+        if (!Boolean.TRUE.equals(context.get("assistantToolLoop"))) {
+            return "";
+        }
+        return """
+                
+                ## 本轮：工具增强（Tool-Augmented）
+                - 凡涉及 **本机** CPU、内存、磁盘、进程、网络、日志、配置或服务的可核实问题，**必须先调用已注册 MCP 工具**获取事实再下结论；禁止凭空虚构指标或杜撰日志原文。
+                - 工具输出须在答复首屏做 **关键字段摘要**（表格或列表）；失败时给出错误类别与不超过 **5** 条可执行排查项。
+                - **写类工具**（清理、日志裁剪、服务重启、提权类）仅当 `sessionSecurityPolicy.toolSurface` 为 `FULL` 时允许；须优先 Dry-Run/预览并说明影响面与回滚；只读面下不得声称已执行写操作。
+                """;
     }
 
     private Map<String, String> runbook(String title, String action, String command) {

@@ -52,10 +52,11 @@ public class UnifiedAssistantController {
         }
         final String message = rawMessage.length() > 4000 ? rawMessage.substring(0, 4000) : rawMessage;
         List<UnifiedAssistantService.ChatTurn> history = parseHistory(payload.get("history"));
+        boolean useToolAgent = parseUseToolAgent(payload.get("useToolAgent"));
         SseEmitter emitter = new SseEmitter(300000L);
         sseExecutor.execute(() -> {
             try {
-                unifiedAssistantService.chatStream(message, history)
+                unifiedAssistantService.chatStream(message, history, useToolAgent)
                         .doOnNext(chunk -> {
                             try {
                                 emitter.send(chunk);
@@ -97,5 +98,19 @@ public class UnifiedAssistantController {
             turns.add(new UnifiedAssistantService.ChatTurn(r, c));
         }
         return turns;
+    }
+
+    private static boolean parseUseToolAgent(Object raw) {
+        if (raw == null) {
+            return true;
+        }
+        String s = String.valueOf(raw).trim();
+        if (s.isEmpty()) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(s) || "0".equals(s)) {
+            return false;
+        }
+        return true;
     }
 }

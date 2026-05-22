@@ -1,5 +1,5 @@
 <template>
-  <div class="alarm-history-analysis">
+  <div class="ops-page alarm-history-analysis">
     <el-card class="analysis-card">
       <template #header>
         <div class="card-header">
@@ -553,7 +553,7 @@ onUnmounted(() => {
 
 <style scoped>
 .alarm-history-analysis {
-  padding: 20px;
+  padding: 0;
 }
 
 .analysis-card {
@@ -596,15 +596,17 @@ onUnmounted(() => {
 }
 
 .stat-label {
-  font-size: 14px;
-  color: #606266;
-  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--ops-text-subtle);
+  margin-bottom: 6px;
+  font-weight: 500;
 }
 
 .stat-value {
-  font-size: 24px;
-  font-weight: bold;
-  color: #303133;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ops-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .charts-row {

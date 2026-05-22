@@ -1,5 +1,5 @@
 <template>
-  <div class="mcp-tools-demo">
+  <div class="ops-page mcp-tools-demo">
     <div class="hero-section">
       <h1>本地工具控制台</h1>
       <p class="subtitle">受控执行 · Agentic 风险分 · 思维链审计 · Windows / Linux 节点</p>
@@ -12,7 +12,7 @@
     </div>
 
     <el-tabs v-model="activeTab" type="border-card" class="tools-tabs">
-      <el-tab-pane label="📊 工具概览" name="overview">
+      <el-tab-pane label="工具概览" name="overview">
         <div class="tools-grid">
           <el-card
             v-for="tool in tools"
@@ -21,7 +21,7 @@
             :class="{ active: selectedTool === tool.name, offline: tool.status === 'offline' }"
             @click="selectTool(tool)"
           >
-            <div class="tool-icon">{{ tool.icon }}</div>
+            <div class="tool-icon-badge">{{ mcpToolBadge(tool.name) }}</div>
             <div class="tool-name">{{ tool.name }}</div>
             <div class="tool-desc">{{ tool.description }}</div>
             <div class="tool-status" :class="tool.status">
@@ -32,10 +32,10 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="🚀 工具执行" name="execute">
+      <el-tab-pane label="工具执行" name="execute">
         <div class="execute-panel">
           <div class="selected-tool-info" v-if="selectedTool">
-            <el-tag size="large" type="success">{{ getToolByName(selectedTool)?.icon }} {{ selectedTool }}</el-tag>
+            <el-tag size="large" type="success">{{ selectedTool }}</el-tag>
             <span class="tool-description">{{ getToolByName(selectedTool)?.description }}</span>
           </div>
 
@@ -45,7 +45,7 @@
 
           <div v-else class="tool-execute-area">
             <div class="tool-params" v-if="getToolByName(selectedTool)?.params?.length">
-              <h4>📥 参数配置</h4>
+              <h4>参数配置</h4>
               <el-form :model="params" label-width="120px">
                 <el-form-item
                   v-for="param in getToolByName(selectedTool)?.params"
@@ -78,7 +78,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="📋 执行历史" name="history">
+      <el-tab-pane label="执行历史" name="history">
         <el-table :data="executionHistory" stripe style="width: 100%">
           <el-table-column prop="toolName" label="工具名称" width="150" />
           <el-table-column prop="timestamp" label="执行时间" width="180" />
@@ -107,7 +107,7 @@
     <el-dialog v-model="resultDialogVisible" title="工具执行结果" width="800px" center>
       <div v-if="currentResult" class="result-detail">
         <div class="result-header">
-          <el-tag size="large" type="success">{{ getToolByName(currentResult.toolName)?.icon }} {{ currentResult.toolName }}</el-tag>
+          <el-tag size="large" type="success">{{ currentResult.toolName }}</el-tag>
           <el-tag :type="currentResult.success ? 'success' : 'danger'">
             {{ currentResult.success ? '执行成功' : '执行失败' }}
           </el-tag>
@@ -138,7 +138,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu } from '@element-plus/icons-vue'
 import { executeMcpTool, confirmMcpExecute, getMcpTools } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
-import { mergeToolRegistry, getMcpToolCommandHint } from '../utils/mcpToolsMeta'
+import { mergeToolRegistry, getMcpToolCommandHint, applyMcpWriteConfirmParams, mcpToolBadge } from '../utils/mcpToolsMeta'
 import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
 
 const activeTab = ref('overview')
@@ -207,7 +207,11 @@ const executeTool = async () => {
         })
         return
       }
-      data = await confirmMcpExecute(selectedTool.value, { ...params }, '确认执行')
+      data = await confirmMcpExecute(
+        selectedTool.value,
+        applyMcpWriteConfirmParams(selectedTool.value, params),
+        '确认执行'
+      )
     }
 
     data = normalizeMcpToolResponse(data)
@@ -271,44 +275,49 @@ const formatFullResultJson = (fr) => {
 
 <style scoped>
 .mcp-tools-demo {
-  padding: 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  min-height: 100vh;
+  padding: 0;
+  background: transparent;
+  min-height: auto;
 }
 
 .hero-section {
-  text-align: center;
-  padding: 40px 20px;
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 16px;
-  margin-bottom: 20px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  text-align: left;
+  padding: 16px 18px;
+  background: var(--ops-panel);
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius);
+  margin-bottom: 14px;
+  box-shadow: var(--ops-shadow-sm);
 }
 
 .hero-section h1 {
-  font-size: 32px;
-  color: #1a1a2e;
-  margin-bottom: 10px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ops-text);
+  margin: 0 0 6px;
+  letter-spacing: -0.02em;
 }
 
 .subtitle {
-  font-size: 16px;
-  color: #666;
-  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--ops-text-subtle);
+  margin: 0 0 12px;
+  line-height: 1.5;
 }
 
 .tech-tags {
   display: flex;
-  justify-content: center;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .tools-tabs {
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 16px;
+  background: var(--ops-panel);
+  border-radius: var(--ops-radius);
   overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--ops-border);
+  box-shadow: var(--ops-shadow-sm);
 }
 
 .tools-grid {
@@ -320,19 +329,20 @@ const formatFullResultJson = (fr) => {
 
 .tool-card {
   cursor: pointer;
-  transition: all 0.3s ease;
-  border: 2px solid transparent;
-  background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  border: 1px solid var(--ops-border) !important;
+  background: var(--ops-panel) !important;
 }
 
 .tool-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+  transform: none;
+  box-shadow: var(--ops-shadow-md);
+  border-color: #94a3b8 !important;
 }
 
 .tool-card.active {
-  border-color: #409eff;
-  background: linear-gradient(135deg, #ecf5ff 0%, #ffffff 100%);
+  border-color: var(--ops-primary) !important;
+  box-shadow: 0 0 0 1px rgba(13, 148, 136, 0.2);
 }
 
 .tool-card.offline {
@@ -343,23 +353,35 @@ const formatFullResultJson = (fr) => {
   background: #909399;
 }
 
-.tool-icon {
-  font-size: 48px;
+.tool-icon-badge {
+  width: 44px;
+  height: 44px;
   margin-bottom: 10px;
+  border-radius: 8px;
+  background: rgba(13, 148, 136, 0.1);
+  color: var(--ops-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--ops-font-mono);
 }
 
 .tool-name {
-  font-size: 20px;
-  font-weight: bold;
-  color: #303133;
-  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ops-text);
+  margin-bottom: 6px;
 }
 
 .tool-desc {
-  font-size: 14px;
-  color: #909399;
-  margin-bottom: 15px;
-  min-height: 40px;
+  font-size: 12px;
+  color: var(--ops-text-subtle);
+  margin-bottom: 12px;
+  min-height: 36px;
+  line-height: 1.45;
 }
 
 .tool-status {

@@ -34,6 +34,9 @@ public class McpInvocationSecurityGate {
             "OsInsightTool"
     );
 
+    /** 在 {@link McpToolSurface#READ_ONLY} 会话面下禁止的工具（含可配置追加项） */
+    private final ReadOnlySurfaceDenylist readOnlySurfaceDenylist;
+
     private final PromptInjectionGuard promptInjectionGuard;
     private final IntentRiskFilter intentRiskFilter;
     private final HighRiskCommandDetector highRiskCommandDetector;
@@ -48,6 +51,7 @@ public class McpInvocationSecurityGate {
             IntentRiskFilter intentRiskFilter,
             HighRiskCommandDetector highRiskCommandDetector,
             AgenticRiskScoreEngine agenticRiskScoreEngine,
+            ReadOnlySurfaceDenylist readOnlySurfaceDenylist,
             @Value("${agent.security.max-instruction-length:16384}") int maxInstructionLength,
             @Value("${agent.security.max-parameter-entries:48}") int maxParameterEntries,
             @Value("${agent.security.max-single-string-param-chars:131072}") int maxSingleStringParamChars
@@ -56,6 +60,7 @@ public class McpInvocationSecurityGate {
         this.intentRiskFilter = intentRiskFilter;
         this.highRiskCommandDetector = highRiskCommandDetector;
         this.agenticRiskScoreEngine = agenticRiskScoreEngine;
+        this.readOnlySurfaceDenylist = readOnlySurfaceDenylist;
         this.maxInstructionLength = Math.max(4096, maxInstructionLength);
         this.maxParameterEntries = Math.max(8, maxParameterEntries);
         this.maxSingleStringParamChars = Math.max(4096, maxSingleStringParamChars);
@@ -75,6 +80,11 @@ public class McpInvocationSecurityGate {
      * @param profile INITIAL：中等风险需界面二次确认；POST_CONFIRM / DEFERRED：不再因 MEDIUM 阻断。
      */
     public GateDecision evaluate(String toolName, Map<String, Object> parameters, McpSecurityProfile profile) {
+        return evaluate(toolName, parameters, null, profile);
+    }
+
+    private GateDecision evaluate(String toolName, Map<String, Object> parameters, String instructionOverride,
+                                  McpSecurityProfile profile) {
         if (toolName == null || toolName.isBlank()) {
             return GateDecision.block("TOOL_NAME_EMPTY", "工具名称不能为空");
         }
@@ -86,6 +96,15 @@ public class McpInvocationSecurityGate {
             return GateDecision.block("UNKNOWN_TOOL", "未知或未授权的工具: " + toolName);
         }
 
+        if (profile == McpSecurityProfile.INITIAL_REQUEST || profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
+            OpsSecurityContext.Ctx secCtx = OpsSecurityContext.get();
+            if (secCtx != null && secCtx.getToolSurface() == McpToolSurface.READ_ONLY
+                    && readOnlySurfaceDenylist.denies(toolName)) {
+                return GateDecision.block("READ_ONLY_TOOL_SURFACE",
+                        "当前会话处于只读工具面：禁止调用 " + toolName + "。请降低指令风险或使用 MCP 控制台在低风险上下文中执行。");
+            }
+        }
+
         if (parameters != null && parameters.size() > maxParameterEntries) {
             return GateDecision.block("PARAM_TOO_MANY", "参数项过多，请缩减请求体");
         }
@@ -94,7 +113,9 @@ public class McpInvocationSecurityGate {
             return GateDecision.block("PARAM_TOO_LARGE", "参数「" + tooLargeValue + "」体积超限");
         }
 
-        String instruction = buildInstruction(toolName, parameters);
+        String instruction = instructionOverride != null && !instructionOverride.isBlank()
+                ? instructionOverride.trim()
+                : buildInstruction(toolName, parameters);
         if (instruction.length() > maxInstructionLength) {
             return GateDecision.block("INSTRUCTION_TOO_LONG",
                     "指令串长度超过上限（" + maxInstructionLength + "），请缩短路径或分批查询");
@@ -129,6 +150,9 @@ public class McpInvocationSecurityGate {
                 && scoreResult.total() <= confirmMax;
         boolean needByIntent = profile == McpSecurityProfile.INITIAL_REQUEST
                 && intentRisk == RiskLevel.MEDIUM;
+        if (profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
+            return GateDecision.allow(intentRisk, scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
+        }
         if (needByScore || needByIntent) {
             String extra = needByIntent && !needByScore ? "意图为中等风险；" : "";
             String msg = String.format(Locale.ROOT,
@@ -162,10 +186,23 @@ public class McpInvocationSecurityGate {
         return null;
     }
 
+    /**
+     * 工作台 ChatClient 多步 {@code @Tool}：与 HTTP 共用评分/注入/意图规则，但不触发 NEED_CONFIRM（由工具层 dry-run/confirm 参数约束）。
+     */
+    public GateDecision evaluateChatToolInvocation(String toolBeanName, String instruction) {
+        String instr = instruction == null ? "" : instruction.trim();
+        return evaluate(toolBeanName, Map.of(), instr, McpSecurityProfile.CHAT_AGENT_TOOL);
+    }
+
+    public static final Set<String> allowedToolNames() {
+        return ALLOWED_TOOLS;
+    }
+
     public enum McpSecurityProfile {
         INITIAL_REQUEST,
         POST_CONFIRMATION,
-        DEFERRED_SCHEDULED
+        DEFERRED_SCHEDULED,
+        CHAT_AGENT_TOOL
     }
 
     public static final class GateDecision {

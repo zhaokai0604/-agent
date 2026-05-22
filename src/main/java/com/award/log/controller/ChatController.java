@@ -13,6 +13,7 @@ import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.OpsSecurityRejectedException;
 import com.award.log.security.PromptInjectionGuard;
 import com.award.log.security.RiskLevel;
+import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.trace.TraceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -92,6 +93,9 @@ public class ChatController {
 
     @Autowired
     private McpToolRegistry mcpToolRegistry;
+
+    @Autowired
+    private ToolSurfaceResolver toolSurfaceResolver;
 
     @PostMapping("/chat")
     public Map<String, Object> chat(@RequestBody Map<String, Object> request) {
@@ -195,6 +199,7 @@ public class ChatController {
                     ## 工具调用与答复契约
                     - 工具输出（JSON 或结构化字段）须在答复 **首屏摘要**：关键指标名称 + 数值 + 单位/语义；禁止仅以「已执行完毕」「请看 JSON」敷衍收尾。
                     - 对工具失败或策略拦截：复述 **错误类别**（权限 / 路径策略 / 超时 / 参数），给出 **下一步穷举式排查项**（≤5 条）。
+                    - 当用户意图已通过 HTTP 风控且本会话为 **完整工具面** 时：可调用 `CleanTempTool`、`LogCleanupTool`、`ServiceRestartTool` 等治理类工具，**必须先 Dry-Run/预览**（若工具支持）、严格遵守 `OpsPathPolicy` 白名单，并在答复中写明 **影响范围与回滚**。
                     - Linux 典型链路：`df`/`findmnt`、`du`、journald、`ss`/`ip`、`lsof`；Windows：`Get-CimInstance`、`Get-WinEvent`、`Get-NetTCPConnection`、`Test-NetConnection` 等。**禁止**在未经核实宿主 OS 的情况下假定 shell 方言。
                     
                     ## 输出形态（Markdown）
@@ -204,7 +209,9 @@ public class ChatController {
                     磁盘容量与热点、进程与资源、系统负载、日志文件解析、临时目录治理、配置静态检查、网络探测、权限探测、OS 深度洞察（journal / socket / fd）。
                     """;
             
-            OpsSecurityContext.open(traceId, userInput, false);
+            RiskLevel surfaceRisk = intentRiskFilter.evaluate(userInput);
+            OpsSecurityContext.open(traceId, userInput, false,
+                    toolSurfaceResolver.resolve(userInput, surfaceRisk));
             try {
                 String response = chatClient.prompt()
                         .system(systemPrompt)

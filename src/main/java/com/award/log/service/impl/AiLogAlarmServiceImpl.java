@@ -1,5 +1,6 @@
 package com.award.log.service.impl;
 
+import com.award.log.analysis.AiDiagnosisContextBuilder;
 import com.award.log.mapper.LogAlarmMapper;
 import com.award.log.dto.EnhancedLogParseResultEntity;
 import com.award.log.model.LogAlarm;
@@ -70,12 +71,12 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
     
     // AI分析Prompt模板
     private static final String AI_PROMPT_TEMPLATE = """
-            你是 **告警分诊引擎（Alert Triage Engine）** 背后的 **Staff SRE**：将原始日志映射为可入库、可路由、可聚合的标准化告警对象。
+            你是 **告警分诊引擎（Alert Triage Engine）** 背后的 **Staff SRE**：仅依据下方「日志样本」映射为可入库的告警对象；**禁止编造**样本中未出现的时间、条数、主机名或版本；**禁止**输出与样本正文无关的叙述或建议。
             要求：
-            - `level` 必须取自集合 **FATAL | ERROR | WARNING | INFO**，并与业界常用语义对齐（FATAL=服务不可用或数据损坏风险；ERROR=功能降级且需当天处置；WARNING=潜在退化；INFO=提示性）。
-            - `rootCause`：**一句话** 技术根因或 **最可信假设**，须包含 **组件/模块名**；禁止泛泛而谈。
-            - `solution`：**可执行** 处置摘要（命令级或配置键级）；若信息不足，填 **「待补充：列出所需字段」** 并指明缺口。
-            仅输出 **单行合法 JSON 对象**（无 Markdown、无注释），Schema：
+            - `level`：取自 **FATAL | ERROR | WARNING | INFO**，须与样本语义一致。
+            - `rootCause`：**一句话**；其中的组件/类名/服务名 **必须为日志样本中出现的原文子串**（可复制其一截）；禁止自创名称或笼统「系统异常」。**禁止编造**样本中未出现的时间、次数或「集中爆发」；若仅能推测须含「可能」字样。
+            - `solution`：**可执行**、须对准样本中的**具体**异常形态（异常类、错误码、关键字）；禁止脱离样本的通用运维空话；信息不足则 **「待补充：」** 列缺口。
+            仅输出 **单行合法 JSON**（无 Markdown、无注释），Schema：
             {"level":"…","rootCause":"…","solution":"…"}
             
             日志样本：
@@ -366,7 +367,8 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
                     reasons.addAll(item.getAnomalyReasons());
                 }
                 String content = item.getDesensitizedLog() == null ? "" : item.getDesensitizedLog();
-                samples.add(content.substring(0, Math.min(180, content.length())));
+                samples.add(AiDiagnosisContextBuilder.truncateForPrompt(
+                        content, AiDiagnosisContextBuilder.COMPENSATION_SNIPPET_CHARS));
             }
 
             if (samples.isEmpty()) {

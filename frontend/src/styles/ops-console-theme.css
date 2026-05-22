@@ -1,72 +1,133 @@
+/**
+ * ThreshCore 运维控制台 — 企业级视觉令牌（Datadog / Grafana 类：深侧栏 + 浅工作区）
+ */
 :root {
-  --ops-bg: #f3f4f6;
+  --el-color-primary: #0d9488;
+  --el-color-primary-light-3: #14b8a6;
+  --el-color-primary-light-5: #2dd4bf;
+  --el-color-primary-dark-2: #0f766e;
+
+  --ops-font: 'Inter', 'DM Sans', 'PingFang SC', 'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
+  --ops-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --ops-bg: #f1f5f9;
+  --ops-bg-accent: none;
   --ops-panel: #ffffff;
   --ops-panel-soft: #f8fafc;
-  --ops-border: #dbe2ea;
-  --ops-border-soft: #e5e7eb;
+  --ops-border: #e2e8f0;
+  --ops-border-soft: #f1f5f9;
   --ops-text: #0f172a;
   --ops-text-subtle: #64748b;
-  --ops-primary: #0284c7;
+  --ops-primary: #0d9488;
+  --ops-primary-hover: #0f766e;
+  --ops-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --ops-shadow-md: 0 4px 16px rgba(15, 23, 42, 0.06);
+  --ops-shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.08);
+  --ops-radius: 10px;
+  --ops-radius-sm: 6px;
+  --ops-header-h: 52px;
+
+  --shell-bg: #0b1220;
+  --shell-sidebar: #0f172a;
+  --shell-border: rgba(255, 255, 255, 0.08);
+  --shell-glow: rgba(45, 212, 191, 0.08);
+  --shell-accent: #2dd4bf;
+  --shell-accent-soft: rgba(45, 212, 191, 0.12);
+  --shell-text: #f1f5f9;
+  --shell-muted: #94a3b8;
+  --shell-nav-hover: rgba(255, 255, 255, 0.06);
+  --shell-nav-active: rgba(45, 212, 191, 0.14);
 }
 
 body {
   background: var(--ops-bg);
   color: var(--ops-text);
+  font-family: var(--ops-font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Universal content shell */
 .main-content,
 .el-main,
 .content-container,
 .page-container {
-  background: var(--ops-bg);
+  background-color: var(--ops-bg);
+  background-image: none;
 }
 
-/* Element Plus normalization for all feature pages */
 .el-card {
-  border-radius: 10px;
+  border-radius: var(--ops-radius);
   border: 1px solid var(--ops-border);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  box-shadow: var(--ops-shadow-sm);
+  background: var(--ops-panel);
 }
 
 .el-card:hover {
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--ops-shadow-md);
+  border-color: #cbd5e1;
 }
 
 .el-card__header {
   background: var(--ops-panel-soft);
   border-bottom: 1px solid var(--ops-border-soft);
   padding: 12px 16px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ops-text);
 }
 
 .el-table {
-  --el-table-header-bg-color: #f8fafc;
+  --el-table-header-bg-color: var(--ops-panel-soft);
   --el-table-tr-bg-color: #ffffff;
-  --el-table-row-hover-bg-color: #f1f5f9;
-  --el-table-border-color: #e5e7eb;
+  --el-table-row-hover-bg-color: rgba(13, 148, 136, 0.04);
+  --el-table-border-color: var(--ops-border-soft);
   font-size: 13px;
 }
 
 .el-table th {
-  color: #334155;
+  color: var(--ops-text-subtle);
   font-weight: 600;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0.01em;
 }
 
 .el-form-item__label {
-  color: #334155;
-  font-weight: 600;
+  color: var(--ops-text);
+  font-weight: 500;
+  font-size: 13px;
 }
 
 .el-input__wrapper,
 .el-textarea__inner,
 .el-select__wrapper {
-  border-radius: 8px;
-  box-shadow: 0 0 0 1px #d0d7e2 inset;
+  border-radius: var(--ops-radius-sm);
+  box-shadow: 0 0 0 1px var(--ops-border) inset;
+  transition: box-shadow 0.15s ease;
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px #94a3b8 inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--ops-primary) inset !important;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--ops-primary);
+  --el-button-border-color: var(--ops-primary);
+  --el-button-hover-bg-color: var(--ops-primary-hover);
+  --el-button-hover-border-color: var(--ops-primary-hover);
 }
 
 .el-button {
-  border-radius: 6px;
-  font-weight: 600;
+  border-radius: var(--ops-radius-sm);
+  font-weight: 500;
+  font-size: 13px;
 }
 
 .el-button:hover {
@@ -75,25 +136,29 @@ body {
 }
 
 .el-tag {
-  border-radius: 6px;
+  border-radius: 4px;
   font-size: 12px;
+  font-weight: 500;
 }
 
 .el-dialog {
-  border-radius: 10px;
+  border-radius: var(--ops-radius);
+  border: 1px solid var(--ops-border);
 }
 
 .el-dialog__header {
   margin-right: 0;
   border-bottom: 1px solid var(--ops-border-soft);
   padding: 14px 18px 10px;
+  font-weight: 600;
 }
 
-/* Common utility classes for existing components */
 .title,
 .card-title,
 .section-title {
   color: var(--ops-text);
+  letter-spacing: -0.02em;
+  font-weight: 600;
 }
 
 .sub-title,
@@ -102,70 +167,69 @@ body {
   color: var(--ops-text-subtle);
 }
 
-/* Full feature-page normalization (override legacy scoped styles) */
-.main-content [class*="container"],
-.main-content [class*="dashboard"],
-.main-content [class*="analysis"],
-.main-content [class*="monitor"],
-.main-content [class*="management"],
-.main-content [class*="page"] {
-  background: var(--ops-bg) !important;
+/* 功能页遗留样式收敛 */
+.main-content [class*='container'],
+.main-content [class*='dashboard'],
+.main-content [class*='analysis'],
+.main-content [class*='monitor'],
+.main-content [class*='management'],
+.main-content [class*='page'] {
+  background: transparent !important;
 }
 
-.main-content [class*="header"],
-.main-content [class*="toolbar"],
-.main-content [class*="filter"] {
+.main-content [class*='header'],
+.main-content [class*='toolbar'],
+.main-content [class*='filter'] {
   background: transparent !important;
   color: var(--ops-text) !important;
   box-shadow: none !important;
   border-color: var(--ops-border-soft) !important;
 }
 
-.main-content [class*="card"],
-.main-content [class*="panel"],
-.main-content [class*="box"] {
-  border-radius: 10px !important;
+.main-content [class*='card'],
+.main-content [class*='panel'],
+.main-content [class*='box'] {
+  border-radius: var(--ops-radius) !important;
   background: var(--ops-panel) !important;
   border: 1px solid var(--ops-border) !important;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
-  backdrop-filter: none !important;
+  box-shadow: var(--ops-shadow-sm) !important;
 }
 
-.main-content [class*="card"]:hover,
-.main-content [class*="panel"]:hover,
-.main-content [class*="box"]:hover {
+.main-content [class*='card']:hover,
+.main-content [class*='panel']:hover,
+.main-content [class*='box']:hover {
   transform: none !important;
-  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08) !important;
+  box-shadow: var(--ops-shadow-md) !important;
 }
 
-.main-content [class*="title"] {
+.main-content [class*='title'] {
   color: var(--ops-text) !important;
   text-shadow: none !important;
 }
 
-.main-content [class*="sub"],
-.main-content [class*="desc"],
-.main-content [class*="hint"] {
+.main-content [class*='sub'],
+.main-content [class*='desc'],
+.main-content [class*='hint'] {
   color: var(--ops-text-subtle) !important;
 }
 
-.main-content [class*="metric-value"],
-.main-content [class*="stat-value"],
-.main-content [class*="kpi-value"] {
+.main-content [class*='metric-value'],
+.main-content [class*='stat-value'],
+.main-content [class*='kpi-value'] {
   color: var(--ops-text) !important;
   text-shadow: none !important;
 }
 
-.main-content [class*="metric-unit"],
-.main-content [class*="kpi-label"],
-.main-content [class*="stat-label"] {
+.main-content [class*='metric-unit'],
+.main-content [class*='kpi-label'],
+.main-content [class*='stat-label'] {
   color: var(--ops-text-subtle) !important;
 }
 
-.main-content [class*="chart"],
-.main-content [class*="legend"],
-.main-content [class*="baseline"] {
-  background: #f8fafc !important;
+.main-content [class*='chart'],
+.main-content [class*='legend'],
+.main-content [class*='baseline'] {
+  background: var(--ops-panel-soft) !important;
   border-color: var(--ops-border-soft) !important;
   box-shadow: none !important;
 }
@@ -176,26 +240,38 @@ body {
 
 .main-content .el-dialog,
 .main-content .el-message-box {
-  border-radius: 10px !important;
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.16) !important;
+  border-radius: var(--ops-radius) !important;
+  box-shadow: var(--ops-shadow-lg) !important;
 }
 
 .main-content .el-dialog__header,
 .main-content .el-message-box__header {
-  background: #f8fafc !important;
+  background: var(--ops-panel-soft) !important;
   color: var(--ops-text) !important;
 }
 
 .main-content .el-dialog__footer,
 .main-content .dialog-footer {
-  background: #f8fafc !important;
+  background: var(--ops-panel-soft) !important;
 }
 
 .main-content .el-progress__bar__inner {
   box-shadow: none !important;
 }
 
-/* Remove flashy gradients and heavy effects inherited from old pages */
-.main-content * {
-  animation-duration: 0.2s;
+/* 全局：禁止功能页 hover 位移（遗留 scoped 样式） */
+.main-content *:hover {
+  animation-duration: inherit;
+}
+
+.main-content .el-button:hover,
+.main-content [class*='card']:hover,
+.main-content [class*='btn']:hover,
+.main-content [class*='item']:hover {
+  transform: none !important;
+}
+
+.main-content .el-result,
+.main-content .el-empty {
+  padding: 24px 16px;
 }

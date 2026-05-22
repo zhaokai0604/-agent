@@ -3,7 +3,8 @@ server:
   servlet:
     context-path: /award-log
   tomcat:
-    connection-timeout: 1800000 # 30分钟超时
+    # 生产建议 120000–600000（ms）；超长仅保留给特殊导出接口时再通过反向代理单独放宽
+    connection-timeout: ${SERVER_TOMCAT_CONNECTION_TIMEOUT_MS:600000}
 
 # 中间件开关：false 时不加载 Kafka/Redis 自动配置、不尝试连接（无相关报错日志）。需要时再改为 true 或设环境变量。
 award:
@@ -14,6 +15,9 @@ award:
 spring:
   application:
     name: award-log
+  # 任意 active profile 都会合并本机 application-local.yml（QQ 授权码等，文件已在 .gitignore）
+  config:
+    import: optional:classpath:application-local.yml
   profiles:
     active: dev
   main:
@@ -36,8 +40,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${DB_URL:jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
-    # 本地测试默认值；生产务必用环境变量 DB_PASSWORD 覆盖
-    password: ${DB_PASSWORD:20070604zwk..}
+    # 仓库不设默认密码：本地复制 application-local.example.yml 为 application-local.yml 并填写，或导出 DB_PASSWORD
+    password: ${DB_PASSWORD:}
   
   # Redis Configuration
   data:
@@ -63,8 +67,8 @@ spring:
             initialize-schema: never
     openai:
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-      # 本地联调默认值；生产务必用环境变量 AI_API_KEY 覆盖，勿依赖仓库内默认值
-      api-key: ${AI_API_KEY:sk-d85baf9884424ff8b76176b6787d9056}
+      # 不设默认密钥：未配置时 Spring AI 相关 Bean 可能不完整，助手/诊断将不可用，直至设置 AI_API_KEY 或 application-local.yml
+      api-key: ${AI_API_KEY:}
       chat:
         options:
           model: qwen-plus-latest
@@ -94,8 +98,12 @@ spring:
             enable: true
             required: true
             trust: smtp.qq.com
+          connectiontimeout: 15000
+          timeout: 15000
+          writetimeout: 15000
+          # QQ 邮箱 465 为隐式 SSL，与 STARTTLS 同时开启易导致握手/发信失败；587 端口可改为 true
           starttls:
-            enable: true
+            enable: ${MAIL_STARTTLS_ENABLE:false}
         debug: false
   
   # Elasticsearch Configuration
@@ -140,7 +148,7 @@ wechat:
   
 # Email Alias
 email:
-  alias: 日志分析系统
+  alias: ThreshCore
   
 # Push Configuration
 push:
@@ -176,6 +184,11 @@ log:
         max-depth: 8
         # 模板合并最小相似度（百分比 1–100），与 Drain 论文中 st 对应；过低易误合并
         sim-threshold: 50
+      # Linux / 云原生 单行解析（代码：LogLineParseSupport + LinuxLogParseSupport；无需额外服务）
+      # 已覆盖：rsyslog 传统月日、RFC5424 &lt;PRI&gt;、journalctl JSON(__REALTIME_TIMESTAMP)、audit(msg=audit)、
+      # Docker json-file（log/stream/time）、K8s CRI（行首 RFC3339 + stdout/stderr + P/F）、Apache 时间、
+      # systemd 单元与 syslog tag[pid]；报表/CSV 展示「Linux/容器解析」摘要列，便于答辩演示
+      linux-enhanced: true
     collector:
       source-id: file-watcher
       dispatch-enabled: true
@@ -194,7 +207,9 @@ log:
         model-version: rf-onnx-v2
         alert-threshold: 0.75
 
-# Alarm Configuration
+# Alarm Configuration（日志分析邮件/企微推送）
+# 注意：推送渠道、收件人、错误阈值、冷却等以控制台「告警配置」为准，持久化在运行目录 alarm-config.json；
+# 本段仅 alarm.aggregation.* 被 AiLogAlarmServiceImpl 读取（5 分钟同类告警聚合）；error.threshold / min.severity / push.interval 当前未接入推送策略。
 alarm:
   aggregation:
     enabled: true
@@ -217,18 +232,18 @@ logging:
   level:
     com.award.log.mapper: info
 
-# Knife4j / Springdoc Configuration
+# Knife4j / SpringDoc：勿使用 group-configs 单分组，否则 /v3/api-docs 常为「聚合文档」paths 为空，Knife4j 界面无接口列表
 springdoc:
+  api-docs:
+    path: /v3/api-docs
   swagger-ui:
     path: /swagger-ui.html
     tags-sorter: alpha
     operations-sorter: alpha
-  api-docs:
-    path: /v3/api-docs
-  group-configs:
-    - group: 'default'
-      paths-to-match: '/**'
-      packages-to-scan: com.award.log.controller
+    enabled: true
+  show-actuator: false
+  packages-to-scan: com.award.log.controller
+  paths-to-match: "/**"
 
 knife4j:
   enable: true
@@ -266,28 +281,82 @@ agent:
     # Agentic 风险分：<autoMax 倾向自动执行；[autoMax, confirmMax] 需二次确认；>confirmMax 拒绝
     risk-score-auto-max: ${AGENT_RISK_AUTO_MAX:3}
     risk-score-confirm-max: ${AGENT_RISK_CONFIRM_MAX:7}
+    read-only-surface-utterance-min: ${AGENT_READ_ONLY_UTTERANCE_MIN:4.5}
+    # true：MEDIUM 意图仍收缩为只读工具面（旧行为）；false：允许智能体在 MCP 策略下调用写类工具（默认）
+    medium-intent-shrink-to-readonly: ${AGENT_MEDIUM_INTENT_READONLY:false}
+    # true：仅 LOW 意图会因高分 utterance 收缩只读；false：任意非 HIGH 均可能因 utterance 只读（更保守）
+    read-only-utterance-applies-to-low-intent-only: ${AGENT_UTTERANCE_READONLY_LOW_ONLY:true}
+    # true：Chat 多步 @Tool 路径遇工具层 MEDIUM 仍拦截；false：放行（默认，与上项配合以支持智能体改配/清理）
+    chat-agent-block-medium-tool-calls: ${AGENT_CHAT_BLOCK_MEDIUM_TOOLS:false}
+    # 只读工具面追加禁止的 MCP 工具名（逗号分隔，与 Bean 短名一致），例：DiskTool
+    read-only-extra-denied-tool-beans: ${AGENT_READ_ONLY_EXTRA_DENY_TOOLS:}
+    intent-use-ml: ${AGENT_INTENT_USE_ML:false}
+  assistant:
+    use-tool-agent-default: ${AGENT_ASSISTANT_USE_TOOLS:true}
+    tool-agent-stream-chunk-chars: ${AGENT_ASSISTANT_TOOL_CHUNK:900}
+    orchestrator:
+      enabled: ${AGENT_ORCHESTRATOR_ENABLED:true}
+      log-clean-days: ${AGENT_ORCH_LOG_DAYS:30}
+      temp-clean-days: ${AGENT_ORCH_TEMP_DAYS:7}
+      disk-pressure-percent: ${AGENT_ORCH_DISK_PCT:80}
+  trust:
+    notify-max: ${AGENT_TRUST_NOTIFY_MAX:6.0}
+  log-safety:
+    lsof-check-enabled: ${AGENT_LOG_SAFETY_LSOF:true}
   service-restart:
-    # 仅允许重启列表内服务（逗号分隔），用于演示可控「写操作」
-    allowlist: ${AGENT_SERVICE_RESTART_ALLOWLIST:nginx,rsyslog,cups}
+    # 非关键服务重启白名单；默认见 AgentOpsProperties.ServiceRestart.linuxKylinDefaults()
+    allowlist:
+      - nginx
+      - httpd
+      - rsyslog
+      - syslog-ng
+      - cups
+      - php-fpm
+      - redis
+      - tomcat
+      - grafana-server
+      - prometheus
+      - award-log
   paths:
-    policy-version: path-policy-v1
-    # Linux / 麒麟等：赛题常见日志与部署目录；采集根见 log.collector.file.path 会自动并入
-    read-prefixes: /var/log,/tmp,/var/log/journal,/opt,/usr/local,/run
-    clean-roots: /tmp,/var/tmp
-    # LogCleanupTool：仅允许在这些根下删除陈旧日志文件（与临时目录清理分离）
-    log-cleanup-roots: /var/log,/var/log/journal
-    windows-log-cleanup-roots: C:/Windows/Logs,C:/ProgramData
-    config-prefixes: /etc/nginx/,/etc/ssh/,/etc/default/,/etc/crontab,/etc/cron.
-    denied-substrings: /etc/shadow,/etc/gshadow,/.ssh,/root/,/boot/
-    privilege-prefixes: /usr/bin,/usr/sbin,/bin,/sbin,/usr/local/bin,/usr/lib
-    # Windows：读日志白名单（须覆盖默认 analyzeLogs 路径如 C:\Windows\*.log，及采集盘 D/E 等）
-    windows-read-prefixes: C:/Windows,C:/Windows/Logs,C:/ProgramData,C:/Windows/System32/winevt/Logs,C:/inetpub/logs,D:/,E:/
-    windows-clean-roots: C:/Windows/Temp,C:/Temp,D:/Temp,E:/Temp,E:/
-    windows-config-prefixes: C:/Windows/System32/drivers/etc,C:/ProgramData,C:/Windows/System32/winevt/Logs
-    windows-privilege-prefixes: C:/Windows/System32,C:/Windows/SysWOW64,C:/Program Files,C:/Program Files (x86)
+    # 默认清单见 com.award.log.config.AgentOpsProperties.Paths（麒麟/Linux 常见路径）
+    policy-version: path-policy-v2-kylin
 
 qdrant:
   url: ${QDRANT_URL:http://localhost:6333}
   collection: ${QDRANT_COLLECTION:ops_knowledge}
+
+# 主动巡检：磁盘/告警/异常日志突增/僵尸进程/Drain 新模板；WebSocket channel=patrol_alert；GET /api/ops/patrol/alerts/recent
+# 自动修复：巡检后按磁盘阈值对白名单临时目录 / 日志根执行真实清理（WebSocket channel=patrol_remediation）；生产可关 OPS_AUTO_REMEDIATION_ENABLED
+ops:
+  auto-remediation:
+    enabled: ${OPS_AUTO_REMEDIATION_ENABLED:true}
+    # HYBRID（默认）：风险分 < risk-patrol-auto-max 的步骤自动执行；≥ 该值进入待您确认（口令「确认执行」）
+    run-mode: ${OPS_AUTO_REMEDIATION_MODE:HYBRID}
+    risk-patrol-auto-max: ${OPS_AUTO_RISK_PATROL_AUTO_MAX:6.0}
+    allow-above-confirm-max-in-pending: ${OPS_AUTO_ALLOW_ABOVE_CONFIRM_MAX:false}
+    proposal-ttl-ms: ${OPS_AUTO_REMEDIATION_TTL_MS:1800000}
+    propose-temp-clean-disk-min: ${OPS_AUTO_PROPOSE_TEMP_DISK:80}
+    propose-log-clean-disk-min: ${OPS_AUTO_PROPOSE_LOG_DISK:85}
+    disk-temp-clean-min-percent: ${OPS_AUTO_DISK_TEMP_MIN:88}
+    disk-log-clean-min-percent: ${OPS_AUTO_DISK_LOG_MIN:93}
+    temp-clean-days: ${OPS_AUTO_TEMP_DAYS:7}
+    log-clean-days: ${OPS_AUTO_LOG_DAYS:30}
+    cooldown-ms: ${OPS_AUTO_REMEDIATION_COOLDOWN_MS:3600000}
+    on-log-anomaly-propose-log-clean: ${OPS_AUTO_LOG_ANOMALY_LOG_CLEAN:true}
+    on-alarm-severity-propose-log-clean: ${OPS_AUTO_ALARM_LOG_CLEAN:false}
+    cpu-pain-restart-services: ${OPS_AUTO_CPU_RESTART_SVC:}
+    cpu-restart-cpu-min-percent: ${OPS_AUTO_CPU_RESTART_MIN:85}
+  patrol:
+    enabled: ${OPS_PATROL_ENABLED:true}
+    cron: ${OPS_PATROL_CRON:0 */5 * * * ?}
+    disk-warn-percent: ${OPS_PATROL_DISK_WARN:80}
+    cpu-warn-percent: ${OPS_PATROL_CPU_WARN:85}
+    anomaly-spike-factor: ${OPS_PATROL_ANOMALY_SPIKE:2.0}
+    inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:/var/log,/tmp}
+    dedup-window-ms: ${OPS_PATROL_DEDUP_MS:900000}
+    disk-hotspot-top-n: ${OPS_PATROL_DISK_HOTSPOT_N:5}
+    error-alarm-min: ${OPS_PATROL_ERROR_ALARM_MIN:3}
+    # 启动后异步跑一次巡检，填充 correlation/latest，避免首屏空窗
+    warm-on-startup: ${OPS_PATROL_WARM_START:true}
 
 

@@ -1,5 +1,6 @@
 <template>
-  <el-card>
+  <div class="ops-page">
+  <el-card shadow="never" class="ops-surface-card">
     <template #header>
       <div class="header">
         <span>运维链路审计（接收 → 感知 → 推理 → 校验 → 执行）</span>
@@ -56,6 +57,7 @@
       <div v-else class="cot-empty">暂无数据</div>
     </el-dialog>
   </el-card>
+  </div>
 </template>
 
 <script setup>

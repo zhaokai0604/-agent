@@ -34,6 +34,8 @@ public class EnhancedLogParseResultEntity implements Serializable {
     private String desensitizedLog;     // 分级脱敏后日志内容
     private String logTime;             // 标准化时间
     private long timestamp;             // 毫秒级时间戳
+    /** 全文件行序（从 0 递增）；分片合并后写入，供 AI 上下文按时间线排序 */
+    private int sourceLineIndex = -1;
     
     // 分类特征信息
     private LogSeverityLevel severity;  // 日志等级

@@ -1,5 +1,6 @@
 package com.award.log.mcp.tools;
 
+import com.award.log.config.AgentOpsProperties;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.util.OsRuntime;
@@ -9,7 +10,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashSet;
@@ -28,25 +28,32 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
 
     private final ObjectMapper objectMapper;
     private final MinPrivilegeExecutor minPrivilegeExecutor;
-    private final Set<String> allowlist = new LinkedHashSet<>();
+    private final AgentOpsProperties agentOpsProperties;
 
     @Autowired
     public ServiceRestartTool(
             @Autowired(required = false) ExecutorService mcpToolExecutor,
             ObjectMapper objectMapper,
             MinPrivilegeExecutor minPrivilegeExecutor,
-            @Value("${agent.service-restart.allowlist:nginx,rsyslog}") String allowlistRaw) {
+            AgentOpsProperties agentOpsProperties) {
         super(mcpToolExecutor != null ? mcpToolExecutor : Executors.newCachedThreadPool());
         this.objectMapper = objectMapper;
         this.minPrivilegeExecutor = minPrivilegeExecutor;
-        if (allowlistRaw != null) {
-            for (String p : allowlistRaw.split(",")) {
+        this.agentOpsProperties = agentOpsProperties;
+    }
+
+    private Set<String> currentAllowlist() {
+        Set<String> allowlist = new LinkedHashSet<>();
+        List<String> configured = agentOpsProperties.getServiceRestart().getAllowlist();
+        if (configured != null) {
+            for (String p : configured) {
                 String t = p.trim().toLowerCase(Locale.ROOT);
                 if (!t.isEmpty()) {
                     allowlist.add(t);
                 }
             }
         }
+        return allowlist;
     }
 
     @Tool(name = "restartService",
@@ -61,6 +68,7 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
             return buildErrorResponse("serviceName 不能为空", startTime);
         }
         String unit = serviceName.trim().toLowerCase(Locale.ROOT).replace(".service", "");
+        Set<String> allowlist = currentAllowlist();
         if (!allowlist.contains(unit)) {
             return buildErrorResponse("服务不在允许重启列表内（agent.service-restart.allowlist）。当前允许: " + allowlist,
                     startTime);

@@ -1,6 +1,11 @@
 package com.award.log.service.impl;
 
+import com.award.log.analysis.AiDiagnosisContextBuilder;
+import com.award.log.analysis.GeneralLogSeverityResolver;
+import com.award.log.analysis.LinuxLogParseSupport;
+import com.award.log.analysis.LogFieldPlaceholder;
 import com.award.log.analysis.LogAnomalyHeuristics;
+import com.award.log.analysis.LogLineParseSupport;
 import com.award.log.dto.EnhancedLogParseResultEntity;
 import com.award.log.analyzer.DrainParser;
 import com.award.log.analyzer.DrainParserFactory;
@@ -27,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -179,7 +185,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 // 2. Drain-Plus（与 MCP、实时分析同源单例）
                 DrainParser drainParser = drainParserFactory.getPlusParser();
 
-                List<EnhancedLogParseResultEntity> finalResult = new CopyOnWriteArrayList<>();
+                ConcurrentHashMap<Integer, List<EnhancedLogParseResultEntity>> shardResults = new ConcurrentHashMap<>();
 
     
 
@@ -211,7 +217,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
                             List<EnhancedLogParseResultEntity> shardResult = processLogBatch(shardLines, drainParser, config, currentBatchSize, taskId);
 
-                            finalResult.addAll(shardResult);
+                            shardResults.put(shardIndex, shardResult);
 
                             
 
@@ -241,6 +247,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
     
 
+                List<EnhancedLogParseResultEntity> finalResult;
                 try {
 
                     countDownLatch.await();
@@ -249,6 +256,17 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                     if (Thread.currentThread().isInterrupted() || "CANCELLED".equals(taskStatusMap.get(taskId))) {
                         log.info("【任务取消】多线程处理被中断，任务ID: [{}]", taskId);
                         throw new InterruptedException("任务被用户取消");
+                    }
+
+                    finalResult = new ArrayList<>();
+                    for (int si = 0; si < logShards.size(); si++) {
+                        List<EnhancedLogParseResultEntity> part = shardResults.get(si);
+                        if (part != null) {
+                            finalResult.addAll(part);
+                        }
+                    }
+                    for (int li = 0; li < finalResult.size(); li++) {
+                        finalResult.get(li).setSourceLineIndex(li);
                     }
 
                     log.info("【多线程处理结束】累计解析条目: [{}]", finalResult.size());
@@ -383,8 +401,9 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                                 anomalyLogsSummary.append("[时间: ").append(anomalyLog.getLogTime())
                                         .append("][等级: ").append(anomalyLog.getSeverity().getSeverityCnName())
                                         .append("][原因: ").append(String.join("| ", anomalyLog.getAnomalyReasons()))
-                                        .append("][内容: ").append(anomalyLog.getDesensitizedLog().substring(0, Math.min(200, anomalyLog.getDesensitizedLog().length())))
-                                        .append("...\n");
+                                        .append("][内容: ").append(AiDiagnosisContextBuilder.truncateForPrompt(
+                                                anomalyLog.getDesensitizedLog(), AiDiagnosisContextBuilder.ALARM_LOG_SNIPPET_CHARS))
+                                        .append("\n");
                             }
                         }
                         
@@ -507,12 +526,17 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             String processedLine = l.trim();
             // 清洗日志内容（使用默认清洗规则）
             processedLine = logCleaner.cleanLog(processedLine, com.award.log.analyzer.DefaultCleanRules.getDefaultRules());
-            LogSeverityLevel severity = identifySeverity(processedLine);
-            LogProtocolType protocol = identifyProtocol(processedLine);
+            LogSeverityLevel severity = GeneralLogSeverityResolver.resolve(processedLine);
+            LogProtocolType protocol = LogLineParseSupport.detectProtocol(processedLine);
             
-            // 针对不同协议的特殊提取逻辑
-            String timeStr = extractLogTime(processedLine, protocol);
-            long timestamp = parseTimestamp(timeStr);
+            // 针对不同协议的特殊提取逻辑（含 Linux syslog / journal / Apache 等）
+            String timeStr = LogLineParseSupport.extractNormalizedTimeString(processedLine);
+            if (timeStr == null || timeStr.isBlank()) {
+                timeStr = LogFieldPlaceholder.TIME_UNPARSED;
+            }
+            long timestamp = LogFieldPlaceholder.TIME_UNPARSED.equals(timeStr)
+                    ? 0L
+                    : LogLineParseSupport.toEpochMillis(timeStr);
             
             // 尝试提取 Windows 事件 ID
             String eventId = "N/A";
@@ -538,14 +562,30 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             res.setTemplateId(drainParser.parse(processedLine));
             res.setLogTime(timeStr);
             res.setTimestamp(timestamp);
-            res.setPid(eventId); // 复用 PID 字段存储 Event ID
+            if (protocol == LogProtocolType.WINDOWS_EVENT_LOG) {
+                res.setPid(eventId);
+            } else {
+                String tagPid = LinuxLogParseSupport.extractTagPid(processedLine);
+                if (tagPid != null) {
+                    res.setPid(tagPid);
+                } else {
+                    String extPid = extractPid(processedLine);
+                    res.setPid("未提取".equals(extPid) ? "N/A" : extPid);
+                }
+            }
             res.setUid(extractUid(processedLine));
             res.setTraceId(extractTraceId(processedLine));
             res.setStackTrace(extractStackTrace(processedLine));
+
+            LinuxLogParseSupport.enrichContainerHints(res.getFeatureMap(), processedLine);
+            if (protocol == LogProtocolType.LINUX_SYSTEM_LOG) {
+                LinuxLogParseSupport.enrichFeatureMap(res.getFeatureMap(), processedLine, protocol);
+            }
             
-            // 如果是 Error 且是 Windows 日志，自动添加 AI 建议模拟
-            if (severity == LogSeverityLevel.ERROR_LEVEL || severity == LogSeverityLevel.FATAL_LEVEL) {
-                res.getAnomalyReasons().add("系统组件异常，建议检查驱动或最近安装的软件");
+            // 仅 Windows 事件风格日志追加处置提示，避免应用 ERROR 行被误标成「驱动」类根因
+            if ((severity == LogSeverityLevel.ERROR_LEVEL || severity == LogSeverityLevel.FATAL_LEVEL)
+                    && protocol == LogProtocolType.WINDOWS_EVENT_LOG) {
+                res.getAnomalyReasons().add("Windows 事件：建议结合事件 ID / 来源组件排查驱动或系统变更");
             }
             
             return res;
@@ -711,75 +751,6 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     private void calcComprehensiveAnomalyScore(List<EnhancedLogParseResultEntity> resultList, String taskId) {
         checkCancelStatus(taskId);
         LogAnomalyHeuristics.calcComprehensiveAnomalyScore(resultList);
-    }
-
-    /**
-     * 智能识别日志协议类型
-     */
-    private LogProtocolType identifyProtocol(String logLine) {
-        String lowerLog = logLine.toLowerCase();
-        // 检查 Windows 结构: 以级别关键字开头，后跟日期
-        if (logLine.matches("^(信息|警告|错误|关键|Information|Warning|Error|Critical)\\s+\\d{4}[/-]\\d{1,2}[/-]\\d{1,2}.*")) {
-            return LogProtocolType.WINDOWS_EVENT_LOG;
-        }
-
-        if (lowerLog.contains("kernel") || lowerLog.contains("sshd") || lowerLog.contains("cron") || lowerLog.matches("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}.*")) {
-            return LogProtocolType.LINUX_SYSTEM_LOG;
-        } else if (lowerLog.contains("<event") || lowerLog.contains("microsoft-windows") || lowerLog.contains("事件id")) {
-            return LogProtocolType.WINDOWS_EVENT_LOG;
-        } else if (lowerLog.contains("traceid") || lowerLog.contains("exception") || lowerLog.contains("controller") || lowerLog.contains("requestid")) {
-            return LogProtocolType.APPLICATION_LOG;
-        } else if (lowerLog.contains("sql") || lowerLog.contains("mysql") || lowerLog.contains("oracle") || lowerLog.contains("select|insert|update|delete")) {
-            return LogProtocolType.DATABASE_LOG;
-        } else if (lowerLog.contains("ip:") || lowerLog.contains("port:") || lowerLog.contains("tcp") || lowerLog.contains("udp") || lowerLog.contains("packet")) {
-            return LogProtocolType.NETWORK_DEVICE_LOG;
-        } else {
-            return LogProtocolType.UNIVERSAL_TEXT_LOG;
-        }
-    }
-
-    /**
-     * 识别日志严重程度等级
-     */
-    private LogSeverityLevel identifySeverity(String logLine) {
-        String lowerLog = logLine.toLowerCase();
-        // Windows 事件日志等级
-        if (lowerLog.startsWith("关键") || lowerLog.contains("critical")) return LogSeverityLevel.FATAL_LEVEL;
-        if (lowerLog.startsWith("错误") || lowerLog.contains("error")) return LogSeverityLevel.ERROR_LEVEL;
-        if (lowerLog.startsWith("警告") || lowerLog.contains("warning")) return LogSeverityLevel.WARNING_LEVEL;
-        if (lowerLog.startsWith("信息") || lowerLog.contains("information")) return LogSeverityLevel.INFO_LEVEL;
-        if (lowerLog.startsWith("详细") || lowerLog.contains("verbose")) return LogSeverityLevel.DEBUG_LEVEL;
-
-        if (lowerLog.contains("fatal") || lowerLog.contains("致命")) return LogSeverityLevel.FATAL_LEVEL;
-        else if (lowerLog.contains("error") || lowerLog.contains("错误") || lowerLog.contains("failed") || lowerLog.contains("失败")) return LogSeverityLevel.ERROR_LEVEL;
-        else if (lowerLog.contains("warn") || lowerLog.contains("警告") || lowerLog.contains("timeout") || lowerLog.contains("超时")) return LogSeverityLevel.WARNING_LEVEL;
-        else if (lowerLog.contains("info") || lowerLog.contains("信息") || lowerLog.contains("started") || lowerLog.contains("启动")) return LogSeverityLevel.INFO_LEVEL;
-        else if (lowerLog.contains("debug") || lowerLog.contains("调试")) return LogSeverityLevel.DEBUG_LEVEL;
-        else return LogSeverityLevel.UNKNOWN_LEVEL;
-    }
-
-    /**
-     * 提取日志发生时间
-     */
-    private String extractLogTime(String logLine, LogProtocolType protocol) {
-        Pattern stdPattern = Pattern.compile("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}");
-        Matcher stdM = stdPattern.matcher(logLine);
-        if (stdM.find()) return stdM.group();
-        Pattern winPattern = Pattern.compile("\\d{1,2}/\\d{1,2}/\\d{4}\\s+\\d{1,2}:\\d{2}:\\d{2}");
-        Matcher winM = winPattern.matcher(logLine);
-        if (winM.find()) return winM.group();
-        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
-    }
-
-    /**
-     * 解析时间戳
-     */
-    private long parseTimestamp(String timeStr) {
-        try {
-            return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(timeStr).getTime();
-        } catch (Exception e) {
-            return System.currentTimeMillis();
-        }
     }
 
     /**
@@ -959,13 +930,15 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         });
         html.append("]}]});</script>");
         html.append("<h2 style=\"color:#1E88E5;margin:30px 0 10px;\">异常日志详情（前50条，故障定位核心）</h2>")
-                .append("<table><tr><th>日志时间</th><th>风险等级</th><th>日志协议</th><th>进程ID</th><th>异常原因</th><th>异常得分</th><th>脱敏日志内容</th></tr>");
+                .append("<table><tr><th>日志时间</th><th>风险等级</th><th>日志协议</th><th>进程/标签</th><th>Linux/容器解析</th><th>异常原因</th><th>异常得分</th><th>脱敏日志内容</th></tr>");
         resultList.stream().filter(EnhancedLogParseResultEntity::isAnomaly).limit(50).forEach(res -> {
             html.append("<tr>")
                     .append(String.format("<td>%s</td>", res.getLogTime() == null ? "未知" : res.getLogTime()))
                     .append(String.format("<td style=\"color:%s;font-weight:bold;\">%s</td>", res.getSeverity().getColorCode(), res.getSeverity().getSeverityCnName()))
                     .append(String.format("<td>%s</td>", res.getProtocol().getProtocolDesc()))
                     .append(String.format("<td>%s</td>", res.getPid()))
+                    .append(String.format("<td style=\"max-width:220px;font-size:12px;\">%s</td>",
+                            escapeHtml(LinuxLogParseSupport.formatParsedExtrasSummary(res.getFeatureMap()))))
                     .append(String.format("<td>%s</td>", String.join(" | ", res.getAnomalyReasons())))
                     .append(String.format("<td>%.2f</td>", res.getAnomalyScore()))
                     .append(String.format("<td style=\"max-width:500px;word-break:break-all;\">%s</td>", res.getDesensitizedLog()))
@@ -989,7 +962,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         String csvPath = config.outputDir + File.separator + "log_analysis_result.csv";
         try (BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(csvPath), StandardCharsets.UTF_8))) {
             bw.write('\ufeff');
-            bw.write("日志时间,风险等级,日志协议,进程ID,用户ID,调用链ID,是否异常,异常原因,异常得分,风险加权得分,脱敏日志内容");
+            bw.write("日志时间,风险等级,日志协议,进程ID,Linux容器解析,用户ID,调用链ID,是否异常,异常原因,异常得分,风险加权得分,脱敏日志内容");
             bw.newLine();
             for (EnhancedLogParseResultEntity res : resultList) {
                 List<String> fields = new ArrayList<>();
@@ -997,6 +970,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 fields.add(escapeCsv(res.getSeverity().getSeverityCnName()));
                 fields.add(escapeCsv(res.getProtocol().getProtocolDesc()));
                 fields.add(escapeCsv(res.getPid()));
+                fields.add(escapeCsv(LinuxLogParseSupport.formatParsedExtrasSummary(res.getFeatureMap())));
                 fields.add(escapeCsv(res.getUid()));
                 fields.add(escapeCsv(res.getTraceId()));
                 fields.add(escapeCsv(res.isAnomaly() ? "是" : "否"));
@@ -1008,6 +982,13 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 bw.newLine();
             }
         }
+    }
+
+    private static String escapeHtml(String s) {
+        if (s == null || s.isEmpty()) {
+            return "";
+        }
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
     /**

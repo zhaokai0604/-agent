@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.LogSafetyClassifier;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.util.OsRuntime;
@@ -29,17 +30,20 @@ public class LogCleanupTool extends AbstractCommandExecutor {
     private final ObjectMapper objectMapper;
     private final MinPrivilegeExecutor minPrivilegeExecutor;
     private final OpsPathPolicy opsPathPolicy;
+    private final LogSafetyClassifier logSafetyClassifier;
 
     @Autowired
     public LogCleanupTool(
             @Autowired(required = false) ExecutorService mcpToolExecutor,
             ObjectMapper objectMapper,
             MinPrivilegeExecutor minPrivilegeExecutor,
-            OpsPathPolicy opsPathPolicy) {
+            OpsPathPolicy opsPathPolicy,
+            LogSafetyClassifier logSafetyClassifier) {
         super(mcpToolExecutor != null ? mcpToolExecutor : Executors.newCachedThreadPool());
         this.objectMapper = objectMapper;
         this.minPrivilegeExecutor = minPrivilegeExecutor;
         this.opsPathPolicy = opsPathPolicy;
+        this.logSafetyClassifier = logSafetyClassifier;
     }
 
     @Tool(name = "cleanupOldLogs",
@@ -93,10 +97,14 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                 }
             }
 
+            LogSafetyClassifier.FilterResult filtered = logSafetyClassifier.filterDeletable(fileList);
+            List<String> deletable = filtered.allowed();
+            int protectedSkipped = fileList.size() - deletable.size();
+
             int filesDeleted = 0;
             List<String> previewFiles = new ArrayList<>();
             if (!isDryRun) {
-                for (String file : fileList) {
+                for (String file : deletable) {
                     AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
                     if (delResult.success()) {
                         filesDeleted++;
@@ -104,20 +112,21 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                 }
             }
 
-            int previewCount = Math.min(fileList.size(), 25);
+            int previewCount = Math.min(deletable.size(), 25);
             for (int i = 0; i < previewCount; i++) {
-                previewFiles.add(fileList.get(i));
+                previewFiles.add(deletable.get(i));
             }
 
             String data;
             if (isDryRun) {
                 data = String.format(
-                        "{\"mode\":\"DRY-RUN\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"previewCount\":%d,\"preview\":%s,\"note\":\"仅列出候选。真实删除：dryRun=false 且 confirmDelete=true\"}",
-                        jsonEscape(targetPath), targetDays, fileList.size(), previewCount, toJsonArray(previewFiles));
+                        "{\"mode\":\"DRY-RUN\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"previewCount\":%d,\"preview\":%s,\"protectedSamples\":%s,\"note\":\"仅列出可删除候选；受保护文件已排除。真实删除：dryRun=false 且 confirmDelete=true\"}",
+                        jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
+                        previewCount, toJsonArray(previewFiles), toJsonArray(truncateDenied(filtered.deniedReasons(), 8)));
             } else {
                 data = String.format(
-                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d}",
-                        jsonEscape(targetPath), targetDays, fileList.size(), filesDeleted);
+                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d}",
+                        jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped, filesDeleted);
             }
             return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
         } catch (Exception e) {
@@ -157,10 +166,14 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                     isDryRun ? "DRY-RUN" : "DELETE", jsonEscape(targetPath), targetDays);
             return buildSuccessResponse(data, duration, false);
         }
+        LogSafetyClassifier.FilterResult filtered = logSafetyClassifier.filterDeletable(fileList);
+        List<String> deletable = filtered.allowed();
+        int protectedSkipped = fileList.size() - deletable.size();
+
         int filesDeleted = 0;
         List<String> previewFiles = new ArrayList<>();
         if (!isDryRun) {
-            for (String file : fileList) {
+            for (String file : deletable) {
                 String f = file.replace("'", "''");
                 AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
                         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
@@ -170,19 +183,20 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                 }
             }
         }
-        int previewCount = Math.min(fileList.size(), 25);
+        int previewCount = Math.min(deletable.size(), 25);
         for (int i = 0; i < previewCount; i++) {
-            previewFiles.add(fileList.get(i));
+            previewFiles.add(deletable.get(i));
         }
         String data;
         if (isDryRun) {
             data = String.format(
-                    "{\"mode\":\"DRY-RUN\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"previewCount\":%d,\"preview\":%s,\"platform\":\"windows\"}",
-                    jsonEscape(targetPath), targetDays, fileList.size(), previewCount, toJsonArray(previewFiles));
+                    "{\"mode\":\"DRY-RUN\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"previewCount\":%d,\"preview\":%s,\"protectedSamples\":%s,\"platform\":\"windows\"}",
+                    jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
+                    previewCount, toJsonArray(previewFiles), toJsonArray(truncateDenied(filtered.deniedReasons(), 8)));
         } else {
             data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"platform\":\"windows\"}",
-                    jsonEscape(targetPath), targetDays, fileList.size(), filesDeleted);
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"platform\":\"windows\"}",
+                    jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped, filesDeleted);
         }
         return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
     }
@@ -196,6 +210,13 @@ public class LogCleanupTool extends AbstractCommandExecutor {
 
     private String toJsonArray(List<String> list) throws JsonProcessingException {
         return objectMapper.writeValueAsString(list);
+    }
+
+    private static List<String> truncateDenied(List<String> denied, int max) {
+        if (denied == null || denied.isEmpty()) {
+            return List.of();
+        }
+        return denied.size() <= max ? denied : denied.subList(0, max);
     }
 
     private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {

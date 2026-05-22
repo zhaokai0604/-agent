@@ -1,7 +1,6 @@
 package com.award.log.controller;
 
-import com.award.log.dto.EnhancedLogParseResultEntity;
-import com.award.log.model.LogSeverityLevel;
+import com.award.log.analysis.AiDiagnosisContextBuilder;
 import com.award.log.service.AiDiagnosisService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
@@ -14,9 +13,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import static org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE;
 
@@ -48,7 +45,9 @@ public class AiDiagnosisController {
             } catch (Exception ignored) {}
             return emitter;
         }
-        final String message = rawMessage.length() > 4000 ? rawMessage.substring(0, 4000) : rawMessage;
+        final String message = rawMessage.length() > AiDiagnosisContextBuilder.CHAT_USER_MESSAGE_MAX_CHARS
+                ? rawMessage.substring(0, AiDiagnosisContextBuilder.CHAT_USER_MESSAGE_MAX_CHARS)
+                : rawMessage;
         log.info("收到 AI 运维对话请求: [{}]", message);
         SseEmitter emitter = new SseEmitter(180000L);
         sseExecutor.execute(() -> {
@@ -105,19 +104,12 @@ public class AiDiagnosisController {
                 return emitter;
             }
 
-            // 筛选异常日志
-            List<EnhancedLogParseResultEntity> anomalies = task.getResult().stream()
-                    .filter(l -> l.isAnomaly() || l.getSeverity() == LogSeverityLevel.ERROR_LEVEL || l.getSeverity() == LogSeverityLevel.FATAL_LEVEL)
-                    .sorted((o1, o2) -> Double.compare(o2.getAnomalyScore(), o1.getAnomalyScore()))
-                    .limit(15)
-                    .collect(Collectors.toList());
-
-            log.info("任务 [{}] 提取到 [{}] 条关键异常用于流式诊断", taskId, anomalies.size());
+            log.info("任务 [{}] 使用完整解析结果进行流式诊断（多样模板 + 正常对照）", taskId);
             
             sseExecutor.execute(() -> {
                 StringBuilder fullResponse = new StringBuilder();
                 try {
-                    aiDiagnosisService.generateDiagnosisStream(anomalies)
+                    aiDiagnosisService.generateDiagnosisStreamFromFullResult(task.getResult())
                             .doOnNext(chunk -> {
                                 try {
                                     if (chunk != null) {

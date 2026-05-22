@@ -36,6 +36,14 @@ public class SysUserServiceImpl implements SysUserService {
     }
 
     @Override
+    public SysUser getUserByEmail(String email) {
+        if (email == null || email.isBlank()) {
+            return null;
+        }
+        return sysUserMapper.selectByEmail(email.trim());
+    }
+
+    @Override
     public List<SysUser> getAllUsers() {
         return sysUserMapper.selectAll();
     }
@@ -53,6 +61,11 @@ public class SysUserServiceImpl implements SysUserService {
         // 检查用户名是否已存在
         if (sysUserMapper.selectByUsername(user.getUsername()) != null) {
             log.warn("用户名已存在: {}", user.getUsername());
+            return null;
+        }
+        if (user.getEmail() != null && !user.getEmail().isBlank()
+                && sysUserMapper.selectByEmail(user.getEmail().trim()) != null) {
+            log.warn("邮箱已被注册: {}", user.getEmail());
             return null;
         }
 

@@ -1,27 +1,64 @@
 <template>
   <div class="login-container">
-    <div class="background-animation">
-      <div class="bg-shape shape-1"></div>
-      <div class="bg-shape shape-2"></div>
-      <div class="bg-shape shape-3"></div>
+    <div class="tc-bg" aria-hidden="true">
+      <div class="tc-bg-gradient" />
+      <div class="tc-bg-grid" />
+      <div class="tc-bg-orb tc-bg-orb-a" />
+      <div class="tc-bg-orb tc-bg-orb-b" />
     </div>
-    
-    <div class="container" :class="{ slide: isRegister }">
-      <!-- 登录表单 -->
-      <div class="panel login-panel">
-        <div class="brand-section">
-          <div class="logo-container">
-            <div class="logo-icon">
-              <svg viewBox="0 0 24 24" width="40" height="40"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-            </div>
-            <div class="logo-text">
-              <h2 class="title">运维工作台</h2>
-              <p class="subtitle">Linux 节点 · 本地工具 · 审计与日志</p>
-            </div>
+
+    <div class="tc-shell">
+      <aside class="tc-hero">
+        <div class="tc-hero-mark">
+          <div class="tc-hero-logo-wrap" aria-hidden="true">
+            <img
+              src="/threshcore-logo.png"
+              alt=""
+              class="tc-hero-logo"
+            />
+          </div>
+          <div class="tc-hero-copy">
+            <h1 class="tc-hero-title">ThreshCore</h1>
+            <p class="tc-hero-tag">统一运维与日志智能分析</p>
           </div>
         </div>
-        
-        <div class="form-section">
+        <p class="tc-hero-lead">
+          账号密码登录；可在个人中心绑定邮箱，用于告警与推送。
+        </p>
+        <ul class="tc-hero-list">
+          <li>本地与受控节点协同</li>
+          <li>任务、报告与链路可追溯</li>
+          <li>对话与工具在策略内执行</li>
+        </ul>
+        <div class="tc-hero-foot">ThreshCore · 智能运维与日志分析平台</div>
+      </aside>
+
+      <main class="tc-card">
+        <div class="tc-seg" role="tablist" aria-label="登录或注册">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="!isRegister"
+            class="tc-seg-btn"
+            :class="{ active: !isRegister }"
+            @click="isRegister = false"
+          >
+            登录
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="isRegister"
+            class="tc-seg-btn"
+            :class="{ active: isRegister }"
+            @click="isRegister = true"
+          >
+            注册
+          </button>
+        </div>
+
+        <!-- 登录表单 -->
+        <div v-show="!isRegister" class="form-section tc-form-section">
           <div class="form-group">
             <div class="input-container">
               <div class="input-icon">
@@ -76,39 +113,26 @@
           
           <div class="form-footer">
             <div class="agreement">
-              <label class="checkbox-container">
-                <input type="checkbox" v-model="loginForm.agree">
+              <label class="checkbox-container" :class="{ 'checkbox-readonly': !protocolReadConfirmed }">
+                <input type="checkbox" v-model="loginForm.agree" :disabled="!protocolReadConfirmed">
                 <span class="checkmark"></span>
-                <span class="label-text">我已阅读并同意<a href="javascript:;" class="agreement-link">《用户服务协议》</a></span>
+                <span class="label-text">我已阅读并同意<a href="#" class="agreement-link" @click.prevent="agreementVisible = true">《用户服务协议》</a></span>
               </label>
+              <p v-if="!protocolReadConfirmed" class="agreement-prereq">请先点击协议链接，滑动阅读至文末并点击「我已阅读并同意」，再勾选此项。</p>
             </div>
             <div class="forgot-password">
               <a href="javascript:;" class="forgot-link" @click="showForgotPassword = true">忘记密码？</a>
             </div>
           </div>
           
-          <button class="btn login-btn" @click="handleLogin" :disabled="!loginForm.agree">
+          <button class="btn login-btn" @click="handleLogin" :disabled="!loginForm.agree || !protocolReadConfirmed">
             <span>登录</span>
             <el-icon class="btn-icon"><ArrowRight /></el-icon>
           </button>
         </div>
-      </div>
 
-      <!-- 注册表单 -->
-      <div class="panel register-panel">
-        <div class="brand-section">
-          <div class="logo-container">
-            <div class="logo-icon">
-              <svg viewBox="0 0 24 24" width="40" height="40"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-            </div>
-            <div class="logo-text">
-              <h2 class="title">运维工作台</h2>
-              <p class="subtitle">Linux 节点 · 本地工具 · 审计与日志</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="form-section">
+        <!-- 注册表单 -->
+        <div v-show="isRegister" class="form-section tc-form-section">
           <div class="form-group">
             <div class="input-container">
               <div class="input-icon">
@@ -188,45 +212,20 @@
           </div>
           
           <div class="agreement">
-            <label class="checkbox-container">
-              <input type="checkbox" v-model="registerForm.agree">
+            <label class="checkbox-container" :class="{ 'checkbox-readonly': !protocolReadConfirmed }">
+              <input type="checkbox" v-model="registerForm.agree" :disabled="!protocolReadConfirmed">
               <span class="checkmark"></span>
-              <span class="label-text">我已阅读并同意<a href="javascript:;" class="agreement-link">《用户服务协议》</a></span>
+              <span class="label-text">我已阅读并同意<a href="#" class="agreement-link" @click.prevent="agreementVisible = true">《用户服务协议》</a></span>
             </label>
+            <p v-if="!protocolReadConfirmed" class="agreement-prereq">请先完成《用户服务协议》全文阅读并确认，再勾选此项。</p>
           </div>
           
-          <button class="btn register-btn" @click="handleRegister" :disabled="!registerForm.agree">
-            <span>注册</span>
+          <button class="btn register-btn" @click="handleRegister" :disabled="!registerForm.agree || !protocolReadConfirmed">
+            <span>创建账号</span>
             <el-icon class="btn-icon"><Check /></el-icon>
           </button>
         </div>
-      </div>
-
-      <!-- 滑动切换面板 -->
-      <div class="slide-panel">
-        <div class="slide-content" v-if="!isRegister">
-          <div class="slide-icon">
-            <el-icon><UserFilled /></el-icon>
-          </div>
-          <h3>还没有账号？</h3>
-          <p>注册一个新账号，开始使用日志分析系统</p>
-          <button class="btn switch-btn" @click="isRegister = true">
-            <span>立即注册</span>
-            <el-icon class="btn-icon"><ArrowRight /></el-icon>
-          </button>
-        </div>
-        <div class="slide-content" v-else>
-          <div class="slide-icon">
-            <el-icon><Key /></el-icon>
-          </div>
-          <h3>已有账号？</h3>
-          <p>登录您的账号，继续使用日志分析系统</p>
-          <button class="btn switch-btn" @click="isRegister = false">
-            <span>立即登录</span>
-            <el-icon class="btn-icon"><ArrowRight /></el-icon>
-          </button>
-        </div>
-      </div>
+      </main>
     </div>
   </div>
   
@@ -329,13 +328,24 @@
       </div>
     </template>
   </el-dialog>
+
+  <UserServiceAgreement v-model="agreementVisible" @read-confirmed="onProtocolReadConfirmed" />
 </template>
 
 <script setup>
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { User, Lock, Check, Close, View, Hide, ArrowRight, UserFilled, Key } from '@element-plus/icons-vue'
+import { User, Lock, Check, Close, View, Hide, ArrowRight } from '@element-plus/icons-vue'
 import { login, register, checkUserExists, resetPassword } from '../api'
+import UserServiceAgreement from './UserServiceAgreement.vue'
+
+const agreementVisible = ref(false)
+/** 用户在本页已滑动读完协议并点击确认后，才可勾选同意与登录/注册 */
+const protocolReadConfirmed = ref(false)
+
+function onProtocolReadConfirmed() {
+  protocolReadConfirmed.value = true
+}
 
 // 定义事件
 const emit = defineEmits(['login-success'])
@@ -612,15 +622,20 @@ const handleLogin = async () => {
     ElMessage.error('请输入密码')
     return
   }
+  if (!protocolReadConfirmed.value) {
+    ElMessage.warning('请先阅读《用户服务协议》全文并确认')
+    agreementVisible.value = true
+    return
+  }
   if (!loginForm.agree) {
-    ElMessage.error('请同意用户服务协议')
+    ElMessage.error('请勾选同意用户服务协议')
     return
   }
   if (loginForm.accountTip.error || loginForm.pwdTip.error) {
     ElMessage.error('账号或密码格式不正确')
     return
   }
-  
+
   try {
     // 调用登录 API
     const response = await login({
@@ -663,8 +678,13 @@ const handleRegister = async () => {
     ElMessage.error('请确认密码')
     return
   }
+  if (!protocolReadConfirmed.value) {
+    ElMessage.warning('请先阅读《用户服务协议》全文并确认')
+    agreementVisible.value = true
+    return
+  }
   if (!registerForm.agree) {
-    ElMessage.error('请同意用户服务协议')
+    ElMessage.error('请勾选同意用户服务协议')
     return
   }
   if (registerForm.accountTip.error || registerForm.pwdTip.error || registerForm.repwdTip.error) {
@@ -674,7 +694,7 @@ const handleRegister = async () => {
   
   try {
     // 调用注册 API
-    const response = await register({
+    await register({
       username: registerForm.username,
       password: registerForm.password
     })
@@ -785,199 +805,256 @@ const handleResetPassword = async () => {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Roboto', 'Microsoft Yahei', sans-serif;
 }
 
-/* 登录容器 */
 .login-container {
+  --tc-accent: #22d3ee;
+  --tc-accent-dim: rgba(34, 211, 238, 0.14);
+  --tc-surface: rgba(15, 23, 42, 0.78);
+  --tc-border: rgba(148, 163, 184, 0.16);
+  --tc-text: #e2e8f0;
+  --tc-muted: #94a3b8;
   min-height: 100vh;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
   position: relative;
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(16px, 4vw, 40px);
+  font-family: ui-sans-serif, 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--tc-text);
+  overflow-x: hidden;
 }
 
-/* 背景动画 */
-.background-animation {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+.tc-bg {
+  position: fixed;
+  inset: 0;
   z-index: 0;
+  background: #020617;
 }
 
-.bg-shape {
+.tc-bg-gradient {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 120% 80% at 15% 0%, rgba(34, 211, 238, 0.14), transparent 52%),
+    radial-gradient(ellipse 90% 55% at 100% 90%, rgba(129, 140, 248, 0.18), transparent 48%),
+    linear-gradient(168deg, #0f172a 0%, #020617 52%, #0a0f1a 100%);
+}
+
+.tc-bg-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.4;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.055) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 75% 65% at 50% 38%, black, transparent);
+}
+
+.tc-bg-orb {
   position: absolute;
   border-radius: 50%;
-  opacity: 0.1;
-  animation: float 20s infinite ease-in-out;
+  filter: blur(88px);
+  opacity: 0.42;
+  pointer-events: none;
 }
 
-.shape-1 {
-  width: 300px;
-  height: 300px;
-  background: #4fc3f7;
-  top: -50px;
-  left: -50px;
-  animation-delay: 0s;
+.tc-bg-orb-a {
+  width: min(400px, 52vw);
+  height: min(400px, 52vw);
+  top: -12%;
+  left: -8%;
+  background: rgba(34, 211, 238, 0.18);
+  opacity: 0.35;
 }
 
-.shape-2 {
-  width: 200px;
-  height: 200px;
-  background: #29b6f6;
-  bottom: -50px;
-  right: -50px;
-  animation-delay: -10s;
+.tc-bg-orb-b {
+  width: min(340px, 48vw);
+  height: min(340px, 48vw);
+  bottom: -10%;
+  right: -6%;
+  background: rgba(129, 140, 248, 0.16);
+  opacity: 0.3;
 }
 
-.shape-3 {
-  width: 150px;
-  height: 150px;
-  background: #81d4fa;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  animation-delay: -5s;
-}
-
-@keyframes float {
-  0%, 100% {
+@keyframes tc-drift {
+  0%,
+  100% {
     transform: translate(0, 0) scale(1);
   }
-  25% {
-    transform: translate(50px, -50px) scale(1.1);
-  }
   50% {
-    transform: translate(0, 100px) scale(0.9);
-  }
-  75% {
-    transform: translate(-50px, -50px) scale(1.05);
+    transform: translate(20px, -18px) scale(1.04);
   }
 }
 
-/* 主容器 */
-.container {
-  width: 900px;
-  height: 600px;
-  background: #fff;
-  border-radius: 20px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+.tc-shell {
   position: relative;
-  overflow: hidden;
   z-index: 1;
-  transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 100%;
+  max-width: 1024px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(340px, 1.12fr);
+  gap: 0;
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 28px 90px rgba(0, 0, 0, 0.5);
 }
 
-/* 面板样式 */
-.panel {
-  width: 50%;
-  height: 100%;
-  position: absolute;
-  top: 0;
-  transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
-  padding: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
-.login-panel {
-  left: 0;
-  background: #fff;
-}
-
-.register-panel {
-  right: 0;
-  background: #fff;
-}
-
-/* 滑动面板 */
-.slide-panel {
-  width: 50%;
-  height: 100%;
-  position: absolute;
-  top: 0;
-  left: 50%;
-  background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
-  color: #fff;
-  transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+.tc-hero {
+  padding: clamp(24px, 4.5vw, 44px);
+  background: linear-gradient(185deg, rgba(15, 23, 42, 0.98) 0%, rgba(12, 18, 32, 0.92) 100%);
+  border-right: 1px solid var(--tc-border);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  align-items: center;
-  padding: 60px;
-  text-align: center;
-  box-shadow: -5px 0 25px rgba(0, 0, 0, 0.1);
+  gap: 18px;
 }
 
-.container.slide .slide-panel {
-  left: 0;
-  box-shadow: 5px 0 25px rgba(0, 0, 0, 0.1);
-}
-
-.container.slide .login-panel {
-  left: -50%;
-}
-
-.container.slide .register-panel {
-  right: 0;
-}
-
-/* 品牌部分 */
-.brand-section {
-  padding: 40px 35px 20px;
-  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-}
-
-.logo-container {
+.tc-hero-mark {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
-.logo-icon {
-  color: #4fc3f7;
-  display: flex;
-  font-size: 28px;
-  transition: transform 0.3s ease;
+.tc-hero-logo-wrap {
+  flex-shrink: 0;
+  width: 72px;
+  height: 72px;
+  overflow: hidden;
+  border-radius: 10px;
+  filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.14));
 }
 
-.logo-icon:hover {
-  transform: scale(1.1) rotate(5deg);
+.tc-hero-logo {
+  display: block;
+  width: 72px;
+  height: auto;
+  margin-top: -2px;
+  object-fit: contain;
+  object-position: top center;
 }
 
-.logo-text {
+.tc-hero-copy {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
-.title {
-  font-size: 28px;
+.tc-hero-title {
+  font-size: clamp(1.35rem, 2.6vw, 1.65rem);
   font-weight: 700;
-  color: #1a237e;
-  margin: 0 0 8px 0;
-  text-shadow: 0 2px 4px rgba(26, 35, 126, 0.1);
-}
-
-.subtitle {
-  font-size: 14px;
-  color: #607d8b;
+  letter-spacing: -0.02em;
+  color: #f8fafc;
+  line-height: 1.2;
   margin: 0;
-  font-weight: 400;
 }
 
-/* 表单部分 */
-.form-section {
+.tc-hero-tag {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tc-muted);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.tc-hero-lead {
+  font-size: 13px;
+  line-height: 1.65;
+  color: #cbd5e1;
+  max-width: 36ch;
+}
+
+.tc-hero-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 12px;
+  color: var(--tc-muted);
+}
+
+.tc-hero-list li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.tc-hero-list li::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tc-accent);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.55);
+  flex-shrink: 0;
+}
+
+.tc-hero-foot {
+  margin-top: auto;
+  padding-top: 14px;
+  font-size: 11px;
+  color: #64748b;
+  letter-spacing: 0.03em;
+}
+
+.tc-card {
+  background: var(--tc-surface);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  padding: clamp(22px, 3.8vw, 34px);
+  display: flex;
+  flex-direction: column;
+  min-height: min(620px, 90vh);
+}
+
+.tc-seg {
+  display: flex;
+  padding: 3px;
+  border-radius: 11px;
+  background: rgba(2, 6, 23, 0.5);
+  border: 1px solid var(--tc-border);
+  margin-bottom: 22px;
+  flex-shrink: 0;
+}
+
+.tc-seg-btn {
   flex: 1;
-  padding: 35px;
+  border: none;
+  background: transparent;
+  color: var(--tc-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color 0.2s,
+    background 0.2s,
+    box-shadow 0.2s;
+}
+
+.tc-seg-btn:hover {
+  color: #f1f5f9;
+}
+
+.tc-seg-btn.active {
+  background: rgba(34, 211, 238, 0.11);
+  color: var(--tc-accent);
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.22);
+}
+
+.form-section.tc-form-section {
+  flex: 1;
+  padding: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
+  min-height: 0;
 }
 
 /* 表单组 */
@@ -986,53 +1063,53 @@ const handleResetPassword = async () => {
   position: relative;
 }
 
-/* 输入容器 */
+/* 输入容器（深色表单） */
 .input-container {
   position: relative;
   display: flex;
   align-items: center;
-  background: #f8fafc;
-  border: 2px solid #e2e8f0;
+  background: rgba(2, 6, 23, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 12px;
-  transition: all 0.3s ease;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    background 0.2s;
   overflow: hidden;
 }
 
 .input-container:focus-within {
-  border-color: #4fc3f7;
-  box-shadow: 0 0 0 4px rgba(79, 195, 247, 0.1);
-  background: #ffffff;
-  transform: translateY(-2px);
+  border-color: rgba(34, 211, 238, 0.55);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12);
+  background: rgba(15, 23, 42, 0.55);
 }
 
-/* 输入图标 */
 .input-icon {
   padding: 0 16px;
-  color: #94a3b8;
+  color: #64748b;
   font-size: 18px;
-  transition: color 0.3s ease;
+  transition: color 0.2s ease;
 }
 
 .input-container:focus-within .input-icon {
-  color: #4fc3f7;
+  color: #22d3ee;
 }
 
-/* 表单输入 */
 .form-input {
   flex: 1;
-  height: 56px;
-  padding: 0 16px;
+  height: 52px;
+  padding: 0 14px;
   border: none;
   background: transparent;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
-  color: #263238;
+  color: #f1f5f9;
   outline: none;
-  transition: all 0.3s ease;
+  transition: color 0.2s ease;
 }
 
 .form-input::placeholder {
-  color: #94a3b8;
+  color: #64748b;
   font-weight: 400;
 }
 
@@ -1044,36 +1121,35 @@ const handleResetPassword = async () => {
 
 .password-input {
   width: 100%;
-  height: 56px;
+  height: 52px;
   padding: 0 50px 0 0;
   border: none;
   background: transparent;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
-  color: #263238;
+  color: #f1f5f9;
   outline: none;
 }
 
-/* 密码切换按钮 */
 .password-toggle {
   position: absolute;
-  right: 16px;
+  right: 14px;
   top: 50%;
   transform: translateY(-50%);
   background: none;
   border: none;
   font-size: 18px;
   cursor: pointer;
-  color: #94a3b8;
+  color: #64748b;
   outline: none;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
   padding: 8px;
   border-radius: 6px;
 }
 
 .password-toggle:hover {
-  color: #4fc3f7;
-  background: rgba(79, 195, 247, 0.1);
+  color: #22d3ee;
+  background: rgba(34, 211, 238, 0.1);
 }
 
 /* 验证提示 */
@@ -1096,20 +1172,21 @@ const handleResetPassword = async () => {
 }
 
 .validate-tip.error {
-  color: #ef4444;
+  color: #f87171;
 }
 
 .validate-tip.success {
-  color: #10b981;
+  color: #34d399;
 }
 
 /* 表单底部 */
 .form-footer {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin: 16px 0 32px;
-  font-size: 14px;
+  align-items: flex-start;
+  margin: 12px 0 22px;
+  font-size: 13px;
+  gap: 12px;
 }
 
 /* 协议复选框 */
@@ -1124,17 +1201,17 @@ const handleResetPassword = async () => {
 }
 
 .forgot-link {
-  color: #4fc3f7;
+  color: #22d3ee;
   text-decoration: none;
   font-weight: 500;
-  transition: all 0.3s ease;
-  font-size: 14px;
+  transition: color 0.2s ease;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .forgot-link:hover {
-  color: #29b6f6;
+  color: #67e8f9;
   text-decoration: underline;
-  transform: translateX(2px);
 }
 
 .checkbox-container {
@@ -1144,6 +1221,26 @@ const handleResetPassword = async () => {
   cursor: pointer;
   user-select: none;
   transition: all 0.3s ease;
+}
+
+.checkbox-container.checkbox-readonly {
+  cursor: default;
+}
+
+.checkbox-container.checkbox-readonly:hover {
+  transform: none;
+}
+
+.checkbox-container.checkbox-readonly .label-text {
+  color: #64748b;
+}
+
+.agreement-prereq {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #fbbf24;
+  padding-left: 4px;
 }
 
 .checkbox-container:hover {
@@ -1163,20 +1260,26 @@ const handleResetPassword = async () => {
   top: 2px;
   height: 20px;
   width: 20px;
-  background-color: #f1f5f9;
-  border: 2px solid #e2e8f0;
+  background-color: rgba(248, 250, 252, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 6px;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
 }
 
 .checkbox-container:hover input ~ .checkmark {
-  background-color: #e0f2fe;
-  border-color: #4fc3f7;
+  border-color: rgba(34, 211, 238, 0.45);
+  background-color: rgba(34, 211, 238, 0.06);
+}
+
+.checkbox-container.checkbox-readonly:hover input ~ .checkmark,
+.checkbox-container.checkbox-readonly input ~ .checkmark {
+  border-color: rgba(148, 163, 184, 0.25);
+  background-color: rgba(15, 23, 42, 0.4);
 }
 
 .checkbox-container input:checked ~ .checkmark {
-  background-color: #4fc3f7;
-  border-color: #4fc3f7;
+  background: #0d9488;
+  border-color: transparent;
 }
 
 .checkmark:after {
@@ -1197,32 +1300,37 @@ const handleResetPassword = async () => {
 }
 
 .label-text {
-  color: #607d8b;
-  line-height: 1.4;
+  color: #94a3b8;
+  line-height: 1.45;
+  font-size: 13px;
 }
 
 .agreement-link {
-  color: #4fc3f7;
+  color: #22d3ee;
   text-decoration: none;
-  font-weight: 500;
-  transition: all 0.3s ease;
+  font-weight: 600;
+  transition: color 0.2s ease;
 }
 
 .agreement-link:hover {
-  color: #29b6f6;
+  color: #67e8f9;
   text-decoration: underline;
 }
 
 /* 按钮样式 */
 .btn {
   width: 100%;
-  height: 56px;
+  height: 50px;
   border: none;
   border-radius: 12px;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
   outline: none;
   display: flex;
   align-items: center;
@@ -1233,32 +1341,34 @@ const handleResetPassword = async () => {
 }
 
 .login-btn {
-  background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(79, 195, 247, 0.3);
+  background: #0d9488;
+  color: #f8fafc;
+  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.28);
 }
 
 .login-btn:hover:not(:disabled) {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 25px rgba(79, 195, 247, 0.4);
+  transform: none;
+  background: #0f766e;
+  box-shadow: 0 6px 18px rgba(13, 148, 136, 0.32);
 }
 
 .login-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.45;
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
 }
 
 .register-btn {
-  background: linear-gradient(135deg, #43a047 0%, #388e3c 100%);
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(67, 160, 71, 0.3);
+  background: #334155;
+  color: #f8fafc;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.2);
 }
 
 .register-btn:hover:not(:disabled) {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 25px rgba(67, 160, 71, 0.4);
+  transform: none;
+  background: #1e293b;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.28);
 }
 
 .register-btn:disabled {
@@ -1274,72 +1384,8 @@ const handleResetPassword = async () => {
 }
 
 .btn:hover .btn-icon {
-  transform: translateX(4px);
+  transform: translateX(3px);
 }
-
-/* 切换按钮 */
-.switch-btn {
-  background: transparent;
-  color: #fff;
-  border: 2px solid rgba(255, 255, 255, 0.8);
-  margin-top: 24px;
-  width: 200px;
-  border-radius: 28px;
-  height: 52px;
-  backdrop-filter: blur(8px);
-}
-
-.switch-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  transform: translateY(-3px);
-  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.2);
-}
-
-/* 滑动面板内容 */
-.slide-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 20px;
-  animation: fadeIn 0.8s ease;
-}
-
-.slide-icon {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 32px;
-  color: white;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.2);
-  transition: all 0.3s ease;
-}
-
-.slide-icon:hover {
-  transform: scale(1.1) rotate(5deg);
-  box-shadow: 0 8px 25px rgba(255, 255, 255, 0.3);
-}
-
-.slide-panel h3 {
-  font-size: 28px;
-  margin: 0;
-  color: white;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-}
-
-.slide-panel p {
-  font-size: 16px;
-  line-height: 1.6;
-  margin: 0;
-  color: rgba(255, 255, 255, 0.9);
-  text-align: center;
-}
-
-
 
 /* 密码强度条 */
 .password-strength {
@@ -1360,7 +1406,7 @@ const handleResetPassword = async () => {
 .strength-bar {
   flex: 1;
   border-radius: 3px;
-  background: #e2e8f0;
+  background: rgba(51, 65, 85, 0.65);
   transition: all 0.3s ease;
 }
 
@@ -1376,43 +1422,6 @@ const handleResetPassword = async () => {
   background: #10b981;
 }
 
-/* 滚动条 */
-.panel::-webkit-scrollbar {
-  display: none;
-}
-
-.panel {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-/* 动画 */
-@keyframes float {
-  0%, 100% {
-    transform: translate(0, 0) scale(1);
-  }
-  25% {
-    transform: translate(50px, -50px) scale(1.1);
-  }
-  50% {
-    transform: translate(0, 100px) scale(0.9);
-  }
-  75% {
-    transform: translate(-50px, -50px) scale(1.05);
-  }
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes slideIn {
   from {
     opacity: 0;
@@ -1424,196 +1433,67 @@ const handleResetPassword = async () => {
   }
 }
 
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
+/* 响应式 */
+@media (max-width: 900px) {
+  .tc-shell {
+    grid-template-columns: 1fr;
+    max-width: 460px;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
-/* 响应式设计 */
-@media (max-width: 992px) {
-  .container {
-    width: 800px;
-    height: 550px;
+  .tc-hero {
+    border-right: none;
+    border-bottom: 1px solid var(--tc-border);
+    padding: 20px;
   }
-  
-  .form-section {
-    padding: 30px;
-  }
-  
-  .brand-section {
-    padding: 35px 30px 15px;
-  }
-  
-  .form-input {
-    font-size: 15px;
-  }
-  
-  .btn {
-    height: 52px;
-    font-size: 15px;
-  }
-}
 
-@media (max-width: 850px) {
-  .container {
-    width: 90%;
-    max-width: 700px;
-    height: auto;
-    min-height: 500px;
-    margin: 40px 20px;
+  .tc-hero-list {
+    display: none;
   }
-  
-  .panel {
-    width: 100%;
-    position: relative;
+
+  .tc-hero-foot {
+    margin-top: 4px;
   }
-  
-  .login-panel {
-    left: 0;
-    z-index: 2;
-  }
-  
-  .register-panel {
-    right: 0;
-    z-index: 1;
-  }
-  
-  .slide-panel {
-    width: 100%;
-    left: 0;
-    height: 300px;
-    z-index: 3;
-  }
-  
-  .container.slide .slide-panel {
-    top: 100%;
-  }
-  
-  .container.slide .login-panel {
-    left: 0;
-    top: -100%;
-  }
-  
-  .container.slide .register-panel {
-    right: 0;
-    top: 0;
-  }
-  
-  .form-section {
-    padding: 25px;
-  }
-  
-  .brand-section {
-    padding: 30px 25px 15px;
+
+  .tc-card {
+    min-height: 0;
   }
 }
 
 @media (max-width: 768px) {
   .login-container {
-    padding: 16px;
-  }
-  
-  .container {
-    width: 100%;
-    margin: 0;
-    border-radius: 16px;
-    min-height: 480px;
-  }
-  
-  .form-section {
-    padding: 20px;
-  }
-  
-  .brand-section {
-    padding: 25px 20px 12px;
-  }
-  
-  .title {
-    font-size: 24px;
-  }
-  
-  .subtitle {
-    font-size: 13px;
-  }
-  
-  .slide-panel {
-    padding: 30px;
-    height: 280px;
-  }
-  
-  .slide-panel h3 {
-    font-size: 24px;
-  }
-  
-  .slide-panel p {
-    font-size: 14px;
-  }
-  
-  .form-group {
-    margin-bottom: 20px;
-  }
-  
-  .form-input {
-    height: 52px;
-    font-size: 14px;
-  }
-  
-  .btn {
-    height: 52px;
-    font-size: 15px;
-  }
-  
-  .demo-account {
-    margin-top: 20px;
     padding: 14px;
   }
-  
-  .demo-title {
-    font-size: 13px;
+
+  .tc-shell {
+    border-radius: 18px;
   }
-  
-  .demo-info {
-    font-size: 12px;
-  }
-  
+
   .form-footer {
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
   }
-  
+
   .forgot-password {
     margin-left: 0;
   }
-  
-  .label-text {
-    font-size: 13px;
+
+  .form-group {
+    margin-bottom: 18px;
   }
-  
-  .forgot-link {
-    font-size: 13px;
-  }
-  
-  /* 忘记密码弹窗响应式 */
+
   .forgot-password-dialog {
     width: 90% !important;
     max-width: 400px;
   }
-  
+
   .forgot-password-dialog .el-dialog__body {
     padding: 24px 20px;
   }
-  
+
   .forgot-password-dialog .el-dialog__header {
     padding: 16px 20px;
   }
-  
+
   .dialog-footer {
     padding: 0 20px 20px;
   }
@@ -1621,162 +1501,78 @@ const handleResetPassword = async () => {
 
 @media (max-width: 480px) {
   .login-container {
-    padding: 12px;
+    padding: 10px;
   }
-  
-  .container {
-    border-radius: 12px;
-    min-height: 450px;
+
+  .tc-shell {
+    border-radius: 14px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
   }
-  
-  .form-section {
-    padding: 16px;
+
+  .tc-hero-mark {
+    flex-wrap: wrap;
   }
-  
-  .brand-section {
-    padding: 20px 16px 10px;
+
+  .tc-hero-logo-wrap {
+    width: 60px;
+    height: 60px;
   }
-  
-  .logo-container {
-    gap: 12px;
+
+  .tc-hero-logo {
+    width: 60px;
   }
-  
-  .logo-icon {
-    font-size: 24px;
-  }
-  
-  .title {
-    font-size: 22px;
-  }
-  
-  .subtitle {
+
+  .tc-seg-btn {
+    padding: 8px;
     font-size: 12px;
   }
-  
-  .slide-panel {
-    padding: 24px;
-    height: 250px;
-  }
-  
-  .slide-panel h3 {
-    font-size: 22px;
-  }
-  
-  .slide-panel p {
-    font-size: 13px;
-  }
-  
-  .switch-btn {
-    width: 180px;
+
+  .form-input,
+  .password-input {
     height: 48px;
     font-size: 14px;
   }
-  
-  .form-group {
-    margin-bottom: 16px;
-  }
-  
-  .form-input {
-    height: 48px;
-    font-size: 14px;
-  }
-  
-  .input-container {
-    border-radius: 8px;
-  }
-  
-  .input-icon {
-    padding: 0 12px;
-    font-size: 16px;
-  }
-  
+
   .btn {
-    height: 48px;
+    height: 46px;
     font-size: 14px;
-    border-radius: 8px;
   }
-  
+
   .validate-tip {
     font-size: 11px;
     margin-top: 6px;
   }
-  
+
   .password-strength {
     margin-top: 6px;
     height: 4px;
   }
-  
-  /* 忘记密码弹窗响应式 */
+
   .forgot-password-dialog {
     width: 95% !important;
     max-width: 350px;
   }
-  
+
   .forgot-password-dialog .el-dialog__body {
     padding: 20px 16px;
   }
-  
+
   .forgot-password-dialog .el-dialog__header {
     padding: 14px 16px;
   }
-  
+
   .forgot-password-dialog .el-dialog__title {
     font-size: 16px;
   }
-  
+
   .dialog-footer {
     padding: 0 16px 16px;
     flex-direction: column;
     gap: 8px;
   }
-  
+
   .dialog-footer .btn {
     width: 100%;
-  }
-}
-
-@media (max-width: 360px) {
-  .container {
-    min-height: 420px;
-  }
-  
-  .form-section {
-    padding: 14px;
-  }
-  
-  .brand-section {
-    padding: 16px 14px 8px;
-  }
-  
-  .title {
-    font-size: 20px;
-  }
-  
-  .subtitle {
-    font-size: 11px;
-  }
-  
-  .slide-panel {
-    padding: 20px;
-    height: 220px;
-  }
-  
-  .slide-panel h3 {
-    font-size: 20px;
-  }
-  
-  .form-input {
-    height: 44px;
-    font-size: 13px;
-  }
-  
-  .btn {
-    height: 44px;
-    font-size: 13px;
-  }
-  
-  .label-text {
-    font-size: 12px;
   }
 }
 
@@ -1787,21 +1583,22 @@ const handleResetPassword = async () => {
 }
 
 .forgot-password-dialog .el-dialog__header {
-  background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
-  color: #fff;
-  padding: 20px 24px;
+  background: #f8fafc;
+  color: #0f172a;
+  padding: 14px 18px;
   margin: 0;
+  border-bottom: 1px solid #e2e8f0;
 }
 
 .forgot-password-dialog .el-dialog__title {
-  color: #fff;
-  font-size: 18px;
+  color: #0f172a;
+  font-size: 15px;
   font-weight: 600;
 }
 
 .forgot-password-dialog .el-dialog__headerbtn .el-dialog__close {
-  color: #fff;
-  font-size: 20px;
+  color: #64748b;
+  font-size: 18px;
 }
 
 .forgot-password-dialog .el-dialog__body {
@@ -1810,6 +1607,34 @@ const handleResetPassword = async () => {
 
 .forgot-password-form .form-group {
   margin-bottom: 20px;
+}
+
+.forgot-password-dialog .input-container {
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
+}
+
+.forgot-password-dialog .input-container:focus-within {
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.12);
+  background: #fff;
+}
+
+.forgot-password-dialog .input-icon {
+  color: #94a3b8;
+}
+
+.forgot-password-dialog .input-container:focus-within .input-icon {
+  color: #0e7490;
+}
+
+.forgot-password-dialog .form-input,
+.forgot-password-dialog .password-input {
+  color: #1e293b;
+}
+
+.forgot-password-dialog .password-toggle:hover {
+  color: #0891b2;
 }
 
 .dialog-footer {
@@ -1827,18 +1652,20 @@ const handleResetPassword = async () => {
 
 .cancel-btn:hover {
   background: #e2e8f0;
-  transform: translateY(-2px);
+  transform: none;
 }
 
 .reset-btn {
-  background: linear-gradient(135deg, #43a047 0%, #388e3c 100%);
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(67, 160, 71, 0.3);
+  background: #0d9488;
+  color: #f8fafc;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.22);
 }
 
 .reset-btn:hover:not(:disabled) {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 25px rgba(67, 160, 71, 0.4);
+  transform: none;
+  background: #0f766e;
+  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.28);
 }
 
 .reset-btn:disabled {

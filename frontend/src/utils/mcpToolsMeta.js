@@ -23,17 +23,48 @@ export function getMcpToolCommandHint(toolName) {
   return MCP_TOOL_COMMAND_HINT[toolName] || 'system command'
 }
 
+/** 写类工具在 MCP 二次确认通过后，须同时关闭预览并打开确认位 */
+export function applyMcpWriteConfirmParams(toolName, parameters) {
+  const p = { ...(parameters || {}) }
+  if (toolName === 'CleanTempTool' || toolName === 'LogCleanupTool') {
+    p.dryRun = false
+    p.confirmDelete = true
+  } else if (toolName === 'ServiceRestartTool') {
+    p.dryRun = false
+    p.confirmRestart = true
+  }
+  return p
+}
+
+/** 工具卡片角标（替代 emoji，保持控制台专业观感） */
+export function mcpToolBadge(name) {
+  const map = {
+    DiskTool: 'DSK',
+    DiskInsightTool: 'DIR',
+    DiskAnalyzeTool: 'DIA',
+    ProcessTool: 'PRC',
+    SystemLoadTool: 'LOD',
+    LogAnalysisTool: 'LOG',
+    CleanTempTool: 'CLN',
+    LogCleanupTool: 'LGC',
+    ServiceRestartTool: 'RST',
+    ConfigCheckTool: 'CFG',
+    NetworkTool: 'NET',
+    PrivilegeTool: 'PRV',
+    OsInsightTool: 'OSI'
+  }
+  return map[name] || (name ? String(name).replace(/Tool$/, '').slice(0, 3).toUpperCase() : '—')
+}
+
 /** 演示页表单：名称须与后端 toolName 一致 */
 export const MCP_TOOL_DEFINITIONS = [
   {
     name: 'DiskTool',
-    icon: '💾',
     description: '检查磁盘使用情况',
     params: []
   },
   {
     name: 'DiskInsightTool',
-    icon: '📂',
     description: '目录占用热点：du 排序（白名单路径）',
     params: [
       { name: 'rootPath', label: '扫描根路径', placeholder: '/tmp', hint: '如 /tmp、/var/log' },
@@ -43,7 +74,6 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'DiskAnalyzeTool',
-    icon: '📊',
     description: '磁盘压力综合诊断（df + 可选热点）',
     params: [
       { name: 'rootPath', label: '热点根路径', placeholder: '/var/log', hint: '可选；热点扫描时用' },
@@ -58,7 +88,6 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'ProcessTool',
-    icon: '⚙️',
     description: '列出系统进程，支持 CPU/内存过滤',
     params: [
       { name: 'minCpu', label: '最小CPU%', placeholder: '5.0', hint: '可选' },
@@ -67,13 +96,11 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'SystemLoadTool',
-    icon: '📈',
     description: '系统负载与资源概况',
     params: []
   },
   {
     name: 'LogAnalysisTool',
-    icon: '📝',
     description: '日志分析与 Drain-Plus',
     params: [
       { name: 'logPath', label: '日志路径', placeholder: '/var/log/syslog', hint: '可选' },
@@ -82,7 +109,6 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'CleanTempTool',
-    icon: '🧹',
     description: '临时目录清理（默认预览）',
     params: [
       { name: 'path', label: '路径', placeholder: '/tmp', hint: '白名单目录' },
@@ -93,7 +119,6 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'LogCleanupTool',
-    icon: '🗂️',
     description: '日志目录陈旧文件清理（默认预览；路径白名单）',
     params: [
       { name: 'path', label: '日志根路径', placeholder: '/var/log', hint: 'Linux 默认 /var/log' },
@@ -104,7 +129,6 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'ServiceRestartTool',
-    icon: '🔁',
     description: '白名单服务重启（默认预览）',
     params: [
       { name: 'serviceName', label: '服务单元', placeholder: 'nginx', hint: '须在 agent.service-restart.allowlist' },
@@ -114,13 +138,11 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'ConfigCheckTool',
-    icon: '✅',
     description: '配置文件语法检查',
     params: [{ name: 'configPath', label: '配置文件', placeholder: '/etc/nginx/nginx.conf', hint: '必填' }]
   },
   {
     name: 'NetworkTool',
-    icon: '🌐',
     description: 'ping / traceroute',
     params: [
       { name: 'target', label: '目标', placeholder: '8.8.8.8', hint: '必填' },
@@ -130,7 +152,6 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'PrivilegeTool',
-    icon: '🔐',
     description: '权限验证',
     params: [
       { name: 'resource', label: '资源路径', placeholder: '/usr/bin/nginx', hint: '必填' },
@@ -139,7 +160,6 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'OsInsightTool',
-    icon: '📡',
     description: 'journalctl / ss / lsof',
     params: [
       { name: 'operation', label: '操作', placeholder: 'journal', hint: 'journal | ss | lsof' },

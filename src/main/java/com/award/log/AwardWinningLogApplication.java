@@ -35,7 +35,7 @@ public class AwardWinningLogApplication {
                 " ____) | |__| | |___| |____| |____ ____) |___) |\n\t" +
                 "|_____/ \\___/ \\_____\\_____|______|_____/_____/ \n\t" +
                 "----------------------------------------------------------\n\t" +
-                "应用 [Award-Winning Log] 启动成功! (STARTED SUCCESS)\n\t" +
+                "应用 [ThreshCore] 启动成功! (STARTED SUCCESS)\n\t" +
                 "控制台: \t\thttp://localhost:" + port + path + "/\n\t" +
                 "相关地址: \thttp://" + ip + ":" + port + path + "/\n\t" +
                 "接口文档: \thttp://localhost:" + port + path + "/doc.html\n" +

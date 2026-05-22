@@ -1,8 +1,10 @@
 package com.award.log.security;
 
+import com.award.log.config.AgentOpsProperties;
 import com.award.log.util.OsRuntime;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -12,55 +14,17 @@ import java.util.List;
 
 /**
  * 运维工具路径白名单 / 黑名单（国赛「确定性」：禁止任意路径 find/rm/tail）。
- * Windows 下使用 {@code agent.paths.windows-*} 前缀；Linux 使用 {@code agent.paths.read-prefixes} 等。
+ * 列表来源 {@link AgentOpsProperties}，见 {@code agent.paths.*}。
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class OpsPathPolicy {
 
+    private final AgentOpsProperties agentOpsProperties;
+
     @Getter
-    @Value("${agent.paths.policy-version:path-policy-v1}")
-    private String policyVersion;
-
-    @Value("${agent.paths.read-prefixes:/var/log,/tmp}")
-    private String readPrefixesRaw;
-
-    @Value("${agent.paths.clean-roots:/tmp,/var/tmp}")
-    private String cleanRootsRaw;
-
-    @Value("${agent.paths.log-cleanup-roots:/var/log}")
-    private String logCleanupRootsRaw;
-
-    @Value("${agent.paths.windows-log-cleanup-roots:C:/Windows/Logs}")
-    private String windowsLogCleanupRootsRaw;
-
-    @Value("${agent.paths.config-prefixes:/etc/nginx/,/etc/ssh/,/etc/default/}")
-    private String configPrefixesRaw;
-
-    @Value("${agent.paths.denied-substrings:/etc/shadow,/etc/gshadow,/.ssh,/root/,/boot/}")
-    private String deniedRaw;
-
-    /**
-     * 权限探测允许的文件/解析后命令路径前缀（配合 PrivilegeTool，避免任意路径 test）。
-     */
-    @Value("${agent.paths.privilege-prefixes:/usr/bin,/usr/sbin,/bin,/sbin,/usr/local/bin,/usr/lib}")
-    private String privilegePrefixesRaw;
-
-    /** Windows：允许读取日志/诊断文本的路径前缀（盘符路径用 / 或 \\ 均可）。 */
-    @Value("${agent.paths.windows-read-prefixes:C:/Windows/Logs,C:/ProgramData,C:/Windows/System32/winevt/Logs,C:/inetpub/logs}")
-    private String windowsReadPrefixesRaw;
-
-    /** Windows：允许临时清理的根目录。 */
-    @Value("${agent.paths.windows-clean-roots:C:/Windows/Temp,C:/Temp}")
-    private String windowsCleanRootsRaw;
-
-    /** Windows：允许做配置/存在性检查的路径前缀。 */
-    @Value("${agent.paths.windows-config-prefixes:C:/Windows/System32/drivers/etc,C:/ProgramData,C:/Windows/System32/winevt/Logs}")
-    private String windowsConfigPrefixesRaw;
-
-    /** Windows：允许 privilege 探测的系统目录（cmd、驱动等）。 */
-    @Value("${agent.paths.windows-privilege-prefixes:C:/Windows/System32,C:/Windows/SysWOW64,C:/Program Files,C:/Program Files (x86)}")
-    private String windowsPrivilegePrefixesRaw;
+    private String policyVersion = "path-policy-v1";
 
     /** 与日志采集根目录对齐，避免「生产盘符」上的日志被策略误拦（见 {@code log.collector.file.path}）。 */
     @Value("${log.collector.file.path:}")
@@ -82,7 +46,29 @@ public class OpsPathPolicy {
 
     @PostConstruct
     void init() {
-        readPrefixes = split(readPrefixesRaw);
+        applyFrom(agentOpsProperties.getPaths());
+    }
+
+    /**
+     * 从配置对象热加载路径策略（启动时与前端保存覆盖后调用）。
+     */
+    public synchronized void applyFrom(AgentOpsProperties.Paths cfg) {
+        if (cfg == null) {
+            return;
+        }
+        policyVersion = cfg.getPolicyVersion();
+        readPrefixes = copyNormalize(cfg.getReadPrefixes());
+        cleanRoots = copyNormalize(cfg.getCleanRoots());
+        logCleanupRoots = copyNormalize(cfg.getLogCleanupRoots());
+        configPrefixes = copyNormalize(cfg.getConfigPrefixes());
+        deniedSubstrings = copyNormalize(cfg.getDeniedSubstrings());
+        privilegePrefixes = copyNormalize(cfg.getPrivilegePrefixes());
+        windowsReadPrefixes = copyNormalize(cfg.getWindowsReadPrefixes());
+        windowsCleanRoots = copyNormalize(cfg.getWindowsCleanRoots());
+        windowsLogCleanupRoots = copyNormalize(cfg.getWindowsLogCleanupRoots());
+        windowsConfigPrefixes = copyNormalize(cfg.getWindowsConfigPrefixes());
+        windowsPrivilegePrefixes = copyNormalize(cfg.getWindowsPrivilegePrefixes());
+
         if (!OsRuntime.isWindows() && logCollectorFilePath != null && !logCollectorFilePath.isBlank()) {
             String norm = normalizeUnixPath(logCollectorFilePath.trim());
             if (!norm.isEmpty()) {
@@ -100,16 +86,6 @@ public class OpsPathPolicy {
                 readPrefixes = merged;
             }
         }
-        cleanRoots = split(cleanRootsRaw);
-        logCleanupRoots = new ArrayList<>(split(logCleanupRootsRaw));
-        windowsLogCleanupRoots = new ArrayList<>(split(windowsLogCleanupRootsRaw));
-        configPrefixes = split(configPrefixesRaw);
-        deniedSubstrings = split(deniedRaw);
-        privilegePrefixes = split(privilegePrefixesRaw);
-        windowsReadPrefixes = new ArrayList<>(split(windowsReadPrefixesRaw));
-        windowsCleanRoots = new ArrayList<>(split(windowsCleanRootsRaw));
-        windowsConfigPrefixes = new ArrayList<>(split(windowsConfigPrefixesRaw));
-        windowsPrivilegePrefixes = new ArrayList<>(split(windowsPrivilegePrefixesRaw));
         if (OsRuntime.isWindows()) {
             String tmp = normalizeWindowsPath(System.getProperty("java.io.tmpdir", ""));
             if (!tmp.isEmpty()) {
@@ -125,6 +101,22 @@ public class OpsPathPolicy {
                 windowsReadPrefixes, windowsCleanRoots);
     }
 
+    public List<String> snapshotReadPrefixes() {
+        return OsRuntime.isWindows() ? List.copyOf(windowsReadPrefixes) : List.copyOf(readPrefixes);
+    }
+
+    public synchronized void updateEditablePathLists(boolean windows, List<String> read, List<String> clean, List<String> logCleanup) {
+        if (windows) {
+            windowsReadPrefixes = copyNormalize(read);
+            windowsCleanRoots = copyNormalize(clean);
+            windowsLogCleanupRoots = copyNormalize(logCleanup);
+        } else {
+            readPrefixes = copyNormalize(read);
+            cleanRoots = copyNormalize(clean);
+            logCleanupRoots = copyNormalize(logCleanup);
+        }
+    }
+
     private static void addIfAbsent(List<String> list, String path) {
         String n = normalizeWindowsPath(path);
         if (n.isEmpty()) {
@@ -138,18 +130,22 @@ public class OpsPathPolicy {
         list.add(path.trim());
     }
 
-    private static List<String> split(String raw) {
+    private static List<String> copyNormalize(List<String> raw) {
         List<String> out = new ArrayList<>();
-        if (raw == null || raw.isBlank()) {
+        if (raw == null) {
             return out;
         }
-        for (String p : raw.split(",")) {
-            String t = p.trim();
-            if (!t.isEmpty()) {
-                out.add(normalizeDirPrefix(t));
+        for (String p : raw) {
+            if (p != null && !p.isBlank()) {
+                out.add(normalizeDirPrefix(p.trim()));
             }
         }
         return out;
+    }
+
+    /** 日志删除保护子串（供 {@link com.award.log.mcp.LogSafetyClassifier}）。 */
+    public List<String> getLogProtectedSubstrings() {
+        return copyNormalize(agentOpsProperties.getPaths().getLogProtectedSubstrings());
     }
 
     private static String normalizeDirPrefix(String p) {
@@ -395,5 +391,21 @@ public class OpsPathPolicy {
 
     public String rejectReason(String category) {
         return "路径策略拦截[" + policyVersion + "]: " + category + "，请联系管理员调整 agent.paths.* 配置";
+    }
+
+    /** 临时目录清理白名单根（当前 OS），供巡检自动修复等内部编排读取。 */
+    public List<String> snapshotTempCleanRoots() {
+        if (OsRuntime.isWindows()) {
+            return List.copyOf(windowsCleanRoots);
+        }
+        return List.copyOf(cleanRoots);
+    }
+
+    /** 日志裁剪白名单根（当前 OS），供巡检自动修复等内部编排读取。 */
+    public List<String> snapshotLogCleanupRoots() {
+        if (OsRuntime.isWindows()) {
+            return List.copyOf(windowsLogCleanupRoots);
+        }
+        return List.copyOf(logCleanupRoots);
     }
 }

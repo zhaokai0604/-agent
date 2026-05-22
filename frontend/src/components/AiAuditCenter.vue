@@ -1,5 +1,6 @@
 <template>
-  <el-card>
+  <div class="ops-page">
+  <el-card shadow="never" class="ops-surface-card">
     <template #header>
       <div class="header">
         <span>AI 审计中心</span>
@@ -23,6 +24,7 @@
       <el-table-column prop="created_at" label="时间" min-width="180" />
     </el-table>
   </el-card>
+  </div>
 </template>
 
 <script setup>

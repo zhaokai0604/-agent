@@ -23,6 +23,16 @@ public class DefaultCleanRules {
         whitespaceRule.setType("whitespace");
         whitespaceRule.setEnabled(true);
         rules.add(whitespaceRule);
+
+        // 1b. Linux 终端 / docker logs 常见 ANSI 颜色序列（减少对 Drain 分词与关键词匹配的干扰）
+        LogCleaner.CleanRule ansiRule = new LogCleaner.CleanRule();
+        ansiRule.setId("strip_ansi");
+        ansiRule.setName("移除ANSI颜色序列");
+        ansiRule.setType("regex");
+        ansiRule.setPattern("\\x1b\\[[0-9;]*m");
+        ansiRule.setReplacement("");
+        ansiRule.setEnabled(true);
+        rules.add(ansiRule);
         
         // 2. 时间戳标准化规则
         LogCleaner.CleanRule timeRule = new LogCleaner.CleanRule();
@@ -212,6 +222,18 @@ public class DefaultCleanRules {
             "配置错误", "configuration error", "依赖服务失败", "dependency failure", 
             "初始化失败", "initialization failed", "启动失败", "startup failed"
         ));
+
+        // Linux 系统与内核（OOM、文件系统、systemd、审计等）
+        keywordsMap.put("Linux系统与内核", java.util.Arrays.asList(
+            "oom-killer", "out of memory", "killed process", "cannot allocate memory",
+            "segfault", "segmentation fault", "sigsegv", "sigkill", "general protection fault",
+            "kernel panic", "soft lockup", "hard lockup", "nmi watchdog", "call trace:",
+            "i/o error", "input/output error", "buffer i/o error", "blk_update_request",
+            "ext4-fs error", "xfs error", "xfs_iread", "read-only file system", "remount-ro",
+            "systemd[", "failed to start", "start request repeated too quickly", "a start job is running",
+            "apparmor=\"denied\"", "selinux: denied", "audit:", "dnf error", "apt-get: error",
+            "nfs: server", "stale file handle", "connection reset by peer", "network unreachable"
+        ));
         
         return keywordsMap;
     }
@@ -232,8 +254,8 @@ public class DefaultCleanRules {
         // 手机号模式
         patterns.put("手机号", "1[3-9]\\d{9}");
         
-        // 时间戳模式
-        patterns.put("时间戳", "\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}");
+        // 时间戳模式（应用 ISO8601；Linux syslog 英文月）
+        patterns.put("时间戳", "\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\\s+\\d{1,2}\\s+\\d{2}:\\d{2}:\\d{2}");
         
         // UUID模式
         patterns.put("UUID", "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}");

@@ -9,11 +9,15 @@
         <div class="sidebar" :class="{ collapsed: isSidebarCollapsed }">
           <!-- 顶部品牌标识 -->
           <div class="brand-section">
-            <div class="logo-icon">
-              <svg viewBox="0 0 24 24" width="32" height="32"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+            <div class="brand-logo-wrap" aria-hidden="true">
+              <img
+                src="/threshcore-logo.png"
+                alt=""
+                class="brand-logo"
+              />
             </div>
             <div class="logo-text" v-if="!isSidebarCollapsed">
-              <div class="main-title">运维工作台</div>
+              <div class="main-title">ThreshCore</div>
               <div class="sub-title">日志 · 工具 · 审计 · 告警</div>
             </div>
           </div>
@@ -34,21 +38,28 @@
         <div class="main-container" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
           <!-- 顶部状态栏 -->
           <div class="top-status-bar">
-            <!-- 汉堡菜单按钮 -->
-            <div class="menu-toggle" @click="toggleSidebar">
-              <el-button type="primary" circle size="small" :icon="isSidebarCollapsed ? Menu : Close" />
-            </div>
-            
-            <div class="breadcrumb">
-              <el-breadcrumb separator="/">
-                <el-breadcrumb-item @click="navigateToHome">首页</el-breadcrumb-item>
-                <el-breadcrumb-item @click="navigateToCurrentPage">{{ breadcrumbText }}</el-breadcrumb-item>
-              </el-breadcrumb>
+            <div class="top-status-left">
+              <div class="menu-toggle" @click="toggleSidebar">
+                <el-button text circle size="small" :icon="isSidebarCollapsed ? Menu : Close" />
+              </div>
+              <div class="page-head">
+                <h1 class="page-title">{{ breadcrumbText }}</h1>
+                <span class="page-sub">ThreshCore 智能运维控制台</span>
+              </div>
             </div>
 
+            <TopPerformanceBar />
+
+            <div class="top-status-right">
             <div class="ops-toolbar">
-              <el-button type="info" size="small" @click="showAlarmConfig">告警配置</el-button>
-              <el-tag size="small">快捷键: 1对话 2MCP 3审计 4链路 5日志 6历史 7仪表盘 8告警</el-tag>
+              <el-button text size="small" @click="showAlarmConfig">告警策略</el-button>
+              <el-button text size="small" @click="showPathPolicy">路径白名单</el-button>
+              <el-tooltip
+                placement="bottom"
+                content="快捷键：1 对话 · 2 MCP · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 仪表盘 · 8 告警"
+              >
+                <el-button text circle size="small" :icon="QuestionFilled" aria-label="快捷键说明" />
+              </el-tooltip>
             </div>
 
             <div class="user-profile">
@@ -65,6 +76,7 @@
                 </template>
               </el-dropdown>
             </div>
+            </div>
           </div>
 
           <!-- 主内容：不用 Suspense 包裹（轮询触发 App 更新时 patchSuspense 易与 async 子组件竞态）；lazy 页使用 suspensible:false -->
@@ -79,6 +91,7 @@
           </div>
         </div>
       </div>
+    <AgentPathPolicyDialog ref="pathPolicyDialogRef" />
   </div>
 </template>
 
@@ -87,7 +100,9 @@ import { ref, computed, nextTick, onMounted, onUnmounted, watch, defineAsyncComp
 
 import Login from './components/Login.vue'
 import AppSideNavMenu from './components/AppSideNavMenu.vue'
-import { DataLine, Clock, ChatLineSquare, Connection, Menu, Close, PieChart, WarningFilled, ArrowDown, List, Document } from '@element-plus/icons-vue'
+import TopPerformanceBar from './components/TopPerformanceBar.vue'
+import AgentPathPolicyDialog from './components/AgentPathPolicyDialog.vue'
+import { DataLine, Clock, ChatLineSquare, Connection, Menu, Close, PieChart, WarningFilled, ArrowDown, List, Document, QuestionFilled } from '@element-plus/icons-vue'
 import { logout } from './api'
 
 /** Tab 懒加载：不参与父级 Suspense，减少定时刷新整树 patch 时的 emitsOptions / vnode null */
@@ -114,6 +129,7 @@ const McpToolsDemo = defineTabAsyncComponent(() => import('./components/McpTools
 const OpsChatInterface = defineTabAsyncComponent(() => import('./components/OpsChatInterface.vue'))
 const AiAuditCenter = defineTabAsyncComponent(() => import('./components/AiAuditCenter.vue'))
 const OpsTraceCenter = defineTabAsyncComponent(() => import('./components/OpsTraceCenter.vue'))
+const pathPolicyDialogRef = ref(null)
 
 const tabConfig = {
   'ops-chat': { label: '工作台对话', component: OpsChatInterface, icon: ChatLineSquare },
@@ -309,23 +325,27 @@ const showAlarmConfig = () => {
     activeTab.value = 'analysis'
     callComponentMethod('showAlarmConfig')
 }
+
+const showPathPolicy = () => {
+    pathPolicyDialogRef.value?.open()
+}
 </script>
 
 <style scoped>
 /* 全局布局 */
-.app-container { 
-  min-height: 100vh; 
-  background: #0f172a; 
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Roboto', sans-serif; 
-  display: flex; 
+.app-container {
+  min-height: 100vh;
+  background: var(--shell-bg);
+  font-family: var(--ops-font);
+  display: flex;
   overflow: hidden;
 }
 
 /* 左侧导航栏 */
 .sidebar {
-  width: 250px;
-  background: #0b1220;
-  color: #fff;
+  width: 248px;
+  background: var(--shell-sidebar);
+  color: var(--shell-text);
   display: flex;
   flex-direction: column;
   position: fixed;
@@ -333,12 +353,9 @@ const showAlarmConfig = () => {
   top: 0;
   height: 100vh;
   z-index: 1000;
-  border-right: 1px solid rgba(148, 163, 184, 0.2);
-  transition: all 0.3s ease;
-}
-
-.sidebar:hover {
-  border-right-color: rgba(56, 189, 248, 0.4);
+  border-right: 1px solid var(--shell-border);
+  box-shadow: none;
+  transition: width 0.28s ease;
 }
 
 /* 侧边栏折叠状态 */
@@ -347,12 +364,17 @@ const showAlarmConfig = () => {
 }
 
 .sidebar.collapsed .brand-section {
-  padding: 16px;
+  padding: 12px 8px;
   justify-content: center;
 }
 
-.sidebar.collapsed .logo-icon {
-  font-size: 24px;
+.sidebar.collapsed .brand-logo-wrap {
+  width: 44px;
+  height: 44px;
+}
+
+.sidebar.collapsed .brand-logo {
+  width: 44px;
 }
 
 .sidebar.collapsed :deep(.el-menu-item) {
@@ -364,55 +386,70 @@ const showAlarmConfig = () => {
   font-size: 20px;
 }
 
-.sidebar.collapsed :deep(.el-menu-item:hover) {
-  transform: translateX(4px);
-}
-
+.sidebar.collapsed :deep(.el-menu-item:hover),
 .sidebar.collapsed :deep(.el-menu-item.is-active) {
-  transform: translateX(4px);
+  transform: none;
 }
 
-/* 顶部品牌标识 */
+/* 顶部品牌标识：Logo 左、文案右，同一行 */
 .brand-section {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(15, 23, 42, 0.95);
+  gap: 12px;
+  padding: 16px 14px 14px;
+  border-bottom: 1px solid var(--shell-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%);
   transition: all 0.3s ease;
 }
 
-.logo-icon {
-  color: #38bdf8;
-  display: flex;
-  font-size: 28px;
-  transition: transform 0.3s ease;
+.brand-logo-wrap {
+  flex-shrink: 0;
+  width: 60px;
+  height: 60px;
+  overflow: hidden;
+  border-radius: 8px;
+  filter: drop-shadow(0 0 10px var(--shell-glow));
 }
 
-.logo-icon:hover {
-  transform: scale(1.1) rotate(5deg);
+.brand-logo {
+  display: block;
+  width: 60px;
+  height: auto;
+  margin-top: -2px;
+  object-fit: contain;
+  object-position: top center;
+  transition: opacity 0.2s ease;
+}
+
+.brand-section:hover .brand-logo {
+  opacity: 0.92;
 }
 
 .logo-text {
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  flex: 1;
   transition: all 0.3s ease;
 }
 
 .main-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  color: #fff;
+  color: var(--shell-text);
   line-height: 1.2;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  letter-spacing: -0.02em;
 }
 
 .sub-title {
-  font-size: 12px;
-  color: rgba(148, 163, 184, 0.95);
+  font-size: 11px;
+  color: var(--shell-muted);
   margin-top: 4px;
-  font-weight: 400;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
 }
 
 /* 导航菜单 */
@@ -425,11 +462,11 @@ const showAlarmConfig = () => {
 /* 右侧主要内容区域 */
 .main-container {
   flex: 1;
-  margin-left: 250px;
+  margin-left: 248px;
   display: flex;
   flex-direction: column;
-  width: calc(100vw - 250px);
-  transition: all 0.3s ease;
+  width: calc(100vw - 248px);
+  transition: margin-left 0.28s ease, width 0.28s ease;
 }
 
 /* 侧边栏折叠时的主内容区域 */
@@ -438,20 +475,35 @@ const showAlarmConfig = () => {
   width: calc(100vw - 80px);
 }
 
-/* 顶部状态栏 */
+/* 顶栏：浅色产品级 Chrome */
 .top-status-bar {
-  height: 64px;
-  background: #111827;
-  color: #e5e7eb;
+  height: var(--ops-header-h);
+  background: var(--ops-panel);
+  color: var(--ops-text);
   padding: 0 20px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  justify-content: flex-start;
+  gap: 0;
+  border-bottom: 1px solid var(--ops-border);
+  box-shadow: var(--ops-shadow-sm);
   position: sticky;
   top: 0;
   z-index: 999;
-  transition: all 0.3s ease;
+}
+
+.top-status-left {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.top-status-right {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 /* 汉堡菜单按钮 */
@@ -460,8 +512,26 @@ const showAlarmConfig = () => {
   display: none;
 }
 
-.breadcrumb {
-  flex: 1;
+.page-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ops-text);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.page-sub {
+  font-size: 11px;
+  color: var(--ops-text-subtle);
+  font-weight: 500;
 }
 
 .ops-toolbar {
@@ -482,71 +552,76 @@ const showAlarmConfig = () => {
   display: flex;
   align-items: center;
   cursor: pointer;
-  padding: 8px 16px;
-  border-radius: 25px;
-  transition: all 0.3s ease;
-  background: rgba(30, 41, 59, 0.85);
-  color: #e5e7eb;
+  padding: 4px 10px 4px 4px;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+  background: var(--ops-panel-soft);
+  border: 1px solid var(--ops-border);
+  color: var(--ops-text);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .user-info:hover {
-  background: rgba(51, 65, 85, 1);
+  background: #f1f5f9;
+  border-color: #cbd5e1;
 }
 
 /* 主内容区域 */
 .main-content {
   flex: 1;
-  padding: 14px;
+  padding: 16px 20px 20px;
   overflow-y: auto;
-  background: #f3f4f6;
-  transition: all 0.3s ease;
+  background: var(--ops-bg);
+  transition: padding 0.2s ease;
 }
 
-/* 功能页统一运维主题（覆盖子组件） */
+/* 功能页卡片（与 ops-console-theme 变量对齐） */
 .main-content :deep(.el-card) {
-  border-radius: 10px;
-  border: 1px solid #dbe2ea;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  border-radius: var(--ops-radius);
+  border: 1px solid var(--ops-border);
+  box-shadow: var(--ops-shadow-sm);
+  backdrop-filter: blur(10px);
 }
 
 .main-content :deep(.el-card__header) {
-  background: #f8fafc;
-  border-bottom: 1px solid #e5e7eb;
-  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), var(--ops-panel-soft));
+  border-bottom: 1px solid var(--ops-border-soft);
+  padding: 14px 18px;
 }
 
 .main-content :deep(.el-card__body) {
-  padding: 14px 16px;
+  padding: 16px 18px;
 }
 
 .main-content :deep(.el-table) {
-  --el-table-header-bg-color: #f8fafc;
+  --el-table-header-bg-color: rgba(245, 247, 251, 0.98);
   --el-table-tr-bg-color: #ffffff;
-  --el-table-row-hover-bg-color: #f1f5f9;
-  --el-table-border-color: #e5e7eb;
+  --el-table-row-hover-bg-color: rgba(8, 145, 178, 0.05);
+  --el-table-border-color: var(--ops-border-soft);
   font-size: 13px;
 }
 
 .main-content :deep(.el-form-item__label) {
-  color: #334155;
+  color: var(--ops-text);
   font-weight: 600;
 }
 
 .main-content :deep(.el-input__wrapper),
 .main-content :deep(.el-textarea__inner),
 .main-content :deep(.el-select__wrapper) {
-  box-shadow: 0 0 0 1px #d0d7e2 inset;
-  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1) inset;
+  border-radius: var(--ops-radius-sm);
 }
 
 .main-content :deep(.el-dialog) {
-  border-radius: 10px;
+  border-radius: var(--ops-radius);
 }
 
 .main-content :deep(.el-dialog__header) {
   margin-right: 0;
-  padding: 14px 18px 10px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--ops-border-soft);
 }
 
 /* 菜单覆盖样式 */
@@ -555,40 +630,42 @@ const showAlarmConfig = () => {
   border-right: none !important;
 }
 
+:deep(.el-menu-item-group__title) {
+  padding: 16px 20px 8px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  color: rgba(148, 163, 184, 0.55) !important;
+  pointer-events: none;
+}
+
 :deep(.el-menu-item) {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  height: 44px;
-  line-height: 44px;
-  margin: 2px 10px;
-  border-radius: 8px;
-  transition: all 0.3s ease;
-  color: rgba(226, 232, 240, 0.9);
+  height: 42px;
+  line-height: 42px;
+  margin: 3px 12px;
+  border-radius: 10px;
+  transition: background 0.22s ease, color 0.22s ease, transform 0.22s ease, box-shadow 0.22s ease;
+  color: rgba(226, 232, 240, 0.88);
 }
 
 :deep(.el-menu-item:hover) {
-  background: rgba(30, 41, 59, 0.95) !important;
-  color: #38bdf8 !important;
-  transform: translateX(4px);
+  background: var(--shell-nav-hover) !important;
+  color: #f0fdfa !important;
+  transform: none;
 }
 
 :deep(.el-menu-item.is-active) {
-  background: #0369a1 !important;
-  color: #fff !important;
-  box-shadow: none;
-  transform: translateX(4px);
+  background: var(--shell-nav-active) !important;
+  color: #f0fdfa !important;
+  box-shadow: inset 3px 0 0 var(--shell-accent);
+  transform: none;
 }
 
 :deep(.el-menu-item.is-active::before) {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 4px;
-  height: 24px;
-  background: #ffffff;
-  border-radius: 0 2px 2px 0;
+  display: none;
 }
 
 :deep(.el-menu-item .el-icon) {
@@ -598,30 +675,30 @@ const showAlarmConfig = () => {
 }
 
 :deep(.el-menu-item:hover .el-icon) {
-  color: #38bdf8;
+  color: var(--shell-accent);
 }
 
 :deep(.el-menu-item.is-active .el-icon) {
-  color: #fff;
+  color: var(--shell-accent);
 }
 
 /* 面包屑样式 */
 :deep(.el-breadcrumb) {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 :deep(.el-breadcrumb__item:last-child .el-breadcrumb__inner) {
-  color: #38bdf8;
+  color: var(--shell-accent);
   font-weight: 600;
 }
 
 :deep(.el-breadcrumb__inner) {
-  color: #cbd5e1;
-  transition: color 0.3s ease;
+  color: rgba(203, 213, 225, 0.75);
+  transition: color 0.22s ease;
 }
 
 :deep(.el-breadcrumb__inner:hover) {
-  color: #38bdf8;
+  color: var(--shell-accent);
 }
 
 /* 系统状态标签样式 */
@@ -653,12 +730,12 @@ const showAlarmConfig = () => {
 /* 响应式设计 */
 @media (max-width: 1200px) {
   .sidebar {
-    width: 220px;
+    width: 240px;
   }
-  
+
   .main-container {
-    margin-left: 220px;
-    width: calc(100vw - 220px);
+    margin-left: 240px;
+    width: calc(100vw - 240px);
   }
   
   .main-container.sidebar-collapsed {

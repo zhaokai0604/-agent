@@ -259,6 +259,8 @@ public class McpExecuteController {
             return response;
         }
 
+        applyConfirmedWriteToolParams(toolName, parameters);
+
         String userInstruction = mcpInvocationSecurityGate.buildInstruction(toolName, parameters);
         GateDecision decision = mcpInvocationSecurityGate.evaluate(toolName, parameters, McpSecurityProfile.POST_CONFIRMATION);
         if (decision.getType() == GateDecision.Type.BLOCK) {
@@ -356,7 +358,14 @@ public class McpExecuteController {
                     case "LogAnalysisTool":
                         String logPath = getStringParam(parameters, "logPath");
                         Integer lines = getIntegerParam(parameters, "lines");
-                        result = logAnalysisTool.analyzeLogs(logPath, lines);
+                        Integer sinceHours = getIntegerParam(parameters, "sinceHours");
+                        String keywordContains = getStringParam(parameters, "keywordContains");
+                        if ((sinceHours != null && sinceHours > 0)
+                                || (keywordContains != null && !keywordContains.isBlank())) {
+                            result = logAnalysisTool.analyzeLogs(logPath, lines, sinceHours, keywordContains);
+                        } else {
+                            result = logAnalysisTool.analyzeLogs(logPath, lines);
+                        }
                         break;
 
                 case "CleanTempTool":
@@ -500,6 +509,27 @@ public class McpExecuteController {
             return Double.parseDouble(value.toString());
         } catch (NumberFormatException e) {
             return null;
+        }
+    }
+
+    /**
+     * 用户已在界面二次确认后，写类工具须同时 dryRun=false 且 confirmDelete/confirmRestart=true，
+     * 避免仍用首次请求的预览参数导致「确认后仍只预览」。
+     */
+    private void applyConfirmedWriteToolParams(String toolName, Map<String, Object> parameters) {
+        if (toolName == null || parameters == null) {
+            return;
+        }
+        switch (toolName) {
+            case "CleanTempTool", "LogCleanupTool" -> {
+                parameters.put("dryRun", false);
+                parameters.put("confirmDelete", true);
+            }
+            case "ServiceRestartTool" -> {
+                parameters.put("dryRun", false);
+                parameters.put("confirmRestart", true);
+            }
+            default -> { }
         }
     }
 

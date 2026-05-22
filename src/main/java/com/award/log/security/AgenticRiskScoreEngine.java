@@ -3,6 +3,7 @@ package com.award.log.security;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.text.Normalizer;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -69,6 +70,30 @@ public class AgenticRiskScoreEngine {
         return new ScoreResult(total, Map.copyOf(dims), explanation);
     }
 
+    /**
+     * 对不含工具名的纯自然语言做「路径 / 命令模式」维度的快速评分，用于会话级工具面收缩（0–10）。
+     */
+    public ScoreResult scoreNaturalLanguageUtterance(String text) {
+        String hay = normalizeUtterance(text).toLowerCase(Locale.ROOT);
+        Map<String, Double> dims = new LinkedHashMap<>();
+        double path = pathSensitivityScore(hay);
+        double cmd = commandPatternScore(hay);
+        dims.put("pathSensitivity", round1(path));
+        dims.put("commandPattern", round1(cmd));
+        double total = clamp(round1(path + cmd), 0, 10);
+        String explanation = String.format(Locale.ROOT,
+                "utterance 特征分=%.1f/10（路径敏感 %.1f + 命令模式 %.1f）", total, path, cmd);
+        return new ScoreResult(total, Map.copyOf(dims), explanation);
+    }
+
+    public static String normalizeUtterance(String s) {
+        if (s == null) {
+            return "";
+        }
+        String n = Normalizer.normalize(s.trim(), Normalizer.Form.NFKC);
+        return n.replaceAll("\\p{Cf}", "");
+    }
+
     private static double baseToolRisk(String toolName) {
         if (toolName == null) {
             return 0;
@@ -86,20 +111,25 @@ public class AgenticRiskScoreEngine {
 
     private static double pathSensitivityScore(String haystack) {
         double s = 0;
-        if (haystack.contains("/etc/shadow") || haystack.contains("/etc/gshadow")) {
+        String h = haystack.replace('\\', '/');
+        if (haystack.contains("/etc/shadow") || haystack.contains("/etc/gshadow")
+                || h.contains("/etc/shadow") || h.contains("/etc/gshadow")) {
             s += 6;
         }
-        if (haystack.contains("/boot")) {
+        if (h.contains("/boot") || h.contains(":/windows/system32/config")) {
             s += 3;
         }
-        if (haystack.contains("/etc")) {
+        if (h.contains("/etc/") || h.contains("c:/windows/system32")) {
             s += 2;
         }
-        if (haystack.contains("/root") || haystack.contains("\\.ssh")) {
+        if (h.contains("/root/") || h.contains("/.ssh") || h.contains(".ssh/")) {
             s += 2.5;
         }
-        if (haystack.contains("/sys") || haystack.contains("/proc")) {
+        if (h.contains("/sys/") || h.contains("/proc/")) {
             s += 1.5;
+        }
+        if (h.contains("passwd") && (h.contains("/etc") || h.contains("system32"))) {
+            s += 2;
         }
         return Math.min(s, 6);
     }

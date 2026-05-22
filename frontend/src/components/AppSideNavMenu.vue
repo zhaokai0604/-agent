@@ -10,10 +10,11 @@
     :collapse="collapse"
     :collapse-transition="false"
     :default-active="activeTab"
-    background-color="#001529"
-    text-color="#fff"
-    active-text-color="#409EFF"
-    style="height: calc(100vh - 200px); border-right: none;"
+    background-color="transparent"
+    text-color="rgba(226,232,240,0.88)"
+    active-text-color="#f0fdfa"
+    class="shell-nav-menu"
+    style="height: calc(100vh - 132px); border-right: none;"
     @select="onMenuSelect"
   >
     <el-menu-item-group
@@ -26,7 +27,6 @@
         :key="itemKey(item)"
         :index="item.key"
       >
-        <!-- 图标单独 key，避免与 ElMenuItem 内 Fragment 复用冲突 -->
         <el-icon><component :is="item.icon" :key="'icon-' + item.key" /></el-icon>
         <span v-if="!collapse">{{ item.label }}</span>
       </el-menu-item>
@@ -50,7 +50,6 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
-  /** 与 App 侧 navMenuStructureKey 一致，结构变化时整菜单 remount */
   structureKey: {
     type: String,
     required: true
@@ -59,7 +58,6 @@ const props = defineProps({
 
 const emit = defineEmits(['select'])
 
-/** 组件实例用 shallowRef，避免深度响应式包裹子组件实例 */
 const menuRef = shallowRef(null)
 
 const groupKey = (group, gi) => `nav-grp-${gi}-${slug(group.title)}`
@@ -70,7 +68,6 @@ const onMenuSelect = (index) => {
   emit('select', index)
 }
 
-/** 与 default-active 并行：在 DOM 稳定后再对齐一次，减少 EP 内部 watch 与插槽周期的错位 */
 watch(
   () => props.activeTab,
   (v) => {
@@ -99,3 +96,47 @@ onBeforeUnmount(() => {
   menuRef.value = null
 })
 </script>
+
+<style scoped>
+.shell-nav-menu {
+  --el-menu-hover-bg-color: var(--shell-nav-hover, rgba(255, 255, 255, 0.06));
+  --el-menu-bg-color: transparent;
+  padding: 4px 8px;
+}
+
+.shell-nav-menu :deep(.el-menu-item-group__title) {
+  padding: 14px 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--shell-muted);
+}
+
+.shell-nav-menu :deep(.el-menu-item) {
+  height: 40px;
+  line-height: 40px;
+  margin: 2px 0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.shell-nav-menu :deep(.el-menu-item:hover) {
+  transform: none;
+  background: var(--shell-nav-hover) !important;
+}
+
+.shell-nav-menu :deep(.el-menu-item.is-active) {
+  transform: none;
+  background: var(--shell-nav-active) !important;
+  color: #f0fdfa !important;
+  box-shadow: inset 3px 0 0 var(--shell-accent);
+}
+
+.shell-nav-menu :deep(.el-menu-item .el-icon) {
+  font-size: 17px;
+  margin-right: 8px;
+}
+</style>

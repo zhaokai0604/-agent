@@ -1,5 +1,5 @@
 <template>
-  <div class="log-analysis-dashboard">
+  <div class="ops-page log-analysis-dashboard">
     <el-card class="dashboard-card">
       <template #header>
         <div class="card-header">
@@ -449,7 +449,7 @@ onUnmounted(() => {
 
 <style scoped>
 .log-analysis-dashboard {
-  padding: 20px;
+  padding: 0;
 }
 
 .dashboard-card {
@@ -484,15 +484,17 @@ onUnmounted(() => {
 }
 
 .stat-label {
-  font-size: 14px;
-  color: #606266;
-  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--ops-text-subtle);
+  margin-bottom: 6px;
+  font-weight: 500;
 }
 
 .stat-value {
-  font-size: 24px;
-  font-weight: bold;
-  color: #303133;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ops-text);
+  font-variant-numeric: tabular-nums;
 }
 
 .charts-row {

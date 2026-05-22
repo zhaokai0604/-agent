@@ -1,11 +1,14 @@
 package com.award.log.mcp;
 
 import com.award.log.mcp.tools.*;
+import com.award.log.security.McpToolSurface;
+import com.award.log.security.ReadOnlySurfaceDenylist;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -44,12 +47,26 @@ public class McpToolRegistry {
         this.toolBeans.add(networkTool);
         this.toolBeans.add(privilegeTool);
         this.toolBeans.add(osInsightTool);
+        // FirstMcpTools 仅用于对话 @Tool 实验；HTTP /api/mcp 白名单见 McpInvocationSecurityGate.allowedToolNames()
         this.toolBeans.add(firstMcpTools);
 
-        log.info("MCP Tools 注册完成，共 {} 个工具", toolBeans.size());
+        log.info("MCP Tools 注册完成，共 {} 个工具（HTTP 可执行 {} 个）",
+                toolBeans.size(), com.award.log.security.McpInvocationSecurityGate.allowedToolNames().size());
     }
 
     public List<Object> getToolBeans() {
         return new ArrayList<>(toolBeans);
+    }
+
+    /**
+     * READ_ONLY 面下排除 {@link ReadOnlySurfaceDenylist} 中的写类工具 Bean，避免模型误绑可执行写操作。
+     */
+    public List<Object> getToolBeansForSurface(McpToolSurface surface, ReadOnlySurfaceDenylist denylist) {
+        if (surface == null || surface == McpToolSurface.FULL || denylist == null) {
+            return getToolBeans();
+        }
+        return toolBeans.stream()
+                .filter(bean -> !denylist.denies(bean.getClass().getSimpleName()))
+                .collect(Collectors.toCollection(ArrayList::new));
     }
 }

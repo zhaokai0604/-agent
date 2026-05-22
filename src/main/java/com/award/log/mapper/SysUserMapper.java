@@ -26,6 +26,11 @@ public interface SysUserMapper {
     SysUser selectByUsername(String username);
 
     /**
+     * 根据邮箱查询用户
+     */
+    SysUser selectByEmail(@Param("email") String email);
+
+    /**
      * 查询所有用户
      * @return 用户列表
      */

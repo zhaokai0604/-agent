@@ -24,6 +24,11 @@ public interface SysUserService {
     SysUser getUserByUsername(String username);
 
     /**
+     * 根据邮箱查询用户（未设置邮箱的账号不会命中）
+     */
+    SysUser getUserByEmail(String email);
+
+    /**
      * 查询所有用户
      * @return 用户列表
      */

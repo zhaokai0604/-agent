@@ -1,0 +1,63 @@
+package com.award.log.agent;
+
+import com.award.log.security.HttpAuditSubject;
+import com.award.log.security.OpsPathPolicy;
+import com.award.log.service.OpsAuditTraceService;
+import com.award.log.trace.TraceService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 助手 / 编排器统一审计落库（交班追溯，非演示专用）。
+ */
+@Component
+@RequiredArgsConstructor
+public class AssistantAuditRecorder {
+
+    private final OpsAuditTraceService opsAuditTraceService;
+    private final OpsPathPolicy opsPathPolicy;
+    private final HttpAuditSubject httpAuditSubject;
+
+    public void record(
+            String traceId,
+            String userInput,
+            String riskLevel,
+            String securityOutcome,
+            String toolName,
+            boolean executionOk,
+            String resultSummary,
+            List<Map<String, Object>> steps,
+            long durationMs
+    ) {
+        opsAuditTraceService.save(
+                traceId,
+                "ASSISTANT",
+                userInput,
+                riskLevel,
+                securityOutcome,
+                toolName,
+                executionOk,
+                resultSummary,
+                steps,
+                durationMs,
+                httpAuditSubject.currentOperatorId(),
+                opsPathPolicy.getPolicyVersion()
+        );
+    }
+
+    public List<Map<String, Object>> newSteps() {
+        return new ArrayList<>();
+    }
+
+    public void addStep(List<Map<String, Object>> steps, String phase, String detail) {
+        steps.add(TraceService.step(phase, detail));
+    }
+
+    public void addCot(List<Map<String, Object>> steps, int index, String title, String narrative) {
+        steps.add(TraceService.cotStep(index, title, narrative));
+    }
+}

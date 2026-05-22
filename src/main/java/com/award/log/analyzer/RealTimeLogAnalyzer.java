@@ -1,6 +1,10 @@
 package com.award.log.analyzer;
 
+import com.award.log.analysis.GeneralLogSeverityResolver;
+import com.award.log.analysis.LinuxLogParseSupport;
+import com.award.log.analysis.LogFieldPlaceholder;
 import com.award.log.analysis.LogAnomalyHeuristics;
+import com.award.log.analysis.LogLineParseSupport;
 import com.award.log.analyzer.LogCleaner;
 import com.award.log.dto.EnhancedLogParseResultEntity;
 import com.award.log.model.LogDocument;
@@ -415,8 +419,8 @@ public class RealTimeLogAnalyzer {
             // 清洗日志内容（使用默认清洗规则）
             String cleanedContent = logCleaner.cleanLog(logContent, DefaultCleanRules.getDefaultRules());
             
-            LogSeverityLevel severity = identifySeverity(cleanedContent);
-            LogProtocolType protocol = identifyProtocol(cleanedContent);
+            LogSeverityLevel severity = GeneralLogSeverityResolver.resolve(cleanedContent);
+            LogProtocolType protocol = LogLineParseSupport.detectProtocol(cleanedContent);
             
             String desensitized = config.enableDesensitize ? desensitizeLog(cleanedContent) : cleanedContent;
             EnhancedLogParseResultEntity res = new EnhancedLogParseResultEntity(desensitized);
@@ -424,16 +428,38 @@ public class RealTimeLogAnalyzer {
             res.setProtocol(protocol);
             res.setSeverity(severity);
             res.setTemplateId(drainParser.parse(cleanedContent));
-            res.setLogTime(extractLogTime(cleanedContent, protocol));
-            res.setTimestamp(parseTimestamp(res.getLogTime()));
-            res.setPid(extractPid(cleanedContent));
+            String timeStr = LogLineParseSupport.extractNormalizedTimeString(cleanedContent);
+            if (timeStr == null || timeStr.isBlank()) {
+                timeStr = LogFieldPlaceholder.TIME_UNPARSED;
+            }
+            res.setLogTime(timeStr);
+            res.setTimestamp(LogFieldPlaceholder.TIME_UNPARSED.equals(timeStr)
+                    ? 0L
+                    : LogLineParseSupport.toEpochMillis(timeStr));
+            if (protocol == LogProtocolType.WINDOWS_EVENT_LOG) {
+                res.setPid(extractPid(cleanedContent));
+            } else if (protocol == LogProtocolType.LINUX_SYSTEM_LOG) {
+                String tp = LinuxLogParseSupport.extractTagPid(cleanedContent);
+                if (tp != null) {
+                    res.setPid(tp);
+                } else {
+                    String p = extractPid(cleanedContent);
+                    res.setPid("未提取".equals(p) ? "N/A" : p);
+                }
+                LinuxLogParseSupport.enrichFeatureMap(res.getFeatureMap(), cleanedContent, protocol);
+            } else {
+                String p = extractPid(cleanedContent);
+                res.setPid("未提取".equals(p) ? "N/A" : p);
+            }
+            // 与批量分析一致：中间件/数据库行也可能混有 CRI、UNIT= 等片段，需统一增强特征
+            LinuxLogParseSupport.enrichContainerHints(res.getFeatureMap(), cleanedContent);
             res.setUid(extractUid(cleanedContent));
             res.setTraceId(extractTraceId(cleanedContent));
             res.setStackTrace(extractStackTrace(cleanedContent));
             
-            // 如果是 Error 且是 Windows 日志，自动添加 AI 建议模拟
-            if (severity == LogSeverityLevel.ERROR_LEVEL || severity == LogSeverityLevel.FATAL_LEVEL) {
-                res.getAnomalyReasons().add("系统组件异常，建议检查驱动或最近安装的软件");
+            if ((severity == LogSeverityLevel.ERROR_LEVEL || severity == LogSeverityLevel.FATAL_LEVEL)
+                    && protocol == LogProtocolType.WINDOWS_EVENT_LOG) {
+                res.getAnomalyReasons().add("Windows 事件：建议结合事件 ID / 来源组件排查驱动或系统变更");
             }
             
             // 将日志添加到实时分析器的缓冲区
@@ -641,75 +667,6 @@ public class RealTimeLogAnalyzer {
     }
 
     /**
-     * 智能识别日志协议类型
-     */
-    private LogProtocolType identifyProtocol(String logLine) {
-        String lowerLog = logLine.toLowerCase();
-        // 检查 Windows 结构: 以级别关键字开头，后跟日期
-        if (logLine.matches("^(信息|警告|错误|关键|Information|Warning|Error|Critical)\\s+\\d{4}[/\\-]\\d{1,2}[/\\-]\\d{1,2}.*")) {
-            return LogProtocolType.WINDOWS_EVENT_LOG;
-        }
-
-        if (lowerLog.contains("kernel") || lowerLog.contains("sshd") || lowerLog.contains("cron") || lowerLog.matches("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}.*")) {
-            return LogProtocolType.LINUX_SYSTEM_LOG;
-        } else if (lowerLog.contains("<event") || lowerLog.contains("microsoft-windows") || lowerLog.contains("事件id")) {
-            return LogProtocolType.WINDOWS_EVENT_LOG;
-        } else if (lowerLog.contains("traceid") || lowerLog.contains("exception") || lowerLog.contains("controller") || lowerLog.contains("requestid")) {
-            return LogProtocolType.APPLICATION_LOG;
-        } else if (lowerLog.contains("sql") || lowerLog.contains("mysql") || lowerLog.contains("oracle") || lowerLog.contains("select|insert|update|delete")) {
-            return LogProtocolType.DATABASE_LOG;
-        } else if (lowerLog.contains("ip:") || lowerLog.contains("port:") || lowerLog.contains("tcp") || lowerLog.contains("udp") || lowerLog.contains("packet")) {
-            return LogProtocolType.NETWORK_DEVICE_LOG;
-        } else {
-            return LogProtocolType.UNIVERSAL_TEXT_LOG;
-        }
-    }
-
-    /**
-     * 识别日志严重程度等级
-     */
-    private LogSeverityLevel identifySeverity(String logLine) {
-        String lowerLog = logLine.toLowerCase();
-        // Windows 事件日志等级
-        if (lowerLog.startsWith("关键") || lowerLog.contains("critical")) return LogSeverityLevel.FATAL_LEVEL;
-        if (lowerLog.startsWith("错误") || lowerLog.contains("error")) return LogSeverityLevel.ERROR_LEVEL;
-        if (lowerLog.startsWith("警告") || lowerLog.contains("warning")) return LogSeverityLevel.WARNING_LEVEL;
-        if (lowerLog.startsWith("信息") || lowerLog.contains("information")) return LogSeverityLevel.INFO_LEVEL;
-        if (lowerLog.startsWith("详细") || lowerLog.contains("verbose")) return LogSeverityLevel.DEBUG_LEVEL;
-
-        if (lowerLog.contains("fatal") || lowerLog.contains("致命")) return LogSeverityLevel.FATAL_LEVEL;
-        else if (lowerLog.contains("error") || lowerLog.contains("错误") || lowerLog.contains("failed") || lowerLog.contains("失败")) return LogSeverityLevel.ERROR_LEVEL;
-        else if (lowerLog.contains("warn") || lowerLog.contains("警告") || lowerLog.contains("timeout") || lowerLog.contains("超时")) return LogSeverityLevel.WARNING_LEVEL;
-        else if (lowerLog.contains("info") || lowerLog.contains("信息") || lowerLog.contains("started") || lowerLog.contains("启动")) return LogSeverityLevel.INFO_LEVEL;
-        else if (lowerLog.contains("debug") || lowerLog.contains("调试")) return LogSeverityLevel.DEBUG_LEVEL;
-        else return LogSeverityLevel.UNKNOWN_LEVEL;
-    }
-
-    /**
-     * 提取日志发生时间
-     */
-    private String extractLogTime(String logLine, LogProtocolType protocol) {
-        Pattern stdPattern = Pattern.compile("\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2}");
-        Matcher stdM = stdPattern.matcher(logLine);
-        if (stdM.find()) return stdM.group();
-        Pattern winPattern = Pattern.compile("\\d{1,2}/\\d{1,2}/\\d{4}\\s+\\d{1,2}:\\d{2}:\\d{2}");
-        Matcher winM = winPattern.matcher(logLine);
-        if (winM.find()) return winM.group();
-        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
-    }
-
-    /**
-     * 解析时间戳
-     */
-    private long parseTimestamp(String timeStr) {
-        try {
-            return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(timeStr).getTime();
-        } catch (Exception e) {
-            return System.currentTimeMillis();
-        }
-    }
-
-    /**
      * 提取进程 ID
      */
     private String extractPid(String logLine) {
@@ -784,11 +741,8 @@ public class RealTimeLogAnalyzer {
      */
     private void sendAnalysisResult(Map<String, Object> analysisResult) {
         try {
-            // 转换为JSON格式
             String jsonResult = com.alibaba.fastjson.JSON.toJSONString(analysisResult);
             String message = "{\"type\": \"analysis\", \"data\": " + jsonResult + "}";
-            
-            // 广播分析结果到所有注册的WebSocket处理器
             messageBroadcaster.broadcast(message);
         } catch (Exception e) {
             log.error("发送分析结果失败: {}", e.getMessage(), e);

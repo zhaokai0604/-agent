@@ -53,7 +53,7 @@ public class SysUserController {
         if (userId != null) {
             return Result.success(userId);
         } else {
-            return Result.error("用户名已存在");
+            return Result.error("用户名已存在或注册信息不完整");
         }
     }
 

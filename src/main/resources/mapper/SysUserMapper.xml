@@ -11,6 +11,10 @@
         SELECT * FROM sys_user WHERE username = #{username}
     </select>
 
+    <select id="selectByEmail" parameterType="java.lang.String" resultType="com.award.log.model.SysUser">
+        SELECT * FROM sys_user WHERE email = #{email}
+    </select>
+
     <!-- 查询所有用户 -->
     <select id="selectAll" resultType="com.award.log.model.SysUser">
         SELECT * FROM sys_user
@@ -28,18 +32,22 @@
 
     <!-- 插入用户 -->
     <insert id="insert" parameterType="com.award.log.model.SysUser" useGeneratedKeys="true" keyProperty="userId">
-        INSERT INTO sys_user (username, password, role, create_time, update_time)
-        VALUES (#{username}, #{password}, #{role}, NOW(), NOW())
+        INSERT INTO sys_user (username, password, role, email, create_time, update_time)
+        VALUES (#{username}, #{password}, #{role}, #{email}, NOW(), NOW())
     </insert>
 
     <!-- 更新用户信息 -->
     <update id="updateById" parameterType="com.award.log.model.SysUser">
         UPDATE sys_user
-        SET
+        <set>
             username = #{username},
             password = #{password},
             role = #{role},
+            <if test="email != null">
+                email = #{email},
+            </if>
             update_time = NOW()
+        </set>
         WHERE user_id = #{userId}
     </update>
 

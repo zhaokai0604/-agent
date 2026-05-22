@@ -12,8 +12,8 @@ public class Knife4jConfig {
     public OpenAPI customOpenAPI() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("智能日志分析系统 API 接口文档")
-                        .description("基于 AI 与 Drain 算法的异常日志分析系统后端服务接口文档")
+                        .title("ThreshCore API 接口文档")
+                        .description("ThreshCore 后端服务 REST 接口说明（日志分析、智能诊断、运维工具与审计等能力）")
                         .contact(new Contact().name("开发团队").url("https://github.com/award").email("dev@award.com"))
                         .version("1.0"));
     }

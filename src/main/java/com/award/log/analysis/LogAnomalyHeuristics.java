@@ -13,8 +13,8 @@ import java.util.Map;
  */
 public final class LogAnomalyHeuristics {
 
-    /** 关键词权重达到该阈值则记为异常命中 */
-    public static final int KEYWORD_WEIGHT_THRESHOLD = 7;
+    /** 关键词权重达到该阈值则记为异常命中（通用日志场景略抬高，减少泛词误报） */
+    public static final int KEYWORD_WEIGHT_THRESHOLD = 8;
 
     private static final Map<String, Integer> KEYWORD_CATEGORY_WEIGHTS = buildKeywordCategoryWeights();
 
@@ -32,6 +32,7 @@ public final class LogAnomalyHeuristics {
         m.put("安全异常", 9);
         m.put("性能异常", 6);
         m.put("应用异常", 8);
+        m.put("Linux系统与内核", 8);
         return m;
     }
 
@@ -39,35 +40,7 @@ public final class LogAnomalyHeuristics {
      * 单行粗粒度等级推断（模板解析前即可使用），用于综合得分与罕见模板判定。
      */
     public static LogSeverityLevel inferSeverityFromLine(String line) {
-        if (line == null || line.isBlank()) {
-            return LogSeverityLevel.UNKNOWN_LEVEL;
-        }
-        String lower = line.toLowerCase();
-        if (containsAny(lower, "fatal", "致命", "panic", "segmentation fault", "段错误", "sigkill", "sigsegv")) {
-            return LogSeverityLevel.FATAL_LEVEL;
-        }
-        if (containsAny(lower, "error", "exception", "failed", "失败", "错误", "errno", "critical")) {
-            return LogSeverityLevel.ERROR_LEVEL;
-        }
-        if (containsAny(lower, "warn", "warning", "警告")) {
-            return LogSeverityLevel.WARNING_LEVEL;
-        }
-        if (containsAny(lower, "debug", "调试")) {
-            return LogSeverityLevel.DEBUG_LEVEL;
-        }
-        if (containsAny(lower, " info", "\tinfo", "info:", "[info]", "informational")) {
-            return LogSeverityLevel.INFO_LEVEL;
-        }
-        return LogSeverityLevel.UNKNOWN_LEVEL;
-    }
-
-    private static boolean containsAny(String haystack, String... needles) {
-        for (String n : needles) {
-            if (haystack.contains(n)) {
-                return true;
-            }
-        }
-        return false;
+        return GeneralLogSeverityResolver.resolve(line);
     }
 
     /**
@@ -138,15 +111,21 @@ public final class LogAnomalyHeuristics {
                     sameInWindow++;
                 }
             }
+            LogSeverityLevel sevBurst = res.getSeverity() != null ? res.getSeverity() : LogSeverityLevel.UNKNOWN_LEVEL;
             if (sameInWindow >= burstMin) {
-                res.getAnomalyReasons().add(
-                        "时间窗口突发（连续日志）：最近 " + consecutiveWindow + " 行内同模板出现 " + sameInWindow + " 次");
-                res.setAnomaly(true);
+                // 通用混合日志里 INFO/UNKNOWN 模板重复（访问日志、心跳）极为常见，不作为突发异常
+                if (sevBurst != LogSeverityLevel.INFO_LEVEL
+                        && sevBurst != LogSeverityLevel.DEBUG_LEVEL
+                        && sevBurst != LogSeverityLevel.UNKNOWN_LEVEL) {
+                    res.getAnomalyReasons().add(
+                            "时间窗口突发（连续日志）：最近 " + consecutiveWindow + " 行内同模板出现 " + sameInWindow + " 次");
+                    res.setAnomaly(true);
+                }
             }
 
             int globalFreq = globalFreqMap.getOrDefault(tempId, 0);
             LogSeverityLevel sev = res.getSeverity() != null ? res.getSeverity() : LogSeverityLevel.UNKNOWN_LEVEL;
-            if (globalFreq <= 3 && (sev == LogSeverityLevel.FATAL_LEVEL || sev == LogSeverityLevel.ERROR_LEVEL)) {
+            if (globalFreq <= 2 && (sev == LogSeverityLevel.FATAL_LEVEL || sev == LogSeverityLevel.ERROR_LEVEL)) {
                 res.getAnomalyReasons().add("罕见严重异常：模板出现频次低但严重程度高");
                 res.setAnomaly(true);
             }

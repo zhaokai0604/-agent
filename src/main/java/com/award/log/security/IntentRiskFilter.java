@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -27,19 +29,29 @@ public class IntentRiskFilter {
             Pattern.CASE_INSENSITIVE
     );
 
+    /** 与高危意图语义对齐的短种子（Jaccard 词袋相似度命中即提升为 HIGH，缓解「换说法绕过」） */
+    private static final String[] HIGH_RISK_SEED_PHRASES = {
+            "删库", "删除根目录", "rm -rf /", "drop database", "关闭防火墙", "清空防火墙规则",
+            "格式化磁盘", "一键下载执行", "curl bash", "wget sh", "shutdown now"
+    };
+
     private final CollaborativeDecisionService collaborativeDecisionService;
     private final PromptInjectionGuard promptInjectionGuard;
+    private final boolean intentUseMl;
 
     @Autowired(required = false)
     public IntentRiskFilter(
             CollaborativeDecisionService collaborativeDecisionService,
-            PromptInjectionGuard promptInjectionGuard
+            PromptInjectionGuard promptInjectionGuard,
+            @org.springframework.beans.factory.annotation.Value("${agent.security.intent-use-ml:false}") boolean intentUseMl
     ) {
         this.collaborativeDecisionService = collaborativeDecisionService;
         this.promptInjectionGuard = promptInjectionGuard;
+        this.intentUseMl = intentUseMl;
     }
 
     public RiskLevel evaluate(String userInstruction) {
+        userInstruction = AgenticRiskScoreEngine.normalizeUtterance(userInstruction);
         log.info("开始风险评估，用户指令: {}", userInstruction);
 
         // 第一步：检测提示注入攻击
@@ -48,11 +60,15 @@ public class IntentRiskFilter {
             return RiskLevel.HIGH;
         }
 
+        if (looksSemanticallyHighRisk(userInstruction)) {
+            log.warn("语义相似度命中高危种子短语，提升为 HIGH 风险");
+            return RiskLevel.HIGH;
+        }
+
         RiskLevel riskLevel;
-        if (collaborativeDecisionService != null) {
+        if (intentUseMl && collaborativeDecisionService != null) {
             riskLevel = evaluateWithEnsemble(userInstruction);
         } else {
-            log.warn("CollaborativeDecisionService 未加载，使用规则降级评估");
             riskLevel = evaluateWithRules(userInstruction);
         }
 
@@ -109,5 +125,58 @@ public class IntentRiskFilter {
     public boolean requiresConfirmation(String userInstruction) {
         RiskLevel level = evaluate(userInstruction);
         return level == RiskLevel.HIGH || level == RiskLevel.MEDIUM;
+    }
+
+    private boolean looksSemanticallyHighRisk(String text) {
+        if (text == null || text.length() < 4) {
+            return false;
+        }
+        Set<String> doc = wordTokens(text);
+        if (doc.size() < 2) {
+            return false;
+        }
+        for (String seed : HIGH_RISK_SEED_PHRASES) {
+            double jac = jaccard(doc, wordTokens(seed));
+            if (jac >= 0.34) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Set<String> wordTokens(String s) {
+        Set<String> out = new HashSet<>();
+        String lower = s.toLowerCase();
+        for (String p : lower.split("[^\\p{L}\\p{N}]+")) {
+            if (p.length() >= 2) {
+                out.add(p);
+            }
+        }
+        StringBuilder han = new StringBuilder();
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            if (Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
+                han.append(c);
+            }
+        }
+        String h = han.toString();
+        for (int i = 0; i + 1 < h.length(); i++) {
+            out.add(h.substring(i, i + 2));
+        }
+        return out;
+    }
+
+    private static double jaccard(Set<String> a, Set<String> b) {
+        if (a.isEmpty() || b.isEmpty()) {
+            return 0.0;
+        }
+        int inter = 0;
+        for (String x : a) {
+            if (b.contains(x)) {
+                inter++;
+            }
+        }
+        int union = a.size() + b.size() - inter;
+        return union == 0 ? 0.0 : (double) inter / union;
     }
 }
