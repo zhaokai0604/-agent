@@ -38,6 +38,19 @@
       title="近7日巡检告警频次（按日）"
     />
 
+    <el-button
+      size="small"
+      type="success"
+      plain
+      class="sec-check-btn"
+      title="调用真实安全门探针，向评委展示护栏是否生效"
+      @click="securityCheckVisible = true"
+    >
+      <el-icon><Lock /></el-icon>
+      安全自检
+    </el-button>
+    <SecuritySelfCheckDialog v-model="securityCheckVisible" />
+
     <el-popover
       v-if="showPatrolPopover"
       placement="bottom-end"
@@ -132,7 +145,8 @@
 
 <script setup>
 import { reactive, ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { Odometer } from '@element-plus/icons-vue'
+import { Odometer, Lock } from '@element-plus/icons-vue'
+import SecuritySelfCheckDialog from './SecuritySelfCheckDialog.vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import {
@@ -172,6 +186,7 @@ const metricsMap = reactive({
   networkUsage: null
 })
 
+const securityCheckVisible = ref(false)
 const updatedAt = ref('')
 const errorHint = ref('')
 const patrolHint = ref('')
@@ -945,6 +960,10 @@ onUnmounted(() => {
 }
 .hot-mib {
   color: #fcd34d;
+  flex-shrink: 0;
+}
+.sec-check-btn {
+  margin-left: 6px;
   flex-shrink: 0;
 }
 .cov-list {

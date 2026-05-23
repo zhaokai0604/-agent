@@ -7,7 +7,7 @@
 | **Context Path** | `/award-log`（所有后端接口前的统一前缀） |
 | **默认端口** | `8088`（后端）；前端开发常见 `3000`（Vite） |
 | **技术栈** | Java 17 · Spring Boot 3.5 · Spring AI 1.1.0 · Vue 3 · MySQL 8 |
-| **版本** | 与当前仓库实现同步（2026-05-23） |
+| **版本** | 与当前仓库实现同步（2026-05-24） |
 | **HTTP MCP 工具** | 26+（白名单由 `McpToolCatalog` 启动扫描，HTTP 列表见 `GET /api/mcp/tools`） |
 
 **版权声明**：Apache License 2.0，见 `LICENSE` 与 `NOTICE`。
@@ -45,7 +45,7 @@
 
 | 你是… | 建议阅读 |
 |--------|----------|
-| **产品 / 运维** | [系统是做什么的](#系统是做什么的)、[赛题对照](#赛题对照)、`docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` |
+| **产品 / 运维** | [系统是做什么的](#系统是做什么的)、Tab **9** 运维效果评分、顶栏安全自检、[赛题对照](#赛题对照) |
 | **运维 / 值班** | [安全与审计](#安全与审计)、[配置参考](#配置参考)、`docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` |
 | **测试** | [后端 API 索引](#后端-api-索引)、[MCP 工具链](#mcp-工具链)、[本地开发与测试](#本地开发与测试) |
 | **后端 / 全栈** | 全文；接口细节以 **Knife4j**（`/award-log/doc.html`）为准 |
@@ -89,6 +89,8 @@
 | 调 MCP | Tab **2** 或 `POST /api/mcp/execute`（body 带 `userMessage`） |
 | 调对话编排 | Tab **1**；全栈自主 →「全自动运维」或 `POST /api/ops/autonomous/run` |
 | 看审计 | Tab **3**（HTTP 访问）/ Tab **4**（traceId + CoT，可导出） |
+| 效果评分 | Tab **9** 运维效果评分；`GET /api/ops/effect/dashboard` |
+| 安全自检 | 顶栏 **安全自检**；`GET /api/security/self-check`（探针走真实安全门） |
 | 加工具 | `mcp/tools/*` + `@McpTool` + `McpToolDispatcher` 分支 + 前端 `mcpToolsMeta.js` |
 | 文档接口 | http://localhost:8088/award-log/doc.html |
 
@@ -441,6 +443,17 @@ public class ExampleProbeTool {
 - 破坏性话术（如「删除整个系统」）**不**走本地 MCP 快捷路由，避免误绑 `SystemLoadTool`。  
 - 延时任务创建前同样拦截；延时白名单与 `OpsDeferredTaskService` 一致（只读/清理类，**不含** `ServiceRestartTool` 等）。
 
+### 一键安全自检（答辩向）
+
+| 项 | 说明 |
+|----|------|
+| **入口** | 顶栏 **安全自检**（`TopPerformanceBar`） |
+| **接口** | `GET /api/security/self-check` |
+| **实现** | `SecuritySelfCheckService`：10+ 固定探针调用真实 `McpInvocationSecurityGate`，**不执行系统命令** |
+| **展示** | 弹窗：配置快照（风险阈值、白名单规模、dry-run、最小权限）+ 分层探针表（预期 vs 实际：放行 / 须确认 / 拒绝） |
+
+适合向评委证明：未注册工具、注入、高危意图、只读面写工具拦截、二次确认信任边界等护栏均已接通。
+
 ### 两条工具入口
 
 | 入口 | 门控 | 二次确认 |
@@ -482,6 +495,8 @@ GET /award-log/api/ops/perception/snapshot
 | GET/POST | `/api/mcp/*` | `McpExecuteController` |
 | GET | `/api/ops-trace/**` | `OpsTraceController` — 链路审计 |
 | GET/POST | `/api/ops/patrol/**` | `OpsPatrolController` — 巡检与修复提案 |
+| GET | `/api/security/self-check` | `SecuritySelfCheckController` — 安全护栏探针（只读） |
+| GET | `/api/ops/effect/dashboard?days=7` | `OpsEffectDashboardController` — 运维效果评分聚合 |
 
 **巡检补充接口**：
 
@@ -527,18 +542,20 @@ GET /award-log/api/ops/perception/snapshot
 
 ```
 frontend/
-├── src/App.vue                    # 8 Tab + 快捷键 1–8
+├── src/App.vue                    # 9 Tab + 快捷键 1–9
 ├── src/api/index.js               # Axios（含 securityCode 统一提示）
 ├── src/components/
 │   ├── OpsChatInterface.vue       # Tab1 工作台
 │   ├── McpToolsDemo.vue           # Tab2 工具台
 │   ├── AiAuditCenter.vue          # Tab3 执行审计（可导出 PNG/PDF）
 │   ├── OpsTraceCenter.vue         # Tab4 链路审计 + CoT 弹窗导出
+│   ├── OpsEffectDashboard.vue     # Tab9 运维效果评分（综合分 + 五维 + 趋势）
+│   ├── SecuritySelfCheckDialog.vue # 顶栏安全自检弹窗
 │   ├── LogAnalysis.vue            # Tab5 日志分析
 │   ├── HistoryList.vue            # Tab6 历史任务
 │   ├── LogAnalysisDashboard.vue   # Tab7 仪表盘（导出 PNG/PDF）
 │   ├── AlarmHistoryAnalysis.vue   # Tab8 告警
-│   └── TopPerformanceBar.vue      # 顶栏性能 + 巡检趋势图
+│   └── TopPerformanceBar.vue      # 顶栏性能 + 巡检趋势 + 安全自检入口
 └── src/utils/
     ├── mcpToolsMeta.js            # 工具表单；mergeToolRegistry 对接 /api/mcp/tools
     ├── opsIntentSafety.js         # 工作台高危话术拦截
@@ -568,6 +585,9 @@ frontend/
 | 6 | 历史任务 | 文件名/状态/日期筛选（`HistoryFilterTime`） |
 | 7 | 日志分析仪表盘 | 近 7 日汇总；导出 PNG / PDF（jspdf） |
 | 8 | 告警 | 配置与历史 |
+| 9 | 运维效果评分 | 综合分仪表盘、五维雷达、审计/巡检趋势、KPI 与价值摘要 |
+
+**运维效果评分（Tab9）**：聚合 `ops_audit_trace`、`ops_patrol_history` 与自愈评分（`RemediationEffectEvaluator` 写入的 `effect` 步骤），量化安全拦截、成功执行、巡检闭环与资源快照。支持 7 / 14 / 30 日窗口。
 
 ```bash
 cd frontend
@@ -780,10 +800,12 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 **3 分钟演示建议**：
 
 1. `GET /api/platform/info`（实机 `deliveryTargetMatch: true`）  
-2. Tab7 仪表盘：近 7 日任务趋势 + 异常率  
-3. 工作台：「请执行全自动运维」或「磁盘使用情况」  
-4. 「帮我预览清理临时文件」→ 二次确认 → 结果仍为预览（`dryRun`）  
-5. Tab4：traceId 展示六步审计  
+2. 顶栏 **安全自检**：弹窗展示探针全部通过  
+3. Tab **9** 运维效果评分：综合分 + 五维 + 「安全拦截 N 次」等价值摘要  
+4. Tab7 仪表盘：近 7 日任务趋势 + 异常率  
+5. 工作台：「请执行全自动运维」或「磁盘使用情况」  
+6. 「帮我预览清理临时文件」→ 二次确认 → 结果仍为预览（`dryRun`）  
+7. Tab4：traceId 展示六步审计  
 
 ---
 
@@ -802,6 +824,8 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 | 2026-05-23 | **WS**：消息缓冲 + 客户端 `sync`；**Prometheus**：`PatrolMetricsExporter` + `docs/deployment/prometheus-alerts.yml` |
 | 2026-05-23 | **前端导出**：仪表盘 PDF（jspdf）；审计表 PNG/PDF；CoT 弹窗 PNG/PDF；`apiError` 统一安全码提示 |
 | 2026-05-24 | MCP 二次确认与 `INTENT_TOOL_MISMATCH`；读写合一 Gateway 工具；仪表盘/历史筛选修复 |
+| 2026-05-24 | **一键安全自检**：`GET /api/security/self-check`；顶栏弹窗 + `SecuritySelfCheckService` 探针 |
+| 2026-05-24 | **运维效果评分仪表板**：Tab9 + `GET /api/ops/effect/dashboard`；`OpsEffectDashboardService` 聚合审计/巡检/自愈 |
 
 ---
 
@@ -842,7 +866,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 ├── scripts/deploy/               # 部署与验收脚本
 ├── src/main/java/com/award/log/
 │   ├── AwardWinningLogApplication.java
-│   ├── controller/               # REST（含 AutonomousOps、Perception、Platform）
+│   ├── controller/               # REST（含 AutonomousOps、Perception、Platform、SecuritySelfCheck、OpsEffectDashboard）
 │   ├── agent/                    # OpsRuntimeService、编排器、OpsIntentRouter
 │   │   └── audit/OpsAuditPhases.java
 │   ├── util/HistoryFilterTime.java  # 历史列表日期解析
@@ -852,7 +876,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 │   │   └── tools/                # 全部 @Tool
 │   ├── service/mcp/              # McpSecurity/Execution/AuditService
 │   ├── security/                 # Gate、OpsPathPolicy、OpsSecurityKernel
-│   ├── service/                  # 业务、PatrolHistory、LogDocumentAsyncIndexer
+│   ├── service/                  # 业务、PatrolHistory、LogDocumentAsyncIndexer、SecuritySelfCheck、OpsEffectDashboard
 │   ├── metrics/                  # PatrolMetricsExporter
 │   ├── analyzer/ / analysis/     # Drain、日志解析
 │   ├── decision/                 # RF ONNX、规则融合

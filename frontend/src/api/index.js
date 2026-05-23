@@ -378,11 +378,18 @@ export const confirmMcpExecute = (toolName, parameters, confirmCode = '确认执
 
 export const getMcpTools = () => request.get('/api/mcp/tools')
 
+/** 一键安全自检（探针走真实安全门，不执行系统命令） */
+export const getSecuritySelfCheck = () => request.get('/api/security/self-check')
+
 export const getPatrolHistory = (days = 7, limit = 50) =>
   request.get('/api/ops/patrol/history', { params: { days, limit } })
 
 export const getPatrolHistoryTrend = (days = 7) =>
   request.get('/api/ops/patrol/history/trend', { params: { days } })
+
+/** 运维效果评分仪表板 */
+export const getOpsEffectDashboard = (days = 7) =>
+  request.get('/api/ops/effect/dashboard', { params: { days } })
 
 /** 全工具融合自主运维（不经过 LLM） */
 export const runAutonomousOps = (forceRemediate = false, readOnly = false) =>

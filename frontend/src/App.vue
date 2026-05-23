@@ -56,7 +56,7 @@
               <el-button text size="small" @click="showPathPolicy">路径白名单</el-button>
               <el-tooltip
                 placement="bottom"
-                content="快捷键：1 对话 · 2 MCP · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 仪表盘 · 8 告警"
+                content="快捷键：1 对话 · 2 MCP · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 仪表盘 · 8 告警 · 9 效果评分"
               >
                 <el-button text circle size="small" :icon="QuestionFilled" aria-label="快捷键说明" />
               </el-tooltip>
@@ -102,7 +102,7 @@ import Login from './components/Login.vue'
 import AppSideNavMenu from './components/AppSideNavMenu.vue'
 import TopPerformanceBar from './components/TopPerformanceBar.vue'
 import AgentPathPolicyDialog from './components/AgentPathPolicyDialog.vue'
-import { DataLine, Clock, ChatLineSquare, Connection, Menu, Close, PieChart, WarningFilled, ArrowDown, List, Document, QuestionFilled } from '@element-plus/icons-vue'
+import { DataLine, Clock, ChatLineSquare, Connection, Menu, Close, PieChart, WarningFilled, ArrowDown, List, Document, QuestionFilled, TrendCharts } from '@element-plus/icons-vue'
 import { logout } from './api'
 
 /** Tab 懒加载：不参与父级 Suspense，减少定时刷新整树 patch 时的 emitsOptions / vnode null */
@@ -129,6 +129,7 @@ const McpToolsDemo = defineTabAsyncComponent(() => import('./components/McpTools
 const OpsChatInterface = defineTabAsyncComponent(() => import('./components/OpsChatInterface.vue'))
 const AiAuditCenter = defineTabAsyncComponent(() => import('./components/AiAuditCenter.vue'))
 const OpsTraceCenter = defineTabAsyncComponent(() => import('./components/OpsTraceCenter.vue'))
+const OpsEffectDashboard = defineTabAsyncComponent(() => import('./components/OpsEffectDashboard.vue'))
 const pathPolicyDialogRef = ref(null)
 
 const tabConfig = {
@@ -136,6 +137,7 @@ const tabConfig = {
   'mcp-tools': { label: '工具控制台', component: McpToolsDemo, icon: Connection },
   audit: { label: '执行审计', component: AiAuditCenter, icon: List },
   'ops-audit-trace': { label: '运维链路审计', component: OpsTraceCenter, icon: Document },
+  'ops-effect': { label: '运维效果评分', component: OpsEffectDashboard, icon: TrendCharts },
   analysis: { label: '日志分析', component: LogAnalysis, icon: DataLine },
   history: { label: '任务记录', component: HistoryList, icon: Clock },
   dashboard: { label: '日志分析仪表盘', component: LogAnalysisDashboard, icon: PieChart },
@@ -145,7 +147,7 @@ const tabConfig = {
 const defaultTab = 'ops-chat'
 
 const NAV_GROUP_ORDER = [
-  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'mcp-tools', 'audit', 'ops-audit-trace'] },
+  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'mcp-tools', 'audit', 'ops-audit-trace', 'ops-effect'] },
   { title: '日志与分析', keys: ['analysis', 'history', 'dashboard', 'alarm-history'] }
 ]
 
@@ -175,7 +177,8 @@ const shortcutTabMap = {
   '5': 'analysis',
   '6': 'history',
   '7': 'dashboard',
-  '8': 'alarm-history'
+  '8': 'alarm-history',
+  '9': 'ops-effect'
 }
 
 // 切换侧边栏
