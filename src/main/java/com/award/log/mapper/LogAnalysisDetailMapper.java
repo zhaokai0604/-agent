@@ -15,6 +15,9 @@ public interface LogAnalysisDetailMapper {
     
     // 查询总日志数
     long countAll();
+
+    /** 近 N 日内（按关联任务创建时间）的明细条数 */
+    long countSinceDays(@Param("days") int days);
     
 
     

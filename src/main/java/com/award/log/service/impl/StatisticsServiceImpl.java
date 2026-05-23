@@ -44,7 +44,7 @@ public class StatisticsServiceImpl implements StatisticsService {
     // 缓存键前缀
     private static final String CACHE_PREFIX = "statistics:";
     private static final String TASK_STATUS_KEY = CACHE_PREFIX + "task_status";
-    private static final String LOG_SUMMARY_KEY_PREFIX = CACHE_PREFIX + "log_summary:v2:";
+    private static final String LOG_SUMMARY_KEY_PREFIX = CACHE_PREFIX + "log_summary:v3:";
 
     // 缓存过期时间（10分钟）
     private static final long CACHE_EXPIRE_TIME = 10;
@@ -75,12 +75,13 @@ public class StatisticsServiceImpl implements StatisticsService {
         log.info("从数据库获取近期日志汇总，天数: [{}]", days);
         Map<String, Object> summary = new HashMap<>();
 
-        // 查询任务总数
-        long totalTasks = taskMapper.countAll();
+        int windowDays = Math.max(1, days);
+        summary.put("summaryDays", windowDays);
+
+        long totalTasks = taskMapper.countSinceDays(windowDays);
         summary.put("totalTasks", totalTasks);
 
-        // 查询总日志数
-        long totalLogs = detailMapper.countAll();
+        long totalLogs = detailMapper.countSinceDays(windowDays);
         summary.put("totalLogs", totalLogs);
 
         // 获取最近几天的任务趋势
@@ -89,6 +90,22 @@ public class StatisticsServiceImpl implements StatisticsService {
 
         List<Map<String, Object>> anomalyDistribution = detailMapper.selectAnomalySeverityDistribution(days);
         summary.put("anomalyDistribution", anomalyDistribution);
+
+        long anomalyLogs = 0L;
+        if (anomalyDistribution != null) {
+            for (Map<String, Object> row : anomalyDistribution) {
+                Object c = row != null ? row.get("count") : null;
+                if (c == null && row != null) {
+                    c = row.get("COUNT");
+                }
+                if (c instanceof Number) {
+                    anomalyLogs += ((Number) c).longValue();
+                }
+            }
+        }
+        summary.put("anomalyLogs", anomalyLogs);
+        double anomalyRate = totalLogs > 0 ? (anomalyLogs * 100.0 / totalLogs) : 0.0;
+        summary.put("anomalyRate", anomalyRate);
 
         // 存入缓存
         if (redisTemplate != null) {
@@ -329,9 +346,21 @@ public class StatisticsServiceImpl implements StatisticsService {
         // 将List转换为Map
         Map<String, Integer> statusCount = new HashMap<>();
         for (Map<String, Object> item : statusCountList) {
-            String status = (String) item.get("status");
-            Long count = (Long) item.get("count");
-            statusCount.put(status, count.intValue());
+            if (item == null) {
+                continue;
+            }
+            Object statusObj = item.get("status");
+            if (statusObj == null) {
+                statusObj = item.get("STATUS");
+            }
+            Object countObj = item.get("count");
+            if (countObj == null) {
+                countObj = item.get("COUNT");
+            }
+            if (statusObj == null || !(countObj instanceof Number)) {
+                continue;
+            }
+            statusCount.put(String.valueOf(statusObj), ((Number) countObj).intValue());
         }
         statistics.put("statusCount", statusCount);
 

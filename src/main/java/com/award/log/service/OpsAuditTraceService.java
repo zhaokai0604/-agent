@@ -179,6 +179,42 @@ public class OpsAuditTraceService {
         return m;
     }
 
+    public int deleteOlderThanDays(int days) {
+        int d = Math.min(365, Math.max(7, days));
+        try {
+            return jdbcTemplate.update(
+                    "DELETE FROM ops_audit_trace WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)", d);
+        } catch (Exception e) {
+            log.warn("审计清理失败: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    public void saveWithEffect(
+            String traceId,
+            String channel,
+            String userInput,
+            String riskLevel,
+            String securityOutcome,
+            String toolName,
+            boolean executionOk,
+            String resultSummary,
+            List<Map<String, Object>> steps,
+            long durationMs,
+            String operatorUserId,
+            String policyVersion,
+            Map<String, Object> remediationEffect
+    ) {
+        if (remediationEffect != null && !remediationEffect.isEmpty() && steps != null) {
+            steps = new ArrayList<>(steps);
+            steps.add(Map.of(
+                    "phase", "effect",
+                    "detail", remediationEffect));
+        }
+        save(traceId, channel, userInput, riskLevel, securityOutcome, toolName, executionOk,
+                resultSummary, steps, durationMs, operatorUserId, policyVersion);
+    }
+
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> parseStepsJson(String stepsRaw) {
         if (stepsRaw == null || stepsRaw.isBlank()) {

@@ -13,6 +13,7 @@ import com.award.log.model.LogSeverityLevel;
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.ElasticsearchService;
 import com.award.log.service.LogAnalysisService;
+import com.award.log.service.LogDocumentAsyncIndexer;
 import com.award.log.websocket.LogStreamWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +42,9 @@ public class RealTimeLogAnalyzer {
     // Elasticsearch服务
     @Autowired(required = false)
     private ElasticsearchService elasticsearchService;
+
+    @Autowired(required = false)
+    private LogDocumentAsyncIndexer logDocumentAsyncIndexer;
     
     // AI告警服务
     @Autowired
@@ -57,17 +61,19 @@ public class RealTimeLogAnalyzer {
     // 简单的消息广播服务
     private final MessageBroadcaster messageBroadcaster = new MessageBroadcaster();
     
-    // 线程池用于处理实时日志分析
-    private ExecutorService executorService;
-    
+    /** 批处理分析工作池（仅调整 core/max，销毁时关闭，避免内存调度时丢任务） */
+    private volatile ThreadPoolExecutor workerPool;
+
+    private final Object poolLock = new Object();
+
     // 线程池核心大小
     private volatile int corePoolSize;
-    
+
     // 日志缓冲区，用于批量分析
     private final List<Map<String, Object>> logBuffer = new ArrayList<>();
-    
-    // 增强的日志解析结果缓冲区
-    private final List<EnhancedLogParseResultEntity> parsedLogBuffer = new ArrayList<>();
+
+    /** 日志缓冲硬上限，防止消费慢于生产时 OOM */
+    private static final int MAX_LOG_BUFFER_SIZE = 2000;
     
     // 缓冲区大小阈值，根据系统内存动态调整
     private volatile int bufferThreshold;
@@ -92,8 +98,13 @@ public class RealTimeLogAnalyzer {
     // 标记是否应该停止分析循环
     private volatile boolean stopAnalysisLoop = false;
     
-    // 内存检查任务调度器
+    // 内存检查任务调度器（只调 buffer / 线程数，不重建池）
     private ScheduledExecutorService memoryCheckScheduler;
+
+    /** 周期性 flush 缓冲区（与 workerPool 分离，避免 resize 时分析环死亡） */
+    private ScheduledExecutorService analysisScheduler;
+
+    private volatile ScheduledFuture<?> analysisLoopFuture;
 
     // --- 分析引擎配置 --- 
     private static class EngineConfig {
@@ -118,30 +129,28 @@ public class RealTimeLogAnalyzer {
 
     @javax.annotation.PreDestroy
     public void destroy() {
-        // 关闭线程池
-        if (executorService != null) {
-            executorService.shutdown();
-            try {
-                if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
-                    executorService.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                executorService.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
+        stopRealTimeAnalysis();
+        shutdownExecutorGracefully(workerPool, "workerPool");
+        shutdownExecutorGracefully(analysisScheduler, "analysisScheduler");
+        shutdownExecutorGracefully(memoryCheckScheduler, "memoryCheckScheduler");
+        synchronized (this) {
+            logBuffer.clear();
         }
-        
-        // 关闭内存检查调度器
-        if (memoryCheckScheduler != null) {
-            memoryCheckScheduler.shutdown();
-            try {
-                if (!memoryCheckScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                    memoryCheckScheduler.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                memoryCheckScheduler.shutdownNow();
-                Thread.currentThread().interrupt();
+    }
+
+    private static void shutdownExecutorGracefully(ExecutorService exec, String name) {
+        if (exec == null) {
+            return;
+        }
+        exec.shutdown();
+        try {
+            if (!exec.awaitTermination(5, TimeUnit.SECONDS)) {
+                log.warn("{} 未在 5s 内结束，执行 shutdownNow", name);
+                exec.shutdownNow();
             }
+        } catch (InterruptedException e) {
+            exec.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -178,33 +187,7 @@ public class RealTimeLogAnalyzer {
             log.info("内存使用率低 ({}), 线程池核心大小调整为: {}", String.format("%.2f", memoryUsage), newCoreSize);
         }
         
-        // 只有当线程池大小发生变化时才重新创建
-        if (corePoolSize != newCoreSize) {
-            corePoolSize = newCoreSize;
-            
-            // 关闭旧线程池
-            if (executorService != null) {
-                executorService.shutdown();
-                try {
-                    if (!executorService.awaitTermination(3, TimeUnit.SECONDS)) {
-                        executorService.shutdownNow();
-                    }
-                } catch (InterruptedException e) {
-                    executorService.shutdownNow();
-                    Thread.currentThread().interrupt();
-                }
-            }
-            
-            // 创建新线程池
-            executorService = Executors.newFixedThreadPool(corePoolSize, new ThreadFactory() {
-                private final AtomicInteger threadNumber = new AtomicInteger(1);
-                @Override
-                public Thread newThread(Runnable r) {
-                    return new Thread(r, "realtime-analyzer-executor-" + threadNumber.getAndIncrement());
-                }
-            });
-            log.info("线程池已重新创建，核心大小: {}", corePoolSize);
-        }
+        resizeWorkerPool(newCoreSize);
         
         // 调整缓冲区大小
         int newBufferThreshold;
@@ -225,11 +208,68 @@ public class RealTimeLogAnalyzer {
         bufferThreshold = newBufferThreshold;
     }
 
+    private void resizeWorkerPool(int newCoreSize) {
+        synchronized (poolLock) {
+            if (workerPool == null) {
+                workerPool = newWorkerPool(newCoreSize);
+                corePoolSize = newCoreSize;
+                log.info("实时分析工作线程池已创建，核心大小: {}", newCoreSize);
+                return;
+            }
+            if (corePoolSize != newCoreSize) {
+                workerPool.setCorePoolSize(newCoreSize);
+                workerPool.setMaximumPoolSize(newCoreSize);
+                corePoolSize = newCoreSize;
+                log.info("实时分析工作线程池已调整核心大小: {}", newCoreSize);
+            }
+        }
+    }
+
+    private ThreadPoolExecutor newWorkerPool(int size) {
+        int n = Math.max(1, size);
+        return new ThreadPoolExecutor(
+                n,
+                n,
+                60L,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(512),
+                new ThreadFactory() {
+                    private final AtomicInteger threadNumber = new AtomicInteger(1);
+
+                    @Override
+                    public Thread newThread(Runnable r) {
+                        Thread t = new Thread(r, "realtime-analyzer-worker-" + threadNumber.getAndIncrement());
+                        t.setDaemon(true);
+                        return t;
+                    }
+                },
+                new ThreadPoolExecutor.CallerRunsPolicy());
+    }
+
+    private void submitWorkerTask(Runnable task) {
+        ThreadPoolExecutor pool = workerPool;
+        if (pool == null || pool.isShutdown()) {
+            log.warn("工作线程池不可用，在当前线程执行分析任务");
+            task.run();
+            return;
+        }
+        try {
+            pool.execute(task);
+        } catch (RejectedExecutionException e) {
+            log.warn("工作线程池繁忙，在当前线程执行分析任务: {}", e.getMessage());
+            task.run();
+        }
+    }
+
     /**
      * 启动内存检查调度器
      */
     private void startMemoryCheckScheduler() {
-        memoryCheckScheduler = Executors.newSingleThreadScheduledExecutor();
+        memoryCheckScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "realtime-analyzer-mem-check");
+            t.setDaemon(true);
+            return t;
+        });
         memoryCheckScheduler.scheduleAtFixedRate(() -> {
             try {
                 adjustResourcesBasedOnMemory();
@@ -243,30 +283,39 @@ public class RealTimeLogAnalyzer {
     /**
      * 启动实时分析任务
      */
-    public void startRealTimeAnalysis() {
-        // 启动定期分析任务
-        executorService.submit(() -> {
-            try {
-                while (!stopAnalysisLoop) {
-                    // 定期分析缓冲区中的日志
+    public synchronized void startRealTimeAnalysis() {
+        stopAnalysisLoop = false;
+        if (analysisLoopFuture != null && !analysisLoopFuture.isCancelled()) {
+            return;
+        }
+        if (analysisScheduler == null || analysisScheduler.isShutdown()) {
+            analysisScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "realtime-analyzer-flush");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        analysisLoopFuture = analysisScheduler.scheduleAtFixedRate(() -> {
+            if (!stopAnalysisLoop) {
+                try {
                     analyzeBufferedLogs();
-                    // 休眠指定时间
-                    TimeUnit.MILLISECONDS.sleep(ANALYSIS_INTERVAL);
+                } catch (Exception e) {
+                    log.error("定期分析缓冲区失败: {}", e.getMessage(), e);
                 }
-                log.info("实时分析任务已停止");
-            } catch (Exception e) {
-                log.error("实时分析任务执行失败: {}", e.getMessage(), e);
             }
-        });
-        
-        log.info("实时日志分析器已启动");
+        }, 0, ANALYSIS_INTERVAL, TimeUnit.MILLISECONDS);
+        log.info("实时日志分析器已启动（独立调度线程，间隔 {}ms）", ANALYSIS_INTERVAL);
     }
 
     /**
      * 停止实时分析任务
      */
-    public void stopRealTimeAnalysis() {
+    public synchronized void stopRealTimeAnalysis() {
         stopAnalysisLoop = true;
+        if (analysisLoopFuture != null) {
+            analysisLoopFuture.cancel(false);
+            analysisLoopFuture = null;
+        }
         log.info("请求停止实时分析任务");
     }
 
@@ -276,7 +325,6 @@ public class RealTimeLogAnalyzer {
     public void resetAnalysisState() {
         stopAnalysisLoop = false;
         logBuffer.clear();
-        parsedLogBuffer.clear();
         log.info("分析状态已重置");
     }
 
@@ -291,7 +339,7 @@ public class RealTimeLogAnalyzer {
             // 内存使用过高，立即处理单条日志
             List<Map<String, Object>> singleLogList = new ArrayList<>();
             singleLogList.add(logEntry);
-            executorService.submit(() -> {
+            submitWorkerTask(() -> {
                 try {
                     Map<String, Object> analysisResult = analyzeLogs(singleLogList);
                     sendAnalysisResult(analysisResult);
@@ -301,13 +349,25 @@ public class RealTimeLogAnalyzer {
             });
             return;
         }
-        
+
         logBuffer.add(logEntry);
-        
+        trimLogBufferIfNeeded();
+
         // 当缓冲区达到阈值时，立即分析
         if (logBuffer.size() >= bufferThreshold) {
             analyzeBufferedLogs();
         }
+    }
+
+    /** 缓冲超过硬上限时丢弃最旧条目并触发一次 flush，避免无限增长 */
+    private void trimLogBufferIfNeeded() {
+        if (logBuffer.size() <= MAX_LOG_BUFFER_SIZE) {
+            return;
+        }
+        int overflow = logBuffer.size() - MAX_LOG_BUFFER_SIZE;
+        logBuffer.subList(0, overflow).clear();
+        log.warn("实时日志缓冲超过 {} 条，已丢弃最旧 {} 条", MAX_LOG_BUFFER_SIZE, overflow);
+        analyzeBufferedLogs();
     }
 
     /**
@@ -332,13 +392,9 @@ public class RealTimeLogAnalyzer {
         List<Map<String, Object>> logsToAnalyze = new ArrayList<>(logBuffer.subList(0, batchSize));
         logBuffer.subList(0, batchSize).clear();
         
-        // 提交分析任务
-        executorService.submit(() -> {
+        submitWorkerTask(() -> {
             try {
-                // 分析日志
                 Map<String, Object> analysisResult = analyzeLogs(logsToAnalyze);
-                
-                // 发送分析结果到前端
                 sendAnalysisResult(analysisResult);
             } catch (Exception e) {
                 log.error("分析日志失败: {}", e.getMessage(), e);
@@ -462,16 +518,17 @@ public class RealTimeLogAnalyzer {
                 res.getAnomalyReasons().add("Windows 事件：建议结合事件 ID / 来源组件排查驱动或系统变更");
             }
             
-            // 将日志添加到实时分析器的缓冲区
-            parsedLogBuffer.add(res);
-            
-            // 同时索引到Elasticsearch
+            // 异步批量索引 Elasticsearch，避免阻塞分析线程
             try {
                 if (elasticsearchService != null) {
                     LogDocument logDocument = convertToLogDocument(log);
                     logDocument.setAnomaly(res.isAnomaly());
-                    elasticsearchService.indexLog(logDocument);
-                    RealTimeLogAnalyzer.this.log.debug("日志已索引到Elasticsearch: {}", logDocument.getId());
+                    if (logDocumentAsyncIndexer != null) {
+                        logDocumentAsyncIndexer.enqueue(logDocument);
+                    } else {
+                        elasticsearchService.indexLog(logDocument);
+                    }
+                    RealTimeLogAnalyzer.this.log.debug("日志已提交 Elasticsearch 索引: {}", logDocument.getId());
                 } else {
                     RealTimeLogAnalyzer.this.log.debug("Elasticsearch服务未启用，跳过日志索引");
                 }
@@ -761,16 +818,7 @@ public class RealTimeLogAnalyzer {
      * 关闭分析器
      */
     public void shutdown() {
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-        
+        destroy();
         log.info("实时日志分析器已关闭");
     }
     
@@ -779,22 +827,20 @@ public class RealTimeLogAnalyzer {
      * 用于广播分析结果到所有活跃的WebSocket会话
      */
     public static class MessageBroadcaster {
-        private final List<LogStreamWebSocketHandler> handlers = new ArrayList<>();
-        
-        /**
-         * 注册WebSocket处理器
-         * @param handler WebSocket处理器实例
-         */
+        private final List<LogStreamWebSocketHandler> handlers = new CopyOnWriteArrayList<>();
+
         public void registerHandler(LogStreamWebSocketHandler handler) {
             if (handler != null && !handlers.contains(handler)) {
                 handlers.add(handler);
             }
         }
-        
-        /**
-         * 广播消息到所有注册的处理器
-         * @param message 消息内容
-         */
+
+        public void unregisterHandler(LogStreamWebSocketHandler handler) {
+            if (handler != null) {
+                handlers.remove(handler);
+            }
+        }
+
         public void broadcast(String message) {
             for (LogStreamWebSocketHandler handler : handlers) {
                 try {

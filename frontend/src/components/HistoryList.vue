@@ -12,7 +12,12 @@
       <div class="filter-container">
         <el-form :inline="true" :model="filterForm" class="filter-form">
           <el-form-item label="任务名称">
-            <el-input v-model="filterForm.fileName" placeholder="输入文件名" clearable />
+            <el-input
+              v-model="filterForm.fileName"
+              placeholder="输入文件名"
+              clearable
+              @keyup.enter="applyFilter"
+            />
           </el-form-item>
           <el-form-item label="状态">
             <el-select v-model="filterForm.status" placeholder="选择状态" clearable>
@@ -31,11 +36,13 @@
               start-placeholder="开始日期"
               end-placeholder="结束日期"
               value-format="YYYY-MM-DD"
-              style="width: 240px"
+              format="YYYY-MM-DD"
+              clearable
+              style="width: 260px"
             />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" @click="fetchHistory">筛选</el-button>
+            <el-button type="primary" @click="applyFilter">筛选</el-button>
             <el-button @click="resetFilter">重置</el-button>
           </el-form-item>
         </el-form>
@@ -58,7 +65,7 @@
                 <div v-else>-</div>
              </template>
         </el-table-column>
-        <el-table-column prop="createTime" label="任务时间" width="180" sortable>
+        <el-table-column prop="createTime" label="任务时间" width="180">
             <template #default="scope">
                 {{ formatTime(scope.row.createTime) }}
             </template>
@@ -230,20 +237,69 @@ const filterForm = ref({
   timeRange: []
 })
 
-const fetchHistory = async () => {
-    loading.value = true
-    try {
-        const res = await getHistory(currentPage.value, pageSize.value, {
-          fileName: filterForm.value.fileName,
-          status: filterForm.value.status,
-          startTime: filterForm.value.timeRange[0] || '',
-          endTime: filterForm.value.timeRange[1] || ''
-        })
-        tasks.value = res.list
-        total.value = res.total
-    } finally {
-        loading.value = false
+/** 将日期选择器值规范为 YYYY-MM-DD（兼容 Date / ISO 字符串） */
+const toDateOnly = (v) => {
+  if (v == null || v === '') return ''
+  if (v instanceof Date) {
+    const y = v.getFullYear()
+    const m = String(v.getMonth() + 1).padStart(2, '0')
+    const d = String(v.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+  const s = String(v).trim()
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/)
+  return m ? m[1] : ''
+}
+
+/** 组装查询参数：空值不传，避免后端收到空字符串仍当条件 */
+const buildHistoryQuery = () => {
+  const q = {}
+  const name = (filterForm.value.fileName || '').trim()
+  const status = (filterForm.value.status || '').trim()
+  if (name) q.fileName = name
+  if (status) q.status = status
+  const range = filterForm.value.timeRange
+  if (Array.isArray(range) && range.length === 2) {
+    let start = toDateOnly(range[0])
+    let end = toDateOnly(range[1])
+    if (start && end && start > end) {
+      const tmp = start
+      start = end
+      end = tmp
     }
+    if (start) q.startTime = start
+    if (end) q.endTime = end
+  }
+  return q
+}
+
+const fetchHistory = async () => {
+  loading.value = true
+  try {
+    const res = await getHistory(currentPage.value, pageSize.value, buildHistoryQuery())
+    const list = res?.list ?? res?.records ?? []
+    tasks.value = Array.isArray(list) ? list : []
+    total.value = Number(res?.total ?? 0)
+  } catch (e) {
+    console.error('加载历史任务失败', e)
+    ElMessage.error('加载失败: ' + (e?.message || '请检查登录与网络'))
+    tasks.value = []
+    total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 筛选：回到第 1 页再请求 */
+const applyFilter = async () => {
+  currentPage.value = 1
+  await fetchHistory()
+  const n = total.value
+  if (n === 0) {
+    ElMessage.info('未找到符合条件的任务，请调整筛选条件')
+  } else {
+    ElMessage.success(`已筛选，共 ${n} 条记录`)
+  }
 }
 
 const handlePageChange = (page) => {
@@ -251,13 +307,16 @@ const handlePageChange = (page) => {
     fetchHistory() // 翻页时重新从后端获取数据
 }
 
-// 重置筛选条件
-const resetFilter = () => {
+// 重置筛选条件并刷新列表
+const resetFilter = async () => {
   filterForm.value = {
     fileName: '',
     status: '',
     timeRange: []
   }
+  currentPage.value = 1
+  await fetchHistory()
+  ElMessage.success('已重置筛选条件')
 }
 
 // 查看任务详情

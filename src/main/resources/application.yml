@@ -20,6 +20,9 @@ spring:
     import: optional:classpath:application-local.yml
   profiles:
     active: dev
+    # 麒麟 V11 + LoongArch 生产：prod-kylin = prod + kylin（安全校验 + 路径/命令探测）
+    group:
+      prod-kylin: prod,kylin
   main:
     allow-circular-references: false
   autoconfigure:
@@ -158,6 +161,12 @@ push:
 
 # Log Collector Configuration
 log:
+  elasticsearch:
+    async:
+      enabled: ${LOG_ES_ASYNC_ENABLED:true}
+      batch-size: 100
+      flush-interval-ms: 5000
+      queue-capacity: 10000
   collector:
     enabled: true
     file:
@@ -184,10 +193,6 @@ log:
         max-depth: 8
         # 模板合并最小相似度（百分比 1–100），与 Drain 论文中 st 对应；过低易误合并
         sim-threshold: 50
-      # Linux / 云原生 单行解析（代码：LogLineParseSupport + LinuxLogParseSupport；无需额外服务）
-      # 已覆盖：rsyslog 传统月日、RFC5424 &lt;PRI&gt;、journalctl JSON(__REALTIME_TIMESTAMP)、audit(msg=audit)、
-      # Docker json-file（log/stream/time）、K8s CRI（行首 RFC3339 + stdout/stderr + P/F）、Apache 时间、
-      # systemd 单元与 syslog tag[pid]；报表/CSV 展示「Linux/容器解析」摘要列，便于答辩演示
       linux-enhanced: true
     collector:
       source-id: file-watcher
@@ -206,6 +211,8 @@ log:
         model-path: src/main/resources/models/random-forest-v2.onnx
         model-version: rf-onnx-v2
         alert-threshold: 0.75
+        # LoongArch64 上 ONNX 本地库常不可用，true 时跳过加载、全程启发式（赛题交付推荐）
+        force-heuristic-on-loongarch: ${RF_FORCE_HEURISTIC_LOONGARCH:false}
 
 # Alarm Configuration（日志分析邮件/企微推送）
 # 注意：推送渠道、收件人、错误阈值、冷却等以控制台「告警配置」为准，持久化在运行目录 alarm-config.json；
@@ -232,7 +239,6 @@ logging:
   level:
     com.award.log.mapper: info
 
-# Knife4j / SpringDoc：勿使用 group-configs 单分组，否则 /v3/api-docs 常为「聚合文档」paths 为空，Knife4j 界面无接口列表
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -299,6 +305,22 @@ agent:
       log-clean-days: ${AGENT_ORCH_LOG_DAYS:30}
       temp-clean-days: ${AGENT_ORCH_TEMP_DAYS:7}
       disk-pressure-percent: ${AGENT_ORCH_DISK_PCT:80}
+  # 全工具融合自主运维：并行感知 → 规则诊断 → 策略内修复 → 验证
+  runtime:
+    enabled: ${AGENT_RUNTIME_ENABLED:true}
+  perception:
+    cache-ttl-ms: ${AGENT_PERCEPTION_CACHE_TTL_MS:60000}
+  autonomous:
+    enabled: ${AGENT_AUTONOMOUS_ENABLED:true}
+    disk-pressure-percent: ${AGENT_AUTONOMOUS_DISK_PCT:80}
+    cpu-warn-percent: ${AGENT_AUTONOMOUS_CPU_PCT:85}
+    mem-warn-percent: ${AGENT_AUTONOMOUS_MEM_PCT:88}
+    log-clean-days: ${AGENT_AUTONOMOUS_LOG_DAYS:30}
+    temp-clean-days: ${AGENT_AUTONOMOUS_TEMP_DAYS:7}
+    health-check-host: ${AGENT_AUTONOMOUS_HEALTH_HOST:127.0.0.1}
+    health-check-ports: ${AGENT_AUTONOMOUS_HEALTH_PORTS:8080,80,443}
+    ping-target: ${AGENT_AUTONOMOUS_PING_TARGET:8.8.8.8}
+    run-after-patrol: ${AGENT_AUTONOMOUS_AFTER_PATROL:true}
   trust:
     notify-max: ${AGENT_TRUST_NOTIFY_MAX:6.0}
   log-safety:
@@ -327,7 +349,15 @@ qdrant:
 
 # 主动巡检：磁盘/告警/异常日志突增/僵尸进程/Drain 新模板；WebSocket channel=patrol_alert；GET /api/ops/patrol/alerts/recent
 # 自动修复：巡检后按磁盘阈值对白名单临时目录 / 日志根执行真实清理（WebSocket channel=patrol_remediation）；生产可关 OPS_AUTO_REMEDIATION_ENABLED
+audit:
+  retention-days: ${AUDIT_RETENTION_DAYS:90}
+  cleanup-cron: ${AUDIT_CLEANUP_CRON:0 0 3 * * ?}
+
 ops:
+  dry-run:
+    global: ${OPS_DRY_RUN_GLOBAL:false}
+  websocket:
+    replay-buffer-size: ${OPS_WS_REPLAY_BUFFER:50}
   auto-remediation:
     enabled: ${OPS_AUTO_REMEDIATION_ENABLED:true}
     # HYBRID（默认）：风险分 < risk-patrol-auto-max 的步骤自动执行；≥ 该值进入待您确认（口令「确认执行」）
@@ -355,7 +385,11 @@ ops:
     inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:/var/log,/tmp}
     dedup-window-ms: ${OPS_PATROL_DEDUP_MS:900000}
     disk-hotspot-top-n: ${OPS_PATROL_DISK_HOTSPOT_N:5}
+    disk-hotspot-max-depth: ${OPS_PATROL_DISK_HOTSPOT_DEPTH:3}
+    disk-hotspot-visit-budget: ${OPS_PATROL_DISK_HOTSPOT_BUDGET:12000}
     error-alarm-min: ${OPS_PATROL_ERROR_ALARM_MIN:3}
+    anomaly-min-delta: ${OPS_PATROL_ANOMALY_MIN_DELTA:5}
+    anomaly-baseline-ema-alpha: ${OPS_PATROL_ANOMALY_EMA:0.35}
     # 启动后异步跑一次巡检，填充 correlation/latest，避免首屏空窗
     warm-on-startup: ${OPS_PATROL_WARM_START:true}
 

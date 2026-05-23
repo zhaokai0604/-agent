@@ -9,6 +9,8 @@
               打开工作台对话
             </el-button>
             <el-button type="primary" @click="refreshData">刷新数据</el-button>
+            <el-button type="info" plain size="small" @click="exportDashboardPng">导出 PNG</el-button>
+            <el-button type="info" plain size="small" @click="exportDashboardPdf">导出 PDF</el-button>
           </div>
         </div>
       </template>
@@ -17,25 +19,25 @@
       <div class="stats-row">
         <el-card class="stat-card">
           <div class="stat-item">
-            <div class="stat-label">总日志数</div>
+            <div class="stat-label">近7日日志数</div>
             <div class="stat-value">{{ logSummary.totalLogs || 0 }}</div>
           </div>
         </el-card>
         <el-card class="stat-card">
           <div class="stat-item">
-            <div class="stat-label">异常日志数</div>
+            <div class="stat-label">近7日异常数</div>
             <div class="stat-value">{{ logSummary.anomalyLogs || 0 }}</div>
           </div>
         </el-card>
         <el-card class="stat-card">
           <div class="stat-item">
-            <div class="stat-label">异常率</div>
+            <div class="stat-label">近7日异常率</div>
             <div class="stat-value">{{ (logSummary.anomalyRate || 0).toFixed(2) }}%</div>
           </div>
         </el-card>
         <el-card class="stat-card">
           <div class="stat-item">
-            <div class="stat-label">总任务数</div>
+            <div class="stat-label">近7日任务数</div>
             <div class="stat-value">{{ logSummary.totalTasks || 0 }}</div>
           </div>
         </el-card>
@@ -48,7 +50,7 @@
           <template #header>
             <span>日志分析趋势</span>
           </template>
-          <div ref="trendChartRef" class="chart-container"></div>
+          <div ref="trendChartRef" class="chart-container echarts-host"></div>
         </el-card>
 
         <!-- 异常类型分布 -->
@@ -56,7 +58,7 @@
           <template #header>
             <span>异常类型分布</span>
           </template>
-          <div ref="distributionChartRef" class="chart-container"></div>
+          <div ref="distributionChartRef" class="chart-container echarts-host"></div>
         </el-card>
       </div>
 
@@ -66,7 +68,7 @@
           <template #header>
             <span>任务状态统计</span>
           </template>
-          <div ref="taskStatusChartRef" class="chart-container"></div>
+          <div ref="taskStatusChartRef" class="chart-container echarts-host"></div>
         </el-card>
 
         <!-- 系统性能 -->
@@ -74,7 +76,7 @@
           <template #header>
             <span>系统性能</span>
           </template>
-          <div ref="performanceChartRef" class="chart-container"></div>
+          <div ref="performanceChartRef" class="chart-container echarts-host"></div>
         </el-card>
       </div>
 
@@ -102,7 +104,11 @@
               <el-progress :percentage="scope.row.progress" :stroke-width="10"></el-progress>
             </template>
           </el-table-column>
-          <el-table-column prop="createTime" label="创建时间" width="180"></el-table-column>
+          <el-table-column prop="createTime" label="创建时间" width="180">
+            <template #default="scope">
+              {{ formatDateTime(scope.row.createTime) }}
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="280">
             <template #default="scope">
               <el-button size="small" type="primary" @click="viewTask(scope.row.taskId)">
@@ -135,9 +141,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, defineEmits } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, defineEmits } from 'vue'
+import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import { getLogSummary, getTaskStatusStatistics, getPerformance, getHistory } from '../api/index.js'
+import { formatLocalDateKey, formatDateTime } from '../utils/formatDate.js'
+import { exportDashboardPdfDocument, chartToPngDataUrl } from '../utils/dashboardExport.js'
 import {
   dispatchOpsAgentPrefill,
   shouldOfferAgentDeepDive,
@@ -161,6 +170,124 @@ let trendChart = null
 let distributionChart = null
 let taskStatusChart = null
 let performanceChart = null
+
+const TREND_DAYS = 7
+
+const downloadDataUrl = (dataUrl, filename) => {
+  const a = document.createElement('a')
+  a.href = dataUrl
+  a.download = filename
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+const exportChartPng = (chart, filename) => {
+  if (!chart) return false
+  try {
+    const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' })
+    downloadDataUrl(url, filename)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const exportDashboardPng = () => {
+  const items = [
+    [trendChart, 'log-trend-7d.png'],
+    [distributionChart, 'anomaly-distribution.png'],
+    [taskStatusChart, 'task-status.png'],
+    [performanceChart, 'system-performance.png']
+  ]
+  let n = 0
+  for (const [chart, name] of items) {
+    if (exportChartPng(chart, name)) n += 1
+  }
+  if (n > 0) {
+    ElMessage.success(`已导出 ${n} 张图表 PNG`)
+  } else {
+    ElMessage.warning('图表尚未就绪，请先刷新数据')
+  }
+}
+
+const exportDashboardPdf = async () => {
+  const charts = [trendChart, distributionChart, taskStatusChart, performanceChart]
+  const images = charts.map((c) => chartToPngDataUrl(c)).filter(Boolean)
+  if (images.length === 0) {
+    ElMessage.warning('图表尚未就绪，请先刷新数据')
+    return
+  }
+  const summary = logSummary.value || {}
+  const summaryLine =
+    `近7日：日志 ${summary.totalLogs ?? 0} · 异常 ${summary.anomalyLogs ?? 0} · 异常率 ${(summary.anomalyRate ?? 0).toFixed(2)}% · 任务 ${summary.totalTasks ?? 0}`
+  try {
+    await exportDashboardPdfDocument({
+      title: '日志分析仪表盘 · 近7日报告',
+      summaryLine,
+      chartImages: images,
+      filename: `log-dashboard-report-${formatLocalDateKey(new Date())}.pdf`
+    })
+    ElMessage.success('已导出 PDF 报告')
+  } catch (e) {
+    ElMessage.error(e?.message || 'PDF 导出失败')
+  }
+}
+
+/** MyBatis Map 键名大小写兼容 */
+const pickField = (row, ...keys) => {
+  if (!row || typeof row !== 'object') return undefined
+  const norm = {}
+  for (const [k, v] of Object.entries(row)) {
+    norm[String(k).toLowerCase()] = v
+  }
+  for (const k of keys) {
+    const v = norm[String(k).toLowerCase()]
+    if (v !== undefined && v !== null) return v
+  }
+  return undefined
+}
+
+const formatTrendDate = (raw) => {
+  if (raw == null) return ''
+  if (raw instanceof Date) return formatLocalDateKey(raw)
+  if (typeof raw === 'string') return raw.slice(0, 10)
+  return String(raw).slice(0, 10)
+}
+
+const buildTrendSeries = (taskTrend, days = TREND_DAYS) => {
+  const countByDate = new Map()
+  const list = Array.isArray(taskTrend) ? taskTrend : []
+  for (const item of list) {
+    const d = formatTrendDate(pickField(item, 'date', 'task_date', 'day'))
+    const c = Number(pickField(item, 'count', 'cnt', 'total') || 0)
+    if (d) countByDate.set(d, c)
+  }
+  const labels = []
+  const values = []
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    const key = formatLocalDateKey(d)
+    labels.push(key)
+    values.push(countByDate.get(key) ?? 0)
+  }
+  return { labels, values }
+}
+
+const scheduleChartResize = () => {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      trendChart?.resize()
+      distributionChart?.resize()
+      taskStatusChart?.resize()
+      performanceChart?.resize()
+    })
+  })
+}
 
 // 初始化图表
 const initCharts = () => {
@@ -303,44 +430,110 @@ const refreshData = async () => {
 
     const historyData = await getHistory(1, 10)
     recentTasks.value = historyData.records || historyData.list || []
+
+    scheduleChartResize()
   } catch (error) {
     console.error('获取数据失败:', error)
+    ElMessage.error('仪表盘数据加载失败: ' + (error?.message || '请检查登录与网络'))
   }
 }
 
 // 更新趋势图表
 const updateTrendChart = (taskTrend) => {
-  if (trendChart && taskTrend) {
-    const dates = taskTrend.map(item => item.date)
-    const counts = taskTrend.map(item => item.count)
+  if (!trendChart) return
+  const { labels, values } = buildTrendSeries(taskTrend, TREND_DAYS)
+  const hasData = values.some((v) => v > 0)
 
-    trendChart.setOption({
+  trendChart.setOption(
+    {
+      title: hasData
+        ? undefined
+        : {
+            text: '近 7 日暂无新分析任务',
+            left: 'center',
+            top: 'middle',
+            textStyle: { color: '#909399', fontSize: 14, fontWeight: 'normal' }
+          },
+      grid: { left: 48, right: 24, top: 40, bottom: 32 },
+      tooltip: { trigger: 'axis' },
       xAxis: {
-        data: dates
+        type: 'category',
+        data: labels,
+        boundaryGap: false,
+        axisLabel: { rotate: labels.length > 5 ? 30 : 0 }
       },
-      series: [{
-        data: counts,
-        type: 'line',
-        smooth: true,
-        areaStyle: {}
-      }]
-    })
-  }
+      yAxis: { type: 'value', minInterval: 1 },
+      series: [
+        {
+          name: '分析任务数',
+          type: 'line',
+          smooth: true,
+          data: values,
+          areaStyle: { opacity: 0.12 },
+          itemStyle: { color: '#0d9488' },
+          lineStyle: { width: 2 }
+        }
+      ]
+    },
+    true
+  )
 }
 
 // 更新分布图表
 const updateDistributionChart = (anomalyDistribution) => {
-  if (!distributionChart || !Array.isArray(anomalyDistribution)) return
-  const data = anomalyDistribution.map(item => ({
-    name: item.type ?? item.name ?? 'UNKNOWN',
-    value: Number(item.count ?? item.value ?? 0)
-  }))
+  if (!distributionChart) return
+  const list = Array.isArray(anomalyDistribution) ? anomalyDistribution : []
+  const data = list
+    .map((item) => ({
+      name: String(pickField(item, 'type', 'name', 'severity') ?? 'UNKNOWN'),
+      value: Number(pickField(item, 'count', 'value', 'cnt') || 0)
+    }))
+    .filter((d) => d.value > 0)
 
-  distributionChart.setOption({
-    series: [{
-      data: data
-    }]
-  })
+  if (!data.length) {
+    distributionChart.setOption(
+      {
+        title: {
+          text: '暂无异常日志（近 7 日）',
+          subtext: '完成日志分析且标记为异常后此处显示级别分布',
+          left: 'center',
+          top: 'center',
+          textStyle: { color: '#909399', fontSize: 14, fontWeight: 'normal' },
+          subtextStyle: { color: '#c0c4cc', fontSize: 12 }
+        },
+        legend: { show: false },
+        series: [{ type: 'pie', radius: ['40%', '62%'], data: [] }]
+      },
+      true
+    )
+    return
+  }
+
+  distributionChart.setOption(
+    {
+      title: { show: false },
+      legend: { orient: 'vertical', left: 'left', top: 'middle' },
+      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+      color: ['#f56c6c', '#e6a23c', '#409eff', '#909399', '#67c23a'],
+      series: [
+        {
+          type: 'pie',
+          radius: ['38%', '62%'],
+          center: ['58%', '50%'],
+          data,
+          emphasis: {
+            itemStyle: {
+              shadowBlur: 10,
+              shadowOffsetX: 0,
+              shadowColor: 'rgba(0, 0, 0, 0.2)'
+            }
+          },
+          label: { formatter: '{b}\n{c}' }
+        }
+      ]
+    },
+    true
+  )
 }
 
 // 更新任务状态图表
@@ -351,39 +544,44 @@ const updateTaskStatusChart = (taskStatusData) => {
   const statuses = Object.keys(taskStatusData.statusCount)
   const counts = statuses.map(status => taskStatusData.statusCount[status])
 
-  taskStatusChart.setOption({
-    xAxis: {
-      data: statuses
+  taskStatusChart.setOption(
+    {
+      grid: { left: 48, right: 24, top: 24, bottom: 32 },
+      tooltip: { trigger: 'axis' },
+      xAxis: { type: 'category', data: statuses },
+      yAxis: { type: 'value', minInterval: 1 },
+      series: [
+        {
+          type: 'bar',
+          data: counts,
+          itemStyle: { color: '#0d9488' },
+          barMaxWidth: 48
+        }
+      ]
     },
-    series: [{
-      data: counts
-    }]
-  })
+    true
+  )
 }
 
 // 更新性能图表
 const updatePerformanceChart = (performanceData) => {
   if (performanceChart && performanceData) {
-    performanceChart.setOption({
-      series: [
-        {
-          name: 'CPU使用率',
-          data: [performanceData.cpuUsage || 0]
-        },
-        {
-          name: '内存使用率',
-          data: [performanceData.memoryUsage || 0]
-        },
-        {
-          name: '磁盘使用率',
-          data: [performanceData.diskUsage || 0]
-        },
-        {
-          name: '网络使用率',
-          data: [performanceData.networkUsage || 0]
-        }
-      ]
-    })
+    performanceChart.setOption(
+      {
+        grid: { left: 48, right: 24, top: 40, bottom: 32 },
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['CPU使用率', '内存使用率', '磁盘使用率', '网络使用率'] },
+        xAxis: { type: 'category', data: ['当前'] },
+        yAxis: { type: 'value', max: 100 },
+        series: [
+          { name: 'CPU使用率', type: 'bar', data: [performanceData.cpuUsage || 0] },
+          { name: '内存使用率', type: 'bar', data: [performanceData.memoryUsage || 0] },
+          { name: '磁盘使用率', type: 'bar', data: [performanceData.diskUsage || 0] },
+          { name: '网络使用率', type: 'bar', data: [performanceData.networkUsage || 0] }
+        ]
+      },
+      true
+    )
   }
 }
 
@@ -432,9 +630,10 @@ const handleResize = () => {
 }
 
 // 生命周期钩子
-onMounted(() => {
+onMounted(async () => {
+  await nextTick()
   initCharts()
-  refreshData()
+  await refreshData()
   window.addEventListener('resize', handleResize)
 })
 
@@ -511,6 +710,13 @@ onUnmounted(() => {
 .chart-container {
   width: 100%;
   height: 280px;
+  min-height: 280px;
+  background: transparent;
+}
+
+.echarts-host {
+  position: relative;
+  z-index: 1;
 }
 
 .table-card {

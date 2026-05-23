@@ -5,6 +5,7 @@ import ai.onnxruntime.OnnxValue;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
+import com.award.log.util.OsRuntime;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +50,9 @@ public class RandomForestDecisionEngine {
 
     @Value("${log.pipeline.decision.rf.model-version:rf-onnx-v2}")
     private String modelVersion;
+
+    @Value("${log.pipeline.decision.rf.force-heuristic-on-loongarch:false}")
+    private boolean forceHeuristicOnLoongarch;
 
     private volatile OrtEnvironment environment;
     private volatile OrtSession session;
@@ -114,6 +118,11 @@ public class RandomForestDecisionEngine {
     }
 
     private boolean tryLoadModel() {
+        if (forceHeuristicOnLoongarch && OsRuntime.isLoongArch()) {
+            modelLoaded = false;
+            modelStatus = "HEURISTIC_LOONGARCH";
+            return false;
+        }
         if (session != null && inputName != null) {
             return true;
         }
@@ -121,7 +130,8 @@ public class RandomForestDecisionEngine {
             if (session != null && inputName != null) {
                 return true;
             }
-            if (!Files.exists(Path.of(modelPath))) {
+            Path resolved = resolveModelPath();
+            if (resolved == null || !Files.exists(resolved)) {
                 modelLoaded = false;
                 modelStatus = "MODEL_NOT_FOUND";
                 return false;
@@ -129,7 +139,7 @@ public class RandomForestDecisionEngine {
             try {
                 environment = OrtEnvironment.getEnvironment();
                 OrtSession.SessionOptions options = new OrtSession.SessionOptions();
-                session = environment.createSession(modelPath, options);
+                session = environment.createSession(resolved.toString(), options);
                 inputName = session.getInputNames().stream().findFirst().orElse(null);
                 if (inputName == null) {
                     closeSession();
@@ -149,6 +159,25 @@ public class RandomForestDecisionEngine {
                 return false;
             }
         }
+    }
+
+    private Path resolveModelPath() {
+        if (modelPath == null || modelPath.isBlank()) {
+            return null;
+        }
+        if (modelPath.startsWith("classpath:")) {
+            String resource = modelPath.substring("classpath:".length()).trim();
+            try {
+                java.net.URL url = getClass().getClassLoader().getResource(resource);
+                if (url != null) {
+                    return Path.of(url.toURI());
+                }
+            } catch (Exception e) {
+                log.debug("[RF] classpath 模型解析失败: {}", e.getMessage());
+            }
+            return null;
+        }
+        return Path.of(modelPath);
     }
 
     private double runOnnxInference(DecisionInput input) throws OrtException {
@@ -234,6 +263,8 @@ public class RandomForestDecisionEngine {
         snapshot.put("featureVersion", featureVersion);
         snapshot.put("modelLoaded", session != null && inputName != null && modelLoaded);
         snapshot.put("modelStatus", modelStatus);
+        snapshot.put("loongArch", OsRuntime.isLoongArch());
+        snapshot.put("forceHeuristicOnLoongarch", forceHeuristicOnLoongarch);
         snapshot.put("inputName", inputName == null ? "" : inputName);
         snapshot.put("featureSize", RfFeatureVectorExt.FEATURE_SIZE);
         snapshot.put("lastInferenceTime", lastInferenceTime);

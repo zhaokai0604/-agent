@@ -1,5 +1,6 @@
 package com.award.log.security;
 
+import com.award.log.mcp.McpToolCatalog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -17,10 +18,13 @@ public class AgenticRiskScoreEngine {
 
     private final double autoMax;
     private final double confirmMax;
+    private final McpToolCatalog mcpToolCatalog;
 
     public AgenticRiskScoreEngine(
+            McpToolCatalog mcpToolCatalog,
             @Value("${agent.security.risk-score-auto-max:3}") double autoMax,
             @Value("${agent.security.risk-score-confirm-max:7}") double confirmMax) {
+        this.mcpToolCatalog = mcpToolCatalog;
         this.autoMax = clamp(autoMax, 0, 10);
         this.confirmMax = clamp(confirmMax, this.autoMax, 10);
     }
@@ -40,7 +44,7 @@ public class AgenticRiskScoreEngine {
         Map<String, Double> dims = new LinkedHashMap<>();
         double total = 0;
 
-        double toolBase = baseToolRisk(toolName);
+        double toolBase = mcpToolCatalog.defaultRiskScore(toolName);
         dims.put("toolBase", round1(toolBase));
         total += toolBase;
 
@@ -92,21 +96,6 @@ public class AgenticRiskScoreEngine {
         }
         String n = Normalizer.normalize(s.trim(), Normalizer.Form.NFKC);
         return n.replaceAll("\\p{Cf}", "");
-    }
-
-    private static double baseToolRisk(String toolName) {
-        if (toolName == null) {
-            return 0;
-        }
-        return switch (toolName) {
-            case "DiskTool", "ProcessTool", "SystemLoadTool", "LogAnalysisTool", "NetworkTool" -> 0.5;
-            case "ConfigCheckTool", "DiskAnalyzeTool", "DiskInsightTool" -> 1.0;
-            case "PrivilegeTool", "OsInsightTool" -> 2.0;
-            case "CleanTempTool" -> 4.5;
-            case "LogCleanupTool" -> 5.5;
-            case "ServiceRestartTool" -> 7.0;
-            default -> 2.5;
-        };
     }
 
     private static double pathSensitivityScore(String haystack) {

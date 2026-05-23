@@ -31,6 +31,13 @@
     <span v-if="errorHint" class="err-hint" :title="errorHint">{{ errorHint }}</span>
     <span v-else-if="updatedAt" class="updated">{{ updatedAt }}</span>
 
+    <div
+      v-show="patrolTrendHasData"
+      ref="patrolTrendRef"
+      class="patrol-trend-chart"
+      title="近7日巡检告警频次（按日）"
+    />
+
     <el-popover
       v-if="showPatrolPopover"
       placement="bottom-end"
@@ -106,6 +113,9 @@
         </div>
         <div v-else class="patrol-empty">关联数据尚未采集</div>
 
+        <el-divider content-position="left">近7日告警趋势</el-divider>
+        <div ref="patrolTrendPopRef" class="patrol-trend-pop-chart" />
+
         <template v-if="hotspots.length">
           <el-divider content-position="left">目录热点 Top</el-divider>
           <ul class="hotspot-list">
@@ -121,16 +131,18 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted, onUnmounted } from 'vue'
+import { reactive, ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Odometer } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import * as echarts from 'echarts'
 import {
   getPerformanceData,
   getPatrolAlertsRecent,
   getPatrolCorrelationLatest,
   getPatrolRemediationPending,
   confirmPatrolRemediation,
-  getPatrolRemediationCoverage
+  getPatrolRemediationCoverage,
+  getPatrolHistoryTrend
 } from '../api/index.js'
 
 const runtimeHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
@@ -169,6 +181,12 @@ const correlation = ref({})
 const pendingRemediation = ref({ hasPending: false })
 const remConfirmLoading = ref(false)
 const remediationCoverage = ref([])
+const patrolTrendRef = ref(null)
+const patrolTrendPopRef = ref(null)
+const patrolTrendHasData = ref(false)
+const patrolTrendRows = ref([])
+let patrolTrendChart = null
+let patrolTrendPopChart = null
 let timer = null
 let patrolTimer = null
 let perfWs = null
@@ -395,6 +413,7 @@ function connectPerformanceWs () {
   perfWs.onopen = () => {
     wsReconnectAttempt = 0
     try {
+      perfWs.send('sync')
       perfWs.send('refresh')
     } catch {
       /* 首帧由服务端定时推送，refresh 为可选加速 */
@@ -496,12 +515,110 @@ function progressColor (v) {
   return '#34d399'
 }
 
+function buildPatrolTrendOption (rows, compact) {
+  const list = Array.isArray(rows) ? rows : []
+  const labels = list.map((r) => {
+    const d = String(r.day || '')
+    return d.length >= 10 ? d.slice(5) : d
+  })
+  const alertCounts = list.map((r) => Number(r.alertCount ?? 0))
+  const runCounts = list.map((r) => Number(r.runCount ?? 0))
+  return {
+    animation: false,
+    grid: compact
+      ? { left: 0, right: 0, top: 2, bottom: 0 }
+      : { left: 36, right: 12, top: 24, bottom: 28 },
+    tooltip: {
+      trigger: 'axis',
+      formatter (params) {
+        const p = params?.[0]
+        if (!p) return ''
+        const i = p.dataIndex
+        return `${list[i]?.day || p.axisValue}<br/>告警 ${alertCounts[i] ?? 0} 条<br/>巡检 ${runCounts[i] ?? 0} 次`
+      }
+    },
+    xAxis: {
+      type: 'category',
+      data: labels,
+      show: !compact,
+      axisLabel: { fontSize: 10, color: '#94a3b8' }
+    },
+    yAxis: {
+      type: 'value',
+      show: !compact,
+      minInterval: 1,
+      axisLabel: { fontSize: 10, color: '#94a3b8' },
+      splitLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } }
+    },
+    series: [
+      {
+        name: '告警',
+        type: compact ? 'line' : 'bar',
+        smooth: true,
+        symbol: compact ? 'none' : 'circle',
+        symbolSize: 4,
+        data: alertCounts,
+        areaStyle: compact ? { color: 'rgba(245,158,11,0.25)' } : undefined,
+        itemStyle: { color: '#f59e0b' },
+        lineStyle: compact ? { width: 2, color: '#f59e0b' } : undefined
+      }
+    ]
+  }
+}
+
+function renderPatrolTrendCharts () {
+  const rows = patrolTrendRows.value
+  patrolTrendHasData.value = rows.length > 0
+  if (!patrolTrendHasData.value) return
+
+  nextTick(() => {
+    if (patrolTrendRef.value) {
+      if (!patrolTrendChart) {
+        patrolTrendChart = echarts.init(patrolTrendRef.value)
+      }
+      patrolTrendChart.setOption(buildPatrolTrendOption(rows, true), true)
+      patrolTrendChart.resize()
+    }
+    if (patrolTrendPopRef.value) {
+      if (!patrolTrendPopChart) {
+        patrolTrendPopChart = echarts.init(patrolTrendPopRef.value)
+      }
+      patrolTrendPopChart.setOption(buildPatrolTrendOption(rows, false), true)
+      patrolTrendPopChart.resize()
+    }
+  })
+}
+
+async function fetchPatrolHistoryTrend () {
+  try {
+    const rows = await getPatrolHistoryTrend(7)
+    patrolTrendRows.value = Array.isArray(rows) ? rows : []
+    renderPatrolTrendCharts()
+  } catch {
+    patrolTrendRows.value = []
+    patrolTrendHasData.value = false
+  }
+}
+
+watch(showPatrolPopover, (open) => {
+  if (open) {
+    nextTick(() => {
+      patrolTrendPopChart?.resize()
+      if (!patrolTrendPopChart && patrolTrendPopRef.value && patrolTrendRows.value.length) {
+        patrolTrendPopChart = echarts.init(patrolTrendPopRef.value)
+        patrolTrendPopChart.setOption(buildPatrolTrendOption(patrolTrendRows.value, false), true)
+      }
+    })
+  }
+})
+
 async function patrolTick () {
   try {
     const [list, corr] = await Promise.all([
       getPatrolAlertsRecent(12),
       getPatrolCorrelationLatest()
     ])
+    await fetchPatrolHistoryTrend()
     await fetchRemediationPending()
     await fetchRemediationCoverage()
     correlation.value = corr && typeof corr === 'object' ? { ...corr } : {}
@@ -545,6 +662,10 @@ onUnmounted(() => {
   if (timer) clearInterval(timer)
   if (patrolTimer) clearInterval(patrolTimer)
   disconnectPerformanceWs(true, true)
+  patrolTrendChart?.dispose()
+  patrolTrendPopChart?.dispose()
+  patrolTrendChart = null
+  patrolTrendPopChart = null
 })
 </script>
 
@@ -638,6 +759,19 @@ onUnmounted(() => {
   flex-shrink: 0;
   margin-left: 4px;
   font-variant-numeric: tabular-nums;
+}
+
+.patrol-trend-chart {
+  width: 132px;
+  height: 34px;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.patrol-trend-pop-chart {
+  width: 100%;
+  height: 160px;
+  margin-bottom: 4px;
 }
 
 .patrol-hint {

@@ -3,6 +3,7 @@ package com.award.log.controller;
 import com.award.log.common.Result;
 import com.award.log.service.OpsAutoRemediationService;
 import com.award.log.service.OpsPatrolService;
+import com.award.log.service.PatrolHistoryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,6 +27,30 @@ public class OpsPatrolController {
 
     @Autowired(required = false)
     private OpsAutoRemediationService opsAutoRemediationService;
+
+    @Autowired(required = false)
+    private PatrolHistoryService patrolHistoryService;
+
+    @Operation(summary = "巡检历史记录（持久化，默认近 7 天）")
+    @GetMapping("/history")
+    public Result<List<Map<String, Object>>> patrolHistory(
+            @RequestParam(name = "days", defaultValue = "7") int days,
+            @RequestParam(name = "limit", defaultValue = "50") int limit) {
+        if (patrolHistoryService == null) {
+            return Result.success(List.of());
+        }
+        return Result.success(patrolHistoryService.listHistory(days, limit));
+    }
+
+    @Operation(summary = "巡检告警频次趋势（按日聚合 finding_count）")
+    @GetMapping("/history/trend")
+    public Result<List<Map<String, Object>>> patrolTrend(
+            @RequestParam(name = "days", defaultValue = "7") int days) {
+        if (patrolHistoryService == null) {
+            return Result.success(List.of());
+        }
+        return Result.success(patrolHistoryService.countByDay(days));
+    }
 
     @Operation(summary = "最近一次巡检生成的多维关联快照（每轮更新，无告警时亦有数据）")
     @GetMapping("/correlation/latest")

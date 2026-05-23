@@ -18,7 +18,12 @@ cd "$ROOT"
 OUT="${DEPLOY_OUT:-$ROOT/deploy/release}"
 SKIP_FRONTEND="${SKIP_FRONTEND:-0}"
 SKIP_BACKEND="${SKIP_BACKEND:-0}"
-SKIP_TESTS="${SKIP_TESTS:-1}"
+# PROD_BUILD=1 或 KYLIN_PROD_BUILD=1 时强制跑测试
+if [[ "${PROD_BUILD:-0}" == "1" || "${KYLIN_PROD_BUILD:-0}" == "1" ]]; then
+  SKIP_TESTS=0
+else
+  SKIP_TESTS="${SKIP_TESTS:-1}"
+fi
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

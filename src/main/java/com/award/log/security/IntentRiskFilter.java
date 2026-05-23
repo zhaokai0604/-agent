@@ -17,9 +17,10 @@ import java.util.regex.Pattern;
 public class IntentRiskFilter {
 
     private static final Pattern HIGH_RISK_PATTERN = Pattern.compile(
-            "(删库|drop\\s+database|关闭防火墙|关防火墙|rm\\s+-rf\\s+/|格式化磁盘|\\bmkfs\\b|\\bfdisk\\b|shutdown|poweroff|reboot|init\\s+0|"
+            "(删库|drop\\s+database|关闭防火墙|关防火墙|rm\\s+-rf\\s*/?|格式化磁盘|\\bmkfs\\b|\\bfdisk\\b|shutdown|poweroff|reboot|init\\s+0|"
                     + ":mkfs|一键下载.*执行|下载.*\\|\\s*bash|curl[^\\n]{0,400}\\|\\s*sh|wget[^\\n]{0,400}\\|\\s*sh|"
-                    + "iptables\\s+-F|iptables\\s+-X|echo\\s+.*>\\s+/etc/sudoers|写入.*sudoers)",
+                    + "iptables\\s+-F|iptables\\s+-X|echo\\s+.*>\\s+/etc/sudoers|写入.*sudoers|"
+                    + "删除.{0,16}(整个|全部|所有|根|系统)|删.{0,4}(整个|全部|所有).{0,12}(系统|根|盘|文件)|清空.{0,8}(系统|根|盘))",
             Pattern.CASE_INSENSITIVE
     );
 
@@ -31,8 +32,8 @@ public class IntentRiskFilter {
 
     /** 与高危意图语义对齐的短种子（Jaccard 词袋相似度命中即提升为 HIGH，缓解「换说法绕过」） */
     private static final String[] HIGH_RISK_SEED_PHRASES = {
-            "删库", "删除根目录", "rm -rf /", "drop database", "关闭防火墙", "清空防火墙规则",
-            "格式化磁盘", "一键下载执行", "curl bash", "wget sh", "shutdown now"
+            "删库", "删除根目录", "删除整个系统文件", "删除全部系统文件", "rm -rf /", "drop database",
+            "关闭防火墙", "清空防火墙规则", "格式化磁盘", "一键下载执行", "curl bash", "wget sh", "shutdown now"
     };
 
     private final CollaborativeDecisionService collaborativeDecisionService;

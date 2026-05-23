@@ -79,6 +79,13 @@
         select count(*) from log_analysis_detail
     </select>
 
+    <select id="countSinceDays" resultType="java.lang.Long">
+        select count(*)
+        from log_analysis_detail d
+        inner join log_analysis_task t on d.task_id = t.task_id
+        where t.create_time &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+    </select>
+
     <select id="selectAnomalySeverityDistribution" resultType="java.util.Map">
         SELECT COALESCE(NULLIF(TRIM(d.severity), ''), 'UNKNOWN') AS type,
                COUNT(*) AS count

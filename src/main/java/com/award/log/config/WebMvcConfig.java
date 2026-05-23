@@ -62,7 +62,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/webjars/**",
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
-                        "/error"
+                        "/error",
+                        "/api/platform/info",
+                        "/api/ops/perception/snapshot"
                 );
     }
 

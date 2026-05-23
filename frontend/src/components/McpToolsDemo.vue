@@ -114,10 +114,10 @@
           <span class="duration">耗时: {{ currentResult.duration }}ms</span>
         </div>
 
-        <el-divider content-position="left">完整返回数据</el-divider>
+        <el-divider content-position="left">返回详情</el-divider>
 
-        <div class="json-viewer">
-          <pre>{{ formatFullResultJson(currentResult.fullResult) }}</pre>
+        <div class="result-structured">
+          <StructuredResultView :data="currentResult.fullResult" />
         </div>
       </div>
     </el-dialog>
@@ -140,6 +140,8 @@ import { executeMcpTool, confirmMcpExecute, getMcpTools } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
 import { mergeToolRegistry, getMcpToolCommandHint, applyMcpWriteConfirmParams, mcpToolBadge } from '../utils/mcpToolsMeta'
 import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
+import { formatResultPreview } from '../utils/structuredDataView'
+import StructuredResultView from './StructuredResultView.vue'
 
 const activeTab = ref('overview')
 const selectedTool = ref(null)
@@ -209,7 +211,7 @@ const executeTool = async () => {
       }
       data = await confirmMcpExecute(
         selectedTool.value,
-        applyMcpWriteConfirmParams(selectedTool.value, params),
+        applyMcpWriteConfirmParams(selectedTool.value, params, ''),
         '确认执行'
       )
     }
@@ -217,19 +219,13 @@ const executeTool = async () => {
     data = normalizeMcpToolResponse(data)
 
     const previewRaw = data.success ? data.data : (data.data?.error ?? data.error ?? data.message)
-    const previewStr =
-      typeof previewRaw === 'string'
-        ? previewRaw
-        : previewRaw != null
-          ? JSON.stringify(previewRaw)
-          : ''
 
     const result = {
       toolName: selectedTool.value,
       timestamp: new Date().toLocaleString('zh-CN'),
       duration: data.duration || 0,
       success: data.success,
-      resultPreview: (previewStr || '').length > 140 ? previewStr.slice(0, 140) + '…' : previewStr || '-',
+      resultPreview: formatResultPreview(previewRaw != null ? previewRaw : data),
       fullResult: data
     }
 
@@ -262,15 +258,6 @@ const viewDetail = (row) => {
   resultDialogVisible.value = true
 }
 
-const formatFullResultJson = (fr) => {
-  if (fr == null) return ''
-  try {
-    const obj = typeof fr === 'string' ? JSON.parse(fr) : fr
-    return JSON.stringify(obj, null, 2)
-  } catch {
-    return String(fr)
-  }
-}
 </script>
 
 <style scoped>
@@ -463,18 +450,10 @@ const formatFullResultJson = (fr) => {
   font-size: 14px;
 }
 
-.json-viewer {
-  background: #1e1e1e;
-  border-radius: 8px;
-  padding: 20px;
-  overflow-x: auto;
-}
-
-.json-viewer pre {
-  color: #d4d4d4;
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-  margin: 0;
+.result-structured {
+  max-height: min(56vh, 520px);
+  overflow-y: auto;
+  padding: 4px 2px;
 }
 
 .execution-overlay {

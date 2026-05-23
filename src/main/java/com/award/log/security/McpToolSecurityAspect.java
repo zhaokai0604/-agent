@@ -5,7 +5,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -21,9 +20,6 @@ import java.util.stream.Collectors;
 @Order(0)
 @RequiredArgsConstructor
 public class McpToolSecurityAspect {
-
-    @Value("${agent.security.chat-agent-block-medium-tool-calls:false}")
-    private boolean chatAgentBlockMediumToolCalls;
 
     private final McpInvocationSecurityGate mcpInvocationSecurityGate;
 
@@ -41,11 +37,6 @@ public class McpToolSecurityAspect {
                 mcpInvocationSecurityGate.evaluateChatToolInvocation(toolBeanName, instruction);
 
         if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.BLOCK) {
-            if ("HIGH_INTENT".equals(decision.getCode()) && decision.getRiskLevel() == RiskLevel.MEDIUM
-                    && !chatAgentBlockMediumToolCalls) {
-                log.debug("对话工具中风险意图已放行（与 HTTP 控制台二次确认路径区分）: {}", toolBeanName);
-                return pjp.proceed();
-            }
             log.warn("Tool 调用被统一安全门拦截: {} code={} msg={}", toolBeanName, decision.getCode(), decision.getMessage());
             throw new OpsSecurityRejectedException(
                     decision.getMessage() != null ? decision.getMessage() : "安全拦截（工具层）");

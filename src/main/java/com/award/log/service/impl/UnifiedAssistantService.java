@@ -1,7 +1,7 @@
 package com.award.log.service.impl;
 
 import com.award.log.agent.AssistantAuditRecorder;
-import com.award.log.agent.AssistantOrchestrator;
+import com.award.log.agent.OpsRuntimeService;
 import com.award.log.agent.MultiAgentContextBuilder;
 import com.award.log.mcp.McpToolRegistry;
 import com.award.log.security.AgenticRiskScoreEngine;
@@ -94,7 +94,7 @@ public class UnifiedAssistantService {
     private ReadOnlySurfaceDenylist readOnlySurfaceDenylist;
 
     @Autowired(required = false)
-    private AssistantOrchestrator assistantOrchestrator;
+    private OpsRuntimeService opsRuntimeService;
 
     @Autowired
     private AssistantAuditRecorder assistantAuditRecorder;
@@ -293,11 +293,11 @@ public class UnifiedAssistantService {
         if (rl == RiskLevel.HIGH) {
             return Flux.just("检测到高风险意图，与对话入口风控一致：已暂停 **自动工具多步** 。请拆分需求、降低操作范围，或联系管理员走审批与 MCP 确认执行。");
         }
-        if (orchestratorEnabled && assistantOrchestrator != null && assistantOrchestrator.supports(userMessage)) {
+        if (orchestratorEnabled && opsRuntimeService != null && opsRuntimeService.shouldOrchestrate(userMessage)) {
             McpToolSurface surface = toolSurfaceResolver.resolve(userMessage, rl);
             return Flux.concat(
-                    Flux.just("> 已启用 **运维闭环编排**（感知 → 预览 → 策略内执行 → 验证）…\n\n"),
-                    Mono.fromCallable(() -> assistantOrchestrator.run(userMessage, surface, rl).markdown())
+                    Flux.just("> 已启用 **Agent 运维运行时**（感知 → 推理 → 安全校验 → 执行 → 验证）…\n\n"),
+                    Mono.fromCallable(() -> opsRuntimeService.run(userMessage, surface, rl).markdown())
                             .subscribeOn(Schedulers.boundedElastic())
                             .timeout(Duration.ofMinutes(5))
                             .flatMapMany(this::chunkTextForSse)
@@ -526,7 +526,11 @@ public class UnifiedAssistantService {
                 - 结合 `intentRisk` 与 `utteranceRiskScore` 调整措辞激进程度；高风险时优先给止血建议与人工升级路径。
                 
                 ## 与本节点绑定的 MCP 工具名（须写确切英文名，与 `/api/mcp` 白名单一致）
-                `DiskTool`、`DiskInsightTool`、`DiskAnalyzeTool`、`ProcessTool`、`SystemLoadTool`、`LogAnalysisTool`、`CleanTempTool`、`LogCleanupTool`、`ServiceRestartTool`、`ConfigCheckTool`、`NetworkTool`、`PrivilegeTool`、`OsInsightTool`。
+                **一键自主运维（优先）**：`AutonomousOpsTool`（`runAutonomousOps`）— 并行融合全部观测工具并策略内自动修复。
+                分项工具：`DiskTool`、`DiskInsightTool`、`DiskAnalyzeTool`、`ProcessTool`、`SystemLoadTool`、`LogAnalysisTool`、
+                `CleanTempTool`、`LogCleanupTool`、`ServiceRestartTool`、`ConfigCheckTool`、`NetworkTool`、`PrivilegeTool`、`OsInsightTool`、
+                `PortHealthTool`、`DockerTool`、`CronJobTool`、`FirewallTool`、`SslCertTool`、`SystemdTool`、`ConfigDriftTool`。
+                用户要求「自动运维 / 全自动 / 察觉并解决问题」时，**必须先调用 `runAutonomousOps`**，勿零散调用十余个工具代替。
                 """ + toolAugmentedSection(context) + """
                 
                 ## 实时上下文附件（JSON，只读）

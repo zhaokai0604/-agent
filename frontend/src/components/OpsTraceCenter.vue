@@ -7,10 +7,13 @@
         <div class="header-actions">
           <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
           <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
+          <el-button size="small" type="info" plain :disabled="!rows.length" @click="onExportPng">导出 PNG</el-button>
+          <el-button size="small" type="info" plain :disabled="!rows.length" @click="onExportPdf">导出 PDF</el-button>
         </div>
       </div>
     </template>
 
+    <div ref="exportWrapRef" class="audit-export-wrap">
     <el-table :data="rows" border stripe height="520">
       <el-table-column prop="traceId" label="traceId" min-width="200" show-overflow-tooltip />
       <el-table-column prop="channel" label="通道" width="76" />
@@ -33,8 +36,29 @@
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
-    <el-dialog v-model="cotVisible" title="思维链审计（CoT）" width="720px" destroy-on-close @opened="onCotOpened">
+    <el-dialog
+      v-model="cotVisible"
+      width="720px"
+      destroy-on-close
+      class="cot-dialog"
+      @opened="onCotOpened"
+    >
+      <template #header>
+        <div class="cot-dialog-header">
+          <span class="cot-dialog-title">思维链审计（CoT）</span>
+          <div v-if="cotDetail.traceId && !cotLoading" class="cot-dialog-actions">
+            <el-button size="small" type="info" plain :loading="cotExporting" @click="onExportCotPng">
+              导出 PNG
+            </el-button>
+            <el-button size="small" type="info" plain :loading="cotExporting" @click="onExportCotPdf">
+              导出 PDF
+            </el-button>
+          </div>
+        </div>
+      </template>
+      <div ref="cotExportRef" class="cot-export-wrap">
       <div v-if="cotLoading" class="cot-loading">加载中…</div>
       <template v-else-if="cotDetail.traceId">
         <el-descriptions :column="1" border size="small" class="cot-meta">
@@ -45,16 +69,35 @@
           <el-descriptions-item label="风险">{{ cotDetail.riskLevel }}</el-descriptions-item>
         </el-descriptions>
         <el-divider content-position="left">四步闭环</el-divider>
-        <ol class="cot-steps">
-          <li v-for="(step, idx) in cotStepsNormalized" :key="idx" class="cot-step">
-            <div class="cot-step-title">{{ step.title }}</div>
-            <pre class="cot-step-body">{{ step.body }}</pre>
-          </li>
-        </ol>
+        <div class="cot-steps">
+          <el-card
+            v-for="(step, idx) in cotStepsNormalized"
+            :key="idx"
+            shadow="never"
+            class="cot-step-card"
+            body-style="padding: 12px 14px"
+          >
+            <template #header>
+              <div class="cot-step-header">
+                <el-tag size="small" type="primary" effect="plain">步骤 {{ idx + 1 }}</el-tag>
+                <span class="cot-step-title">{{ step.title }}</span>
+              </div>
+            </template>
+            <StructuredResultView :view-model="step.view" />
+          </el-card>
+        </div>
         <el-divider v-if="cotDetail.resultSummary" content-position="left">结果摘要</el-divider>
-        <pre v-if="cotDetail.resultSummary" class="cot-summary">{{ cotDetail.resultSummary }}</pre>
+        <el-card
+          v-if="cotDetail.resultSummary"
+          shadow="never"
+          class="cot-summary-card export-scroll-unlock"
+          body-style="padding: 12px 14px"
+        >
+          <StructuredResultView :data="cotDetail.resultSummary" />
+        </el-card>
       </template>
       <div v-else class="cot-empty">暂无数据</div>
+      </div>
     </el-dialog>
   </el-card>
   </div>
@@ -64,15 +107,27 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getOpsTraceRecent, getOpsTraceDetail } from '../api'
+import { buildStructuredViewModel, coerceStructuredInput } from '../utils/structuredDataView'
+import StructuredResultView from './StructuredResultView.vue'
+import { formatLocalDateKey } from '../utils/formatDate.js'
+import {
+  exportTableAsPng,
+  exportTableAsPdf,
+  buildTableSummaryLine
+} from '../utils/tableExport.js'
 
 const rows = ref([])
 const loading = ref(false)
 const limit = ref(100)
+const exportWrapRef = ref(null)
+const exporting = ref(false)
 
 const cotVisible = ref(false)
 const cotLoading = ref(false)
 const cotDetail = ref({})
 const pendingTraceId = ref('')
+const cotExportRef = ref(null)
+const cotExporting = ref(false)
 
 const loadData = async () => {
   loading.value = true
@@ -90,12 +145,13 @@ const cotStepsNormalized = computed(() => {
   const steps = cotDetail.value?.steps
   if (!Array.isArray(steps)) return []
   return steps.map((s) => {
-    const detail = s?.detail != null ? String(s.detail) : ''
-    const title = s?.title || s?.phase || 'step'
+    const title = s?.title || s?.phase || '步骤'
     const stepNum = s?.step != null ? `[${s.step}] ` : ''
+    const rawBody = s?.detail != null ? s.detail : s
+    const parsed = coerceStructuredInput(rawBody)
     return {
       title: `${stepNum}${title}`,
-      body: detail || JSON.stringify(s, null, 2)
+      view: buildStructuredViewModel(parsed)
     }
   })
 })
@@ -121,6 +177,97 @@ const onCotOpened = async () => {
   }
 }
 
+const cotExportBasename = () => {
+  const tid = String(cotDetail.value?.traceId || 'unknown').replace(/[^\w-]/g, '').slice(0, 24)
+  return `ops-cot-${tid}-${formatLocalDateKey(new Date())}`
+}
+
+const cotExportSummary = () => {
+  const d = cotDetail.value || {}
+  return `traceId ${d.traceId || '—'} · 工具 ${d.toolName || '—'} · ${d.securityOutcome || '—'} · 风险 ${d.riskLevel || '—'} · ${cotStepsNormalized.value.length} 步 · 导出 ${new Date().toLocaleString()}`
+}
+
+const onExportCotPng = async () => {
+  if (!cotExportRef.value || !cotDetail.value?.traceId) {
+    ElMessage.warning('请先等待思维链加载完成')
+    return
+  }
+  cotExporting.value = true
+  try {
+    await exportTableAsPng(cotExportRef.value, `${cotExportBasename()}.png`)
+    ElMessage.success('思维链已导出 PNG')
+  } catch (e) {
+    ElMessage.error(e?.message || 'PNG 导出失败')
+  } finally {
+    cotExporting.value = false
+  }
+}
+
+const onExportCotPdf = async () => {
+  if (!cotExportRef.value || !cotDetail.value?.traceId) {
+    ElMessage.warning('请先等待思维链加载完成')
+    return
+  }
+  cotExporting.value = true
+  try {
+    await exportTableAsPdf({
+      element: cotExportRef.value,
+      title: '运维链路思维链（CoT）',
+      summaryLine: cotExportSummary(),
+      filename: `${cotExportBasename()}.pdf`
+    })
+    ElMessage.success('思维链已导出 PDF')
+  } catch (e) {
+    ElMessage.error(e?.message || 'PDF 导出失败')
+  } finally {
+    cotExporting.value = false
+  }
+}
+
+const onExportPng = async () => {
+  if (!exportWrapRef.value || !rows.value.length) {
+    ElMessage.warning('暂无数据可导出')
+    return
+  }
+  exporting.value = true
+  try {
+    await exportTableAsPng(
+      exportWrapRef.value,
+      `ops-trace-audit-${formatLocalDateKey(new Date())}.png`
+    )
+    ElMessage.success('已导出 PNG')
+  } catch (e) {
+    ElMessage.error(e?.message || 'PNG 导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+const onExportPdf = async () => {
+  if (!exportWrapRef.value || !rows.value.length) {
+    ElMessage.warning('暂无数据可导出')
+    return
+  }
+  exporting.value = true
+  try {
+    const okCount = rows.value.filter((r) => r.executionOk).length
+    await exportTableAsPdf({
+      element: exportWrapRef.value,
+      title: '运维链路审计',
+      summaryLine: buildTableSummaryLine(
+        rows.value.length,
+        `成功 ${okCount} 条 · 最近 ${limit.value} 条`
+      ),
+      filename: `ops-trace-audit-${formatLocalDateKey(new Date())}.pdf`
+    })
+    ElMessage.success('已导出 PDF')
+  } catch (e) {
+    ElMessage.error(e?.message || 'PDF 导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 onMounted(() => loadData())
 </script>
 
@@ -136,6 +283,10 @@ onMounted(() => loadData())
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+.audit-export-wrap {
+  background: #fff;
 }
 .cot-loading,
 .cot-empty {
@@ -147,38 +298,47 @@ onMounted(() => loadData())
   margin-bottom: 8px;
 }
 .cot-steps {
-  margin: 0;
-  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.cot-step {
-  margin-bottom: 12px;
+.cot-step-card {
+  border: 1px solid var(--el-border-color-lighter);
+}
+.cot-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .cot-step-title {
   font-weight: 600;
-  margin-bottom: 6px;
+  font-size: 13px;
   color: var(--el-text-color-primary);
 }
-.cot-step-body {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-  line-height: 1.5;
-  background: var(--el-fill-color-light);
-  padding: 10px 12px;
-  border-radius: 8px;
-  max-height: 220px;
-  overflow: auto;
+.cot-summary-card {
+  border: 1px solid var(--el-border-color-lighter);
+  max-height: 320px;
+  overflow-y: auto;
 }
-.cot-summary {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-  background: var(--el-fill-color-light);
-  padding: 12px;
-  border-radius: 8px;
-  max-height: 280px;
-  overflow: auto;
+.cot-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 8px;
+}
+.cot-dialog-title {
+  font-weight: 600;
+  font-size: 16px;
+}
+.cot-dialog-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.cot-export-wrap {
+  background: #fff;
+  padding: 4px 0;
 }
 </style>

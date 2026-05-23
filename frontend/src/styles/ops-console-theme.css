@@ -226,12 +226,18 @@ body {
   color: var(--ops-text-subtle) !important;
 }
 
-.main-content [class*='chart'],
-.main-content [class*='legend'],
+/* 勿用 [class*='chart']：会命中 .chart-container，盖住 ECharts canvas */
+.main-content .chart-card.el-card,
+.main-content .gauge-chart,
+.main-content [class*='legend']:not(.echarts-host):not(.echarts-host *),
 .main-content [class*='baseline'] {
   background: var(--ops-panel-soft) !important;
   border-color: var(--ops-border-soft) !important;
   box-shadow: none !important;
+}
+
+.main-content .echarts-host {
+  background: transparent !important;
 }
 
 .main-content .el-table__row:hover {

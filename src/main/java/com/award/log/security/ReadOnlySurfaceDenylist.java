@@ -18,7 +18,12 @@ public class ReadOnlySurfaceDenylist {
             "CleanTempTool",
             "LogCleanupTool",
             "ServiceRestartTool",
-            "PrivilegeTool"
+            "PrivilegeTool",
+            "DiskOpsTool",
+            "LogOpsTool",
+            "ServiceOpsTool",
+            "ContainerOpsTool",
+            "ProcessOpsTool"
     );
 
     private final Set<String> denied;

@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { formatApiError } from '../utils/apiError.js'
 
 const runtimeHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
 const runtimeProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
@@ -44,8 +45,9 @@ request.interceptors.response.use(
       setTimeout(() => window.location.reload(), 300)
       return Promise.reject(new Error(message || 'Unauthorized'))
     }
-    ElMessage.error(message || 'Request Failed')
-    return Promise.reject(new Error(message))
+  const errMsg = formatApiError({ response: { data: res.data } }) || message || '请求失败'
+    ElMessage.error(errMsg)
+    return Promise.reject(new Error(errMsg))
   },
   error => {
     if (error.response?.status === 401 || error.response?.status === 403) {
@@ -54,10 +56,16 @@ request.interceptors.response.use(
       setTimeout(() => window.location.reload(), 300)
       return Promise.reject(error)
     }
-    ElMessage.error(error.message)
-    return Promise.reject(error)
+    const errMsg = formatApiError(error)
+    ElMessage.error(errMsg)
+    const wrapped = new Error(errMsg)
+    wrapped.securityCode = error.response?.data?.securityCode
+    wrapped.raw = error.response?.data
+    return Promise.reject(wrapped)
   }
 )
+
+export { formatApiError }
 
 export const uploadLog = (formData) => request.post('/log/upload', formData)
 
@@ -65,14 +73,15 @@ export const uploadLogs = (formData) => request.post('/log/upload/multi', formDa
 
 export const getTaskStatus = (taskId) => request.get(`/log/task/${taskId}`)
 export const getReport = (taskId) => request.get(`/log/report/${taskId}`)
-export const getHistory = (pageNum = 1, pageSize = 10, filters = {}) => 
-  request.get('/log/history', { 
-    params: { 
-      pageNum, 
-      pageSize,
-      ...filters
-    } 
-  })
+export const getHistory = (pageNum = 1, pageSize = 10, filters = {}) => {
+  const params = { pageNum, pageSize }
+  for (const [k, v] of Object.entries(filters || {})) {
+    if (v != null && String(v).trim() !== '') {
+      params[k] = typeof v === 'string' ? v.trim() : v
+    }
+  }
+  return request.get('/log/history', { params })
+}
 export const performDiagnosis = (taskId) => request.post(`/log/diagnose/${taskId}`)
 export const pauseTask = (taskId) => request.post(`/log/pause/${taskId}`)
 export const resumeTask = (taskId) => request.post(`/log/resume/${taskId}`)
@@ -352,13 +361,31 @@ export const triggerManualTraining = () => request.post('/decision-feedback/trai
 export const markAsTrained = (ids) => request.post('/decision-feedback/mark-trained', ids)
 
 // MCP工具相关API
-export const executeMcpTool = (toolName, parameters) => {
-  return request.post('/api/mcp/execute', { toolName, parameters })
+export const executeMcpTool = (toolName, parameters, userMessage = '') => {
+  const body = { toolName, parameters }
+  const um = typeof userMessage === 'string' ? userMessage.trim() : ''
+  if (um) body.userMessage = um
+  return request.post('/api/mcp/execute', body)
 }
 
 /** 中等风险二次确认后执行（confirmCode 须与后端一致：确认执行） */
-export const confirmMcpExecute = (toolName, parameters, confirmCode = '确认执行') => {
-  return request.post('/api/mcp/confirmExecute', { toolName, parameters, confirmCode })
+export const confirmMcpExecute = (toolName, parameters, confirmCode = '确认执行', userMessage = '') => {
+  const body = { toolName, parameters, confirmCode }
+  const um = typeof userMessage === 'string' ? userMessage.trim() : ''
+  if (um) body.userMessage = um
+  return request.post('/api/mcp/confirmExecute', body)
 }
 
 export const getMcpTools = () => request.get('/api/mcp/tools')
+
+export const getPatrolHistory = (days = 7, limit = 50) =>
+  request.get('/api/ops/patrol/history', { params: { days, limit } })
+
+export const getPatrolHistoryTrend = (days = 7) =>
+  request.get('/api/ops/patrol/history/trend', { params: { days } })
+
+/** 全工具融合自主运维（不经过 LLM） */
+export const runAutonomousOps = (forceRemediate = false, readOnly = false) =>
+  request.post('/api/ops/autonomous/run', null, {
+    params: { forceRemediate, readOnly }
+  })

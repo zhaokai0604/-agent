@@ -9,6 +9,7 @@ import com.award.log.model.LogAnalysisDetail;
 import com.award.log.model.LogAnalysisTask;
 import com.award.log.model.LogProtocolType;
 import com.award.log.model.LogSeverityLevel;
+import com.award.log.util.HistoryFilterTime;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -48,13 +49,27 @@ public class AnalysisTaskManager {
      * @param endTime 结束时间
      */
     public PageResult<TaskInfo> getTasksPage(int pageNum, int pageSize, String fileName, String status, String startTime, String endTime) {
-        int offset = (pageNum - 1) * pageSize;
-        log.info("分页查询任务列表，pageNum: [{}], pageSize: [{}], fileName: [{}], status: [{}], startTime: [{}], endTime: [{}]", 
-                pageNum, pageSize, fileName, status, startTime, endTime);
-        
-        // 根据筛选条件查询数据库
-        long total = taskMapper.countWithFilter(fileName, status, startTime, endTime);
-        List<TaskInfo> list = taskMapper.selectPageWithFilter(offset, pageSize, fileName, status, startTime, endTime).stream()
+        int safePage = Math.max(pageNum, 1);
+        int safeSize = Math.max(pageSize, 1);
+        int offset = (safePage - 1) * safeSize;
+        fileName = blankToNull(fileName);
+        status = blankToNull(status);
+        startTime = blankToNull(startTime);
+        endTime = blankToNull(endTime);
+        java.time.LocalDate startDate = HistoryFilterTime.parseDateOnly(startTime);
+        java.time.LocalDate endDate = HistoryFilterTime.parseDateOnly(endTime);
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
+            java.time.LocalDate tmp = startDate;
+            startDate = endDate;
+            endDate = tmp;
+        }
+        java.time.LocalDateTime createTimeStart = startDate == null ? null : startDate.atStartOfDay();
+        java.time.LocalDateTime createTimeEnd = endDate == null ? null : endDate.atTime(23, 59, 59);
+        log.info("分页查询任务列表，pageNum: [{}], pageSize: [{}], fileName: [{}], status: [{}], createTimeStart: [{}], createTimeEnd: [{}]",
+                safePage, safeSize, fileName, status, createTimeStart, createTimeEnd);
+
+        long total = taskMapper.countWithFilter(fileName, status, createTimeStart, createTimeEnd);
+        List<TaskInfo> list = taskMapper.selectPageWithFilter(offset, safeSize, fileName, status, createTimeStart, createTimeEnd).stream()
                 .map(task -> convertToDto(task, null))
                 .collect(Collectors.toList());
                 
@@ -229,6 +244,14 @@ public class AnalysisTaskManager {
             log.error("删除任务失败 - ID: [{}]", taskId, e);
             throw new RuntimeException("删除任务失败", e);
         }
+    }
+
+    private static String blankToNull(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.trim();
+        return t.isEmpty() ? null : t;
     }
 
     // --- Converters ---

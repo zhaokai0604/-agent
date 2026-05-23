@@ -55,11 +55,11 @@
             <if test="status != null and status != ''">
                 and status = #{status}
             </if>
-            <if test="startTime != null and startTime != ''">
-                and create_time &gt;= concat(#{startTime}, ' 00:00:00')
+            <if test="createTimeStart != null">
+                and create_time &gt;= #{createTimeStart}
             </if>
-            <if test="endTime != null and endTime != ''">
-                and create_time &lt;= concat(#{endTime}, ' 23:59:59')
+            <if test="createTimeEnd != null">
+                and create_time &lt;= #{createTimeEnd}
             </if>
         </where>
         order by create_time desc
@@ -68,6 +68,12 @@
 
     <select id="countAll" resultType="java.lang.Long">
         select count(*) from log_analysis_task
+    </select>
+
+    <select id="countSinceDays" resultType="java.lang.Long">
+        select count(*)
+        from log_analysis_task
+        where create_time &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
     </select>
 
     <select id="countWithFilter" resultType="java.lang.Long">
@@ -80,11 +86,11 @@
             <if test="status != null and status != ''">
                 and status = #{status}
             </if>
-            <if test="startTime != null and startTime != ''">
-                and create_time &gt;= concat(#{startTime}, ' 00:00:00')
+            <if test="createTimeStart != null">
+                and create_time &gt;= #{createTimeStart}
             </if>
-            <if test="endTime != null and endTime != ''">
-                and create_time &lt;= concat(#{endTime}, ' 23:59:59')
+            <if test="createTimeEnd != null">
+                and create_time &lt;= #{createTimeEnd}
             </if>
         </where>
     </select>

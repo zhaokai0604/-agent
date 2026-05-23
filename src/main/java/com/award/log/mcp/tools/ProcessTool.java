@@ -246,4 +246,71 @@ public class ProcessTool extends AbstractCommandExecutor {
     private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
         return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<String>(false, null, error, duration, false));
     }
+
+    @Tool(name = "terminateProcess",
+            description = "终止进程（写操作）：默认 dryRun 预览；真实结束须 dryRun=false 且 confirmKill=true。禁止结束 PID≤10")
+    public String terminateProcess(
+            @ToolParam(description = "进程 PID", required = true) Integer pid,
+            @ToolParam(description = "信号：TERM|KILL，默认 TERM", required = false) String signal,
+            @ToolParam(description = "true/null=预览", required = false) Boolean dryRun,
+            @ToolParam(description = "真实结束须 true", required = false) Boolean confirmKill
+    ) throws JsonProcessingException {
+        long startTime = System.currentTimeMillis();
+        if (pid == null || pid <= 10) {
+            return buildErrorResponse("PID 无效或属于受保护范围（须 >10）", startTime);
+        }
+        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
+        if (!isDryRun && !Boolean.TRUE.equals(confirmKill)) {
+            return buildErrorResponse("真实结束进程需 dryRun=false 且 confirmKill=true", startTime);
+        }
+        String sig = signal == null || signal.isBlank() ? "TERM" : signal.trim().toUpperCase();
+        List<String> cmd;
+        if (OsRuntime.isWindows()) {
+            cmd = "KILL".equals(sig)
+                    ? List.of("taskkill", "/F", "/PID", String.valueOf(pid))
+                    : List.of("taskkill", "/PID", String.valueOf(pid));
+        } else {
+            cmd = "KILL".equals(sig) || "SIGKILL".equals(sig)
+                    ? List.of("kill", "-9", String.valueOf(pid))
+                    : List.of("kill", "-15", String.valueOf(pid));
+        }
+        if (isDryRun) {
+            Map<String, Object> preview = new LinkedHashMap<>();
+            preview.put("mode", "DRY-RUN");
+            preview.put("pid", pid);
+            preview.put("plan", String.join(" ", cmd));
+            String data = objectMapper.writeValueAsString(preview);
+            return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+        }
+        AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(cmd, 30_000L);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("pid", pid);
+        body.put("command", String.join(" ", cmd));
+        body.put("success", result.success());
+        body.put("output", result.output());
+        if (!result.success()) {
+            body.put("error", result.error());
+        }
+        String data = objectMapper.writeValueAsString(body);
+        long duration = System.currentTimeMillis() - startTime;
+        return buildSuccessResponse(data, duration, false);
+    }
+
+    /** MCP HTTP 网关：operation = list | kill */
+    public String executeGateway(
+            String operation,
+            Double minCpu,
+            Double minMem,
+            Integer pid,
+            String signal,
+            Boolean dryRun,
+            Boolean confirmKill
+    ) throws JsonProcessingException {
+        String op = operation == null || operation.isBlank() ? "list" : operation.trim().toLowerCase();
+        return switch (op) {
+            case "list", "ps" -> listProcesses(minCpu, minMem);
+            case "kill", "terminate", "stop" -> terminateProcess(pid, signal, dryRun, confirmKill);
+            default -> buildErrorResponse("未知 operation: " + operation + "；可选 list|kill", System.currentTimeMillis());
+        };
+    }
 }

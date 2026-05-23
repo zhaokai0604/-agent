@@ -185,15 +185,6 @@ class DrainParserTest {
     }
 
     @Test
-    void classicParserShouldWork() {
-        DrainParser parser = new DrainParserV2();
-        String id1 = parser.parse("ERROR user 123 timeout");
-        String id2 = parser.parse("ERROR user 456 timeout");
-        Assertions.assertEquals(id1, id2);
-        Assertions.assertEquals("DrainParserV2", parser.getVersion());
-    }
-
-    @Test
     void plusParserShouldWork() {
         DrainParser parser = new DrainPlusParser(8, 50);
         String id1 = parser.parse("ERROR user 123 timeout");

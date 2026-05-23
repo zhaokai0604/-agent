@@ -49,6 +49,7 @@ export const WORKBENCH_QUICK_GROUPS = [
       { label: '日志清理预览', icon: Files, cmd: '预览清理 /var/log 下 30 天前的陈旧日志文件' },
       { label: '服务重启预览', icon: RefreshRight, cmd: '预览重启 nginx 服务（dry-run）' },
       { label: '闭环清理', icon: Delete, cmd: '帮我清理系统垃圾' },
+      { label: '自主运维', icon: RefreshRight, cmd: '请执行全自动运维：察觉问题并自动修复' },
       { label: '延时清理', icon: Timer, cmd: '30分钟之后帮我预览清理临时文件' },
       { label: '延时巡检', icon: Clock, cmd: '20分钟之后检查磁盘使用情况' }
     ]

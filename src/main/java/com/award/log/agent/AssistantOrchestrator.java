@@ -36,25 +36,7 @@ import java.util.regex.Pattern;
 @Service
 public class AssistantOrchestrator {
 
-    private static final Pattern PATROL_CONTINUE_INTENT = Pattern.compile(
-            "(继续处理|处理巡检|执行巡检|巡检待办|待确认方案|处理待办)",
-            Pattern.CASE_INSENSITIVE);
-
-    private static final Pattern CPU_INTENT = Pattern.compile(
-            "(cpu|负载|卡顿|慢|性能).*(高|满|异常|问题)|"
-                    + "(高负载|cpu高|内存紧张|系统慢)",
-            Pattern.CASE_INSENSITIVE);
-
-    private static final Pattern CLEANUP_INTENT = Pattern.compile(
-            "(清理|清除|删掉|删除|释放).*(垃圾|空间|磁盘|日志|临时|tmp|temp|log)|"
-                    + "(磁盘|空间|硬盘).*(满|不足|紧张|告警)|"
-                    + "(disk|space).*(full|low|cleanup)|"
-                    + "cleanup.*(disk|log|temp)",
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    private static final Pattern EXECUTE_FOLLOWUP = Pattern.compile(
-            "(执行清理|按预览执行|真实删除|确认执行|开始清理|执行删除)",
-            Pattern.CASE_INSENSITIVE);
+    private final OpsIntentRouter opsIntentRouter;
 
     private final DiskTool diskTool;
     private final DiskAnalyzeTool diskAnalyzeTool;
@@ -82,7 +64,9 @@ public class AssistantOrchestrator {
             AgenticRiskScoreEngine agenticRiskScoreEngine,
             AssistantAuditRecorder auditRecorder,
             ObjectMapper objectMapper,
-            AgentOpsProperties agentOpsProperties) {
+            AgentOpsProperties agentOpsProperties,
+            OpsIntentRouter opsIntentRouter) {
+        this.opsIntentRouter = opsIntentRouter;
         this.diskTool = diskTool;
         this.diskAnalyzeTool = diskAnalyzeTool;
         this.logCleanupTool = logCleanupTool;
@@ -111,17 +95,18 @@ public class AssistantOrchestrator {
         if (userMessage == null || userMessage.isBlank()) {
             return false;
         }
-        return CLEANUP_INTENT.matcher(userMessage).find()
-                || EXECUTE_FOLLOWUP.matcher(userMessage).find()
-                || PATROL_CONTINUE_INTENT.matcher(userMessage).find()
-                || CPU_INTENT.matcher(userMessage).find();
+        OpsIntentRouter.Playbook pb = opsIntentRouter.resolve(userMessage);
+        return pb == OpsIntentRouter.Playbook.DISK_CLEANUP
+                || pb == OpsIntentRouter.Playbook.CPU_PRESSURE
+                || pb == OpsIntentRouter.Playbook.PATROL_CONTINUATION;
     }
 
     public RunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
-        if (PATROL_CONTINUE_INTENT.matcher(userMessage).find()) {
+        OpsIntentRouter.Playbook playbook = opsIntentRouter.resolve(userMessage);
+        if (playbook == OpsIntentRouter.Playbook.PATROL_CONTINUATION) {
             return runPatrolContinuation(userMessage, surface, intentRisk);
         }
-        if (CPU_INTENT.matcher(userMessage).find() && !CLEANUP_INTENT.matcher(userMessage).find()) {
+        if (playbook == OpsIntentRouter.Playbook.CPU_PRESSURE) {
             return runCpuPressure(userMessage, surface, intentRisk);
         }
         long t0 = System.currentTimeMillis();
@@ -136,7 +121,7 @@ public class AssistantOrchestrator {
             return new RunResult(md, traceId);
         }
 
-        boolean forceExecute = EXECUTE_FOLLOWUP.matcher(userMessage).find();
+        boolean forceExecute = opsIntentRouter.forceRemediate(userMessage);
         StringBuilder md = new StringBuilder();
         md.append("> **traceId:** `").append(traceId).append("`\n\n");
         md.append("## 运维闭环报告\n\n");

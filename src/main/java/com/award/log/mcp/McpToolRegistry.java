@@ -29,6 +29,19 @@ public class McpToolRegistry {
             NetworkTool networkTool,
             PrivilegeTool privilegeTool,
             OsInsightTool osInsightTool,
+            PortHealthTool portHealthTool,
+            DockerTool dockerTool,
+            CronJobTool cronJobTool,
+            FirewallTool firewallTool,
+            SslCertTool sslCertTool,
+            SystemdTool systemdTool,
+            AutonomousOpsTool autonomousOpsTool,
+            ConfigDriftTool configDriftTool,
+            DiskOpsTool diskOpsTool,
+            LogOpsTool logOpsTool,
+            ServiceOpsTool serviceOpsTool,
+            ContainerOpsTool containerOpsTool,
+            ProcessOpsTool processOpsTool,
             FirstMcpTools firstMcpTools
     ) {
         this.toolBeans = new ArrayList<>();
@@ -47,11 +60,23 @@ public class McpToolRegistry {
         this.toolBeans.add(networkTool);
         this.toolBeans.add(privilegeTool);
         this.toolBeans.add(osInsightTool);
+        this.toolBeans.add(portHealthTool);
+        this.toolBeans.add(dockerTool);
+        this.toolBeans.add(cronJobTool);
+        this.toolBeans.add(firewallTool);
+        this.toolBeans.add(sslCertTool);
+        this.toolBeans.add(systemdTool);
+        this.toolBeans.add(autonomousOpsTool);
+        this.toolBeans.add(configDriftTool);
+        this.toolBeans.add(diskOpsTool);
+        this.toolBeans.add(logOpsTool);
+        this.toolBeans.add(serviceOpsTool);
+        this.toolBeans.add(containerOpsTool);
+        this.toolBeans.add(processOpsTool);
         // FirstMcpTools 仅用于对话 @Tool 实验；HTTP /api/mcp 白名单见 McpInvocationSecurityGate.allowedToolNames()
         this.toolBeans.add(firstMcpTools);
 
-        log.info("MCP Tools 注册完成，共 {} 个工具（HTTP 可执行 {} 个）",
-                toolBeans.size(), com.award.log.security.McpInvocationSecurityGate.allowedToolNames().size());
+        log.info("MCP Tools 注册完成，共 {} 个工具（HTTP 可执行见 McpToolCatalog）", toolBeans.size());
     }
 
     public List<Object> getToolBeans() {

@@ -19,14 +19,13 @@ import com.award.log.security.WebSocketAuthHandshakeInterceptor;
 public class WebSocketConfig implements WebSocketConfigurer {
 
     private final WebSocketAuthHandshakeInterceptor wsAuthInterceptor;
+    private final PerformanceWebSocketHandler performanceWebSocketHandler;
 
-    public WebSocketConfig(WebSocketAuthHandshakeInterceptor wsAuthInterceptor) {
+    public WebSocketConfig(
+            WebSocketAuthHandshakeInterceptor wsAuthInterceptor,
+            PerformanceWebSocketHandler performanceWebSocketHandler) {
         this.wsAuthInterceptor = wsAuthInterceptor;
-    }
-
-    @Bean
-    public PerformanceWebSocketHandler performanceWebSocketHandler() {
-        return new PerformanceWebSocketHandler();
+        this.performanceWebSocketHandler = performanceWebSocketHandler;
     }
 
     @Bean
@@ -37,7 +36,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         // 注册性能监控WebSocket处理器
-        registry.addHandler(performanceWebSocketHandler(), "/ws/performance")
+        registry.addHandler(performanceWebSocketHandler, "/ws/performance")
                 .addInterceptors(wsAuthInterceptor)
                 .setAllowedOrigins("*"); // 允许所有来源的连接，生产环境中应该限制
         

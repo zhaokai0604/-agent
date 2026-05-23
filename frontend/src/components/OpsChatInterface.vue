@@ -93,7 +93,6 @@
               class="markdown-content assistant-markdown"
               v-html="renderAssistantMarkdown(msg.content)"
             />
-            <pre v-else class="plain-content">{{ msg.content }}</pre>
             <div v-if="msg.traceId" class="trace-id-hint">
               链路 traceId: <code>{{ msg.traceId }}</code>
               <span class="trace-hint">（可在「运维链路审计」Tab 查询）</span>
@@ -184,6 +183,8 @@ import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
 import { getMcpToolCommandHint, applyMcpWriteConfirmParams } from '../utils/mcpToolsMeta'
 import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
 import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
+import { isWorkbenchHighRiskMessage, workbenchHighRiskBlockMarkdown } from '../utils/opsIntentSafety'
+import { formatErrorMarkdown } from '../utils/apiError.js'
 import MarkdownIt from 'markdown-it'
 
 const workbenchQuickGroups = WORKBENCH_QUICK_GROUPS
@@ -340,6 +341,9 @@ function parseMaybeJsonString(val) {
 const getToolCommand = (toolName) => getMcpToolCommandHint(toolName)
 
 const parseUserIntent = (message) => {
+  if (isWorkbenchHighRiskMessage(message)) {
+    return null
+  }
   const lowerMsg = message.toLowerCase()
 
   if (
@@ -421,7 +425,10 @@ const parseUserIntent = (message) => {
   if (lowerMsg.includes('权限') || lowerMsg.includes('privilege') || lowerMsg.includes('sudo')) {
     return 'PrivilegeTool'
   }
-  if (lowerMsg.includes('系统') || lowerMsg.includes('状态') || lowerMsg.includes('概览')) {
+  if (
+    (lowerMsg.includes('系统') || lowerMsg.includes('状态') || lowerMsg.includes('概览')) &&
+    !/删除|删掉|清除|破坏|格式化|rm\s/i.test(message)
+  ) {
     return 'SystemLoadTool'
   }
 
@@ -553,6 +560,8 @@ const extractParameters = (message, toolName) => {
 }
 
 /** 将工具返回对象转成可读中文，避免对话里出现大段 JSON */
+const formatMcpFailureBlock = (result) => formatErrorMarkdown(result)
+
 const formatObjectAsNaturalLanguage = (obj, depth = 0) => {
   if (obj == null) return '（无返回内容）'
   if (typeof obj === 'string') {
@@ -873,8 +882,24 @@ const parseDelayMinutesFromText = (raw) => {
   return null
 }
 
+/** 与后端 OpsDeferredTaskService.ALLOWED_DEFERRED_TOOLS 保持一致 */
+const DEFERRED_ALLOWED_TOOLS = new Set([
+  'DiskTool',
+  'DiskAnalyzeTool',
+  'DiskInsightTool',
+  'ProcessTool',
+  'SystemLoadTool',
+  'LogAnalysisTool',
+  'CleanTempTool',
+  'ConfigCheckTool',
+  'NetworkTool',
+  'PrivilegeTool',
+  'OsInsightTool'
+])
+
 const isDeferredCleanupIntent = (text) =>
-  /清理|清除|删掉|刪掉|删除|刪除|垃圾|临时文件|臨時文件|缓存|緩存|^tmp$/i.test(text)
+  /清理|清除|删掉|刪掉|垃圾|临时文件|臨時文件|缓存|緩存|^tmp$/i.test(text) &&
+  !/删除.{0,16}(整个|全部|所有|系统)|删.{0,4}(整个|全部).{0,12}系统/i.test(text)
 
 const scheduleDeferredCleanupFlow = async (plan, rawMessage) => {
   const params = extractParameters(rawMessage, 'CleanTempTool')
@@ -935,6 +960,10 @@ const scheduleDeferredCleanupFlow = async (plan, rawMessage) => {
 }
 
 const scheduleDeferredToolFlow = async (plan, rawMessage) => {
+  if (!DEFERRED_ALLOWED_TOOLS.has(plan.toolName)) {
+    ElMessage.warning(`延时执行暂不支持「${plan.toolName}」，请使用清理/巡检类工具或在工作台即时执行`)
+    return
+  }
   if (plan.toolName === 'CleanTempTool') {
     await scheduleDeferredCleanupFlow(plan, rawMessage)
     return
@@ -1019,7 +1048,7 @@ const runNaturalLanguageStream = async (message) => {
       content: '',
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     }) - 1
-  loading.value = false
+  loading.value = true
 
   try {
     const response = await assistantChatStream(message, history, { useToolAgent: true })
@@ -1069,6 +1098,8 @@ const runNaturalLanguageStream = async (message) => {
     console.error('自然语言对话失败', e)
     messages.value[assistantIdx].content =
       '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端已启动且 Spring AI 模型已正确配置。'
+  } finally {
+    loading.value = false
   }
   scrollToBottom()
 }
@@ -1090,6 +1121,21 @@ const handleSend = async () => {
     timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   })
   scrollToBottom()
+
+  if (isWorkbenchHighRiskMessage(message)) {
+    loading.value = true
+    try {
+      messages.value.push({
+        role: 'assistant',
+        content: workbenchHighRiskBlockMarkdown(message),
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      })
+      scrollToBottom()
+    } finally {
+      loading.value = false
+    }
+    return
+  }
 
   const delayMinutes = parseDelayMinutesFromText(message)
   if (delayMinutes != null) {
@@ -1151,7 +1197,7 @@ const handleSend = async () => {
     const params = extractParameters(message, toolName)
     console.log(`执行工具: ${toolName}, 参数:`, params)
 
-    let result = await executeMcpTool(toolName, params)
+    let result = await executeMcpTool(toolName, params, message)
 
     if (result && result.needConfirm === true) {
       messages.value.splice(toolCallingIndex, 1)
@@ -1182,7 +1228,12 @@ const handleSend = async () => {
         timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
       }) - 1
       scrollToBottom()
-      result = await confirmMcpExecute(toolName, applyMcpWriteConfirmParams(toolName, params), '确认执行')
+      result = await confirmMcpExecute(
+        toolName,
+        applyMcpWriteConfirmParams(toolName, params, message),
+        '确认执行',
+        message
+      )
       messages.value.splice(confirmCallingIndex, 1)
     } else {
       messages.value.splice(toolCallingIndex, 1)
@@ -1200,7 +1251,7 @@ const handleSend = async () => {
     if (!summaryMd) {
       summaryMd = result.success
         ? '工具已执行完成，但未解析到可展示字段。'
-        : `**失败说明**\n\n${result.error || formatObjectAsNaturalLanguage(result.data) || '未知错误'}`
+        : `**失败说明**\n\n${formatMcpFailureBlock(result)}`
     }
     if (!result.success && (result.securityCode != null || result.riskScore != null)) {
       const gate = []
@@ -1211,7 +1262,12 @@ const handleSend = async () => {
       summaryMd = `### 安全门拦截\n\n${gate.join('\n')}\n\n---\n\n` + summaryMd
     }
 
-    const statusTitle = result.success ? '执行成功' : '执行失败'
+    const statusTitle =
+      result.success
+        ? '执行成功'
+        : result.securityCode
+          ? '安全拦截'
+          : '执行失败'
     const durationLine =
       result.duration != null && result.duration > 0 ? `\n\n*耗时约 ${result.duration} ms*` : ''
     const fullMd =

@@ -3,6 +3,7 @@ package com.award.log.handler;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.stereotype.Component;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import com.award.log.service.PerformanceAnalysisService;
 import jakarta.annotation.Resource;
@@ -29,10 +30,17 @@ import com.award.log.service.StatisticsService;
  * 用于实时推送系统性能数据
  */
 @Slf4j
+@Component
 public class PerformanceWebSocketHandler extends TextWebSocketHandler {
+
+    private final WebSocketMessageBuffer messageBuffer;
 
     // 存储所有活跃的WebSocket会话
     private final CopyOnWriteArrayList<WebSocketSession> sessions = new CopyOnWriteArrayList<>();
+
+    public PerformanceWebSocketHandler(WebSocketMessageBuffer messageBuffer) {
+        this.messageBuffer = messageBuffer;
+    }
     // 定时任务执行器
     private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
     private volatile ScheduledFuture<?> periodicPushTask;
@@ -76,8 +84,24 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
         // 可以根据客户端消息类型执行不同的操作
         // 例如，客户端请求特定类型的性能数据
         if ("refresh".equals(payload)) {
-            // 立即推送一次性能数据
             pushPerformanceData();
+        } else if ("sync".equalsIgnoreCase(payload.trim())) {
+            replayBufferedMessages(session);
+        }
+    }
+
+    private void replayBufferedMessages(WebSocketSession session) {
+        if (messageBuffer == null || !session.isOpen()) {
+            return;
+        }
+        try {
+            List<String> buffered = messageBuffer.snapshotJsonMessages();
+            for (String json : buffered) {
+                session.sendMessage(new TextMessage(json));
+            }
+            log.debug("已向会话 {} 重放 {} 条缓冲消息", session.getId(), buffered.size());
+        } catch (IOException e) {
+            log.warn("重放 WebSocket 消息失败: {}", e.getMessage());
         }
     }
 
@@ -127,8 +151,8 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
             messageData.put("networkUsage", toDouble(perf.get("networkUsage")));
             messageData.put("channel", "performance");
 
-            // 转换为JSON字符串
             String jsonMessage = com.alibaba.fastjson.JSON.toJSONString(messageData);
+            messageBuffer.record(messageData);
             TextMessage textMessage = new TextMessage(jsonMessage);
 
             // 推送给所有活跃的客户端
@@ -152,6 +176,7 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         try {
+            messageBuffer.record(envelope);
             String json = com.alibaba.fastjson.JSON.toJSONString(envelope);
             TextMessage textMessage = new TextMessage(json);
             for (WebSocketSession session : sessions) {

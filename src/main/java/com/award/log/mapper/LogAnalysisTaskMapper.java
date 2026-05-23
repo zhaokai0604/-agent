@@ -4,6 +4,7 @@ import com.award.log.model.LogAnalysisTask;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -21,15 +22,18 @@ public interface LogAnalysisTaskMapper {
                                                @Param("limit") int limit,
                                                @Param("fileName") String fileName,
                                                @Param("status") String status,
-                                               @Param("startTime") String startTime,
-                                               @Param("endTime") String endTime);
+                                               @Param("createTimeStart") LocalDateTime createTimeStart,
+                                               @Param("createTimeEnd") LocalDateTime createTimeEnd);
 
     /** 查询任务总数 */
     long countAll();
+
+    /** 近 N 日内创建的任务数 */
+    long countSinceDays(@Param("days") int days);
     long countWithFilter(@Param("fileName") String fileName,
                          @Param("status") String status,
-                         @Param("startTime") String startTime,
-                         @Param("endTime") String endTime);
+                         @Param("createTimeStart") LocalDateTime createTimeStart,
+                         @Param("createTimeEnd") LocalDateTime createTimeEnd);
 
     /** 插入任务记录 */
     int insert(LogAnalysisTask record);

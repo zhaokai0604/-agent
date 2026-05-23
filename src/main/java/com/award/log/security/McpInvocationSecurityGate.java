@@ -1,5 +1,6 @@
 package com.award.log.security;
 
+import com.award.log.mcp.McpToolCatalog;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -7,6 +8,7 @@ import org.springframework.stereotype.Component;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * MCP / Agent 工具调用的统一安全裁决：输入尺度、注入、意图分级、高危命令串。
@@ -18,24 +20,13 @@ import java.util.Set;
 @Component
 public class McpInvocationSecurityGate {
 
-    private static final Set<String> ALLOWED_TOOLS = Set.of(
-            "DiskTool",
-            "DiskAnalyzeTool",
-            "DiskInsightTool",
-            "ProcessTool",
-            "SystemLoadTool",
-            "LogAnalysisTool",
-            "CleanTempTool",
-            "LogCleanupTool",
-            "ServiceRestartTool",
-            "ConfigCheckTool",
-            "NetworkTool",
-            "PrivilegeTool",
-            "OsInsightTool"
-    );
+    private static final Pattern DESTRUCTIVE_UTTERANCE_CN = Pattern.compile(
+            "删除.{0,16}(整个|全部|所有|根|系统)|删.{0,4}(整个|全部|所有).{0,12}(系统|根|盘|文件)|清空.{0,8}(系统|根|盘)",
+            Pattern.CASE_INSENSITIVE);
 
     /** 在 {@link McpToolSurface#READ_ONLY} 会话面下禁止的工具（含可配置追加项） */
     private final ReadOnlySurfaceDenylist readOnlySurfaceDenylist;
+    private final McpToolCatalog mcpToolCatalog;
 
     private final PromptInjectionGuard promptInjectionGuard;
     private final IntentRiskFilter intentRiskFilter;
@@ -51,6 +42,7 @@ public class McpInvocationSecurityGate {
             IntentRiskFilter intentRiskFilter,
             HighRiskCommandDetector highRiskCommandDetector,
             AgenticRiskScoreEngine agenticRiskScoreEngine,
+            McpToolCatalog mcpToolCatalog,
             ReadOnlySurfaceDenylist readOnlySurfaceDenylist,
             @Value("${agent.security.max-instruction-length:16384}") int maxInstructionLength,
             @Value("${agent.security.max-parameter-entries:48}") int maxParameterEntries,
@@ -60,6 +52,7 @@ public class McpInvocationSecurityGate {
         this.intentRiskFilter = intentRiskFilter;
         this.highRiskCommandDetector = highRiskCommandDetector;
         this.agenticRiskScoreEngine = agenticRiskScoreEngine;
+        this.mcpToolCatalog = mcpToolCatalog;
         this.readOnlySurfaceDenylist = readOnlySurfaceDenylist;
         this.maxInstructionLength = Math.max(4096, maxInstructionLength);
         this.maxParameterEntries = Math.max(8, maxParameterEntries);
@@ -80,11 +73,19 @@ public class McpInvocationSecurityGate {
      * @param profile INITIAL：中等风险需界面二次确认；POST_CONFIRM / DEFERRED：不再因 MEDIUM 阻断。
      */
     public GateDecision evaluate(String toolName, Map<String, Object> parameters, McpSecurityProfile profile) {
-        return evaluate(toolName, parameters, null, profile);
+        return evaluate(toolName, parameters, null, null, profile);
+    }
+
+    /**
+     * @param userUtterance 用户原始自然语言（工作台/MCP 表单），与 tool 构造串一并参与意图与注入判定。
+     */
+    public GateDecision evaluate(String toolName, Map<String, Object> parameters, String userUtterance,
+                                 McpSecurityProfile profile) {
+        return evaluate(toolName, parameters, null, userUtterance, profile);
     }
 
     private GateDecision evaluate(String toolName, Map<String, Object> parameters, String instructionOverride,
-                                  McpSecurityProfile profile) {
+                                  String userUtterance, McpSecurityProfile profile) {
         if (toolName == null || toolName.isBlank()) {
             return GateDecision.block("TOOL_NAME_EMPTY", "工具名称不能为空");
         }
@@ -92,7 +93,7 @@ public class McpInvocationSecurityGate {
             log.warn("非法工具名格式: {}", toolName);
             return GateDecision.block("TOOL_NAME_REJECTED", "工具名称格式不合法");
         }
-        if (!ALLOWED_TOOLS.contains(toolName)) {
+        if (!mcpToolCatalog.isHttpAllowed(toolName)) {
             return GateDecision.block("UNKNOWN_TOOL", "未知或未授权的工具: " + toolName);
         }
 
@@ -121,17 +122,24 @@ public class McpInvocationSecurityGate {
                     "指令串长度超过上限（" + maxInstructionLength + "），请缩短路径或分批查询");
         }
 
-        if (promptInjectionGuard.isInjection(instruction)) {
+        String riskText = mergeRiskUtterance(userUtterance, instruction);
+        if (promptInjectionGuard.isInjection(riskText)) {
             return GateDecision.block("INJECTION", "安全拦截：检测到提示注入特征");
         }
 
-        AgenticRiskScoreEngine.ScoreResult scoreResult = agenticRiskScoreEngine.score(toolName, parameters, instruction);
+        AgenticRiskScoreEngine.ScoreResult scoreResult = agenticRiskScoreEngine.score(toolName, parameters, riskText);
         double autoMax = agenticRiskScoreEngine.getAutoMax();
         double confirmMax = agenticRiskScoreEngine.getConfirmMax();
 
-        RiskLevel intentRisk = intentRiskFilter.evaluate(instruction);
+        RiskLevel intentRisk = maxRiskLevel(intentRiskFilter.evaluate(instruction),
+                evaluateUserUtteranceRisk(userUtterance));
         if (intentRisk == RiskLevel.HIGH) {
             return GateDecision.block("HIGH_INTENT", "安全拦截：高风险意图，禁止自动执行",
+                    scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
+        }
+        if (isDestructiveUtteranceMismatch(userUtterance, toolName)) {
+            return GateDecision.block("INTENT_TOOL_MISMATCH",
+                    "安全拦截：用户表述为破坏性/删除类操作，与只读观测工具不匹配，已拒绝以防误导读",
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
         if (scoreResult.total() > confirmMax) {
@@ -140,7 +148,7 @@ public class McpInvocationSecurityGate {
                     scoreResult.total(), confirmMax, scoreResult.explanation()),
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
-        if (highRiskCommandDetector.isHighRiskCommand(instruction)) {
+        if (highRiskCommandDetector.isHighRiskCommand(riskText)) {
             return GateDecision.block("HIGH_RISK_COMMAND", "安全拦截：指令构造命中高危命令模式",
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
@@ -191,11 +199,54 @@ public class McpInvocationSecurityGate {
      */
     public GateDecision evaluateChatToolInvocation(String toolBeanName, String instruction) {
         String instr = instruction == null ? "" : instruction.trim();
-        return evaluate(toolBeanName, Map.of(), instr, McpSecurityProfile.CHAT_AGENT_TOOL);
+        return evaluate(toolBeanName, Map.of(), instr, null, McpSecurityProfile.CHAT_AGENT_TOOL);
     }
 
-    public static final Set<String> allowedToolNames() {
-        return ALLOWED_TOOLS;
+    private static String mergeRiskUtterance(String userUtterance, String instruction) {
+        String inst = instruction == null ? "" : instruction.trim();
+        String user = userUtterance == null ? "" : userUtterance.trim();
+        if (user.isEmpty()) {
+            return inst;
+        }
+        if (inst.isEmpty()) {
+            return user;
+        }
+        return user + "\n" + inst;
+    }
+
+    private RiskLevel evaluateUserUtteranceRisk(String userUtterance) {
+        if (userUtterance == null || userUtterance.isBlank()) {
+            return RiskLevel.LOW;
+        }
+        return intentRiskFilter.evaluate(userUtterance.trim());
+    }
+
+    private static RiskLevel maxRiskLevel(RiskLevel a, RiskLevel b) {
+        if (a == RiskLevel.HIGH || b == RiskLevel.HIGH) {
+            return RiskLevel.HIGH;
+        }
+        if (a == RiskLevel.MEDIUM || b == RiskLevel.MEDIUM) {
+            return RiskLevel.MEDIUM;
+        }
+        return RiskLevel.LOW;
+    }
+
+    private boolean isDestructiveUtteranceMismatch(String userUtterance, String toolName) {
+        if (userUtterance == null || userUtterance.isBlank() || toolName == null) {
+            return false;
+        }
+        if (!mcpToolCatalog.isReadOnlyObservation(toolName)) {
+            return false;
+        }
+        String u = userUtterance.trim();
+        if (intentRiskFilter.evaluate(u) == RiskLevel.HIGH) {
+            return true;
+        }
+        return DESTRUCTIVE_UTTERANCE_CN.matcher(u).find();
+    }
+
+    public Set<String> allowedToolNames() {
+        return mcpToolCatalog.getHttpAllowedToolNames();
     }
 
     public enum McpSecurityProfile {

@@ -1,5 +1,6 @@
 package com.award.log.agent;
 
+import com.award.log.agent.audit.OpsAuditPhases;
 import com.award.log.security.HttpAuditSubject;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.service.OpsAuditTraceService;
@@ -58,6 +59,10 @@ public class AssistantAuditRecorder {
     }
 
     public void addCot(List<Map<String, Object>> steps, int index, String title, String narrative) {
-        steps.add(TraceService.cotStep(index, title, narrative));
+        String cn = title;
+        if (title == null || title.isBlank()) {
+            cn = OpsAuditPhases.titleCn(index);
+        }
+        steps.add(TraceService.cotStep(index, cn, narrative));
     }
 }
