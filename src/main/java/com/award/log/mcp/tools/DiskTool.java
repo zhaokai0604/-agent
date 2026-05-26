@@ -289,7 +289,7 @@ public class DiskTool extends AbstractCommandExecutor {
     }
 
     private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        ToolResult<String> result = ToolResult.error(error, duration);
+        ToolResult<String> result = ToolResult.error(error, normalizeDurationMs(duration));
         return objectMapper.writeValueAsString(result);
     }
 }

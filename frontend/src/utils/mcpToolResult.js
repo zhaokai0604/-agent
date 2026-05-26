@@ -12,21 +12,32 @@ function tryParseJsonDeep(s) {
   }
 }
 
+function normalizeDurationMs(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  const now = Date.now()
+  const earliestEpochMs = 946684800000 // 2000-01-01
+  if (n >= earliestEpochMs && n <= now + 60000) {
+    return Math.max(0, now - n)
+  }
+  return n
+}
+
 export function normalizeMcpToolResponse(raw) {
   if (!raw || typeof raw !== 'object') {
     return { success: false, data: null, duration: 0 }
   }
   let success = raw.success === true
   let data = raw.data
-  let duration = Number(raw.duration) || 0
+  let duration = normalizeDurationMs(raw.duration)
 
   if (typeof data === 'string') {
     try {
       const inner = JSON.parse(data)
       if (inner && typeof inner === 'object' && typeof inner.success === 'boolean') {
         success = inner.success === true
-        if (Number.isFinite(Number(inner.durationMs))) {
-          duration = Number(inner.durationMs)
+        if (inner.durationMs != null) {
+          duration = normalizeDurationMs(inner.durationMs)
         }
         if (inner.success && inner.data != null) {
           const payload = inner.data

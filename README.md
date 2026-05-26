@@ -33,6 +33,7 @@
 - [构建与部署](#构建与部署)
 - [麒麟 V11 + LoongArch](#麒麟-v11--loongarch)
 - [赛题对照](#赛题对照)
+- [答辩演示路径（7 步）](#答辩演示路径7-步)
 - [近期更新](#近期更新)
 - [监控与排障](#监控与排障)
 - [报表导出（前端）](#报表导出前端)
@@ -286,20 +287,20 @@ HTTP / 对话调用时 `toolName` 须与 **Bean 短名**一致。
 
 | toolName | operation 示例 | 读 | 写 |
 |----------|----------------|----|----|
-| `DiskOpsTool` | `df` / `hotspots` / `analyze` / `clean-temp` | df、du、诊断 | 清临时目录（dry-run） |
+| `DiskOpsTool` | `df` / `hotspots` / `analyze` / `clean-temp` | df、热点排行、综合诊断（`overview` + `hotspotsRank`） | 清临时目录（dry-run） |
 | `LogOpsTool` | `analyze` / `cleanup` | 日志分析 | 日志清理（dry-run） |
 | `ServiceOpsTool` | `failed` / `status` / `restart` | systemd 状态 | 白名单服务重启 |
 | `ContainerOpsTool` | `list` / `inspect` / `restart` / `stop` | docker ps | 容器重启/停止 |
-| `ProcessOpsTool` | `list` / `kill` | ps 列表 | 结束进程（PID>10） |
+| `ProcessOpsTool` | `list` / `kill` | 进程列表（Linux `ps -eo`；Windows CPU 归一化） | 结束进程（PID>10） |
 
 **细粒度工具（兼容保留）**
 
 | toolName | 源文件 | 能力 | 写操作 |
 |----------|--------|------|--------|
-| `DiskTool` | `mcp/tools/DiskTool.java` | df 磁盘占用 | 否 |
+| `DiskTool` | `mcp/tools/DiskTool.java` | 磁盘占用（Linux `df`；Windows `Get-PSDrive`） | 否 |
 | `DiskInsightTool` | `DiskTool` | du 热点排行（白名单路径） | 否 |
-| `DiskAnalyzeTool` | `mcp/tools/DiskAnalyzeTool.java` | 磁盘压力综合诊断 | 否 |
-| `ProcessTool` | `mcp/tools/ProcessTool.java` | 进程列表；可选 `kill`（PID>10） | **可选写** |
+| `DiskAnalyzeTool` | `mcp/tools/DiskAnalyzeTool.java` | 磁盘压力综合诊断（结构化 `overview` + 可选 `hotspotsRank`） | 否 |
+| `ProcessTool` | `mcp/tools/ProcessTool.java` | 进程列表；Linux 稳定列格式，Windows `PercentProcessorTime / ProcessorCount` 归一化；可选 `kill`（PID>10） | **可选写** |
 | `SystemLoadTool` | `mcp/tools/SystemLoadTool.java` | 负载 | 否 |
 | `LogAnalysisTool` | `mcp/tools/LogAnalysisTool.java` | 读主机日志并分析 | 否 |
 | `NetworkTool` | `mcp/tools/NetworkTool.java` | ping / traceroute | 否 |
@@ -452,7 +453,7 @@ public class ExampleProbeTool {
 | **实现** | `SecuritySelfCheckService`：10+ 固定探针调用真实 `McpInvocationSecurityGate`，**不执行系统命令** |
 | **展示** | 弹窗：配置快照（风险阈值、白名单规模、dry-run、最小权限）+ 分层探针表（预期 vs 实际：放行 / 须确认 / 拒绝） |
 
-适合向评委证明：未注册工具、注入、高危意图、只读面写工具拦截、二次确认信任边界等护栏均已接通。
+弹窗顶部按评委关心的四类能力分组展示：**未注册工具**、**提示注入**、**高危意图**、**只读 vs 写**（含 READ_ONLY 面禁写工具、破坏性话术与只读工具不匹配）。探针覆盖二次确认信任边界；**不执行任何系统命令**。
 
 ### 两条工具入口
 
@@ -577,8 +578,8 @@ frontend/
 
 | 键 | Tab | 说明 |
 |----|-----|------|
-| 1 | 工作台对话 | SSE；优先 `runAutonomousOps` / Playbook |
-| 2 | 工具控制台 | 直连 `/api/mcp` |
+| 1 | 工作台对话 | SSE；优先 `runAutonomousOps` / Playbook；内层 `ToolResult` 会解包并转人话摘要 |
+| 2 | 工具控制台 | 直连 `/api/mcp`；磁盘综合诊断 / 热点 / 进程等结果按结构化字段展示 |
 | 3 | 执行审计 | AI/HTTP 访问记录；支持导出 PNG/PDF |
 | 4 | 运维链路审计 | traceId + CoT；列表与弹窗均可导出 |
 | 5 | 日志分析 | 上传、Drain、AI 诊断 |
@@ -587,7 +588,15 @@ frontend/
 | 8 | 告警 | 配置与历史 |
 | 9 | 运维效果评分 | 综合分仪表盘、五维雷达、审计/巡检趋势、KPI 与价值摘要 |
 
-**运维效果评分（Tab9）**：聚合 `ops_audit_trace`、`ops_patrol_history` 与自愈评分（`RemediationEffectEvaluator` 写入的 `effect` 步骤），量化安全拦截、成功执行、巡检闭环与资源快照。支持 7 / 14 / 30 日窗口。
+**运维效果评分（Tab9）**：聚合 `ops_audit_trace`、`ops_patrol_history` 与自愈评分，面向评委展示 **综合分 + 五维雷达**：
+
+1. **安全拦截** — 审计中 `REJECT_*` 次数  
+2. **成功执行** — `execution_ok=1` 次数  
+3. **巡检闭环** — `ops_patrol_history` 巡检轮次  
+4. **资源优化** — 清理类工具摘要中的 MiB/GiB + 自愈磁盘降幅，折合 **释放空间 X GB**  
+5. **自愈效果** — `effect` 步骤中 `healingScore` 均分  
+
+顶栏价值 KPI：**安全拦截 N 次 · 成功执行 M 次 · 巡检闭环 · 释放空间 X GB**。支持 7 / 14 / 30 日窗口。
 
 ```bash
 cd frontend
@@ -797,15 +806,21 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 | B/S | Vue + Spring Boot |
 | 龙芯 + 麒麟 | `prod-kylin` + 交付实测报告 |
 
-**3 分钟演示建议**：
+## 答辩演示路径（7 步）
 
-1. `GET /api/platform/info`（实机 `deliveryTargetMatch: true`）  
-2. 顶栏 **安全自检**：弹窗展示探针全部通过  
-3. Tab **9** 运维效果评分：综合分 + 五维 + 「安全拦截 N 次」等价值摘要  
-4. Tab7 仪表盘：近 7 日任务趋势 + 异常率  
-5. 工作台：「请执行全自动运维」或「磁盘使用情况」  
-6. 「帮我预览清理临时文件」→ 二次确认 → 结果仍为预览（`dryRun`）  
-7. Tab4：traceId 展示六步审计  
+按下列顺序演示，**不必读配置**，评委可直观看到安全设计与量化价值。建议总时长约 5–7 分钟。
+
+| 步 | 名称 | 操作入口 | 向评委说明的要点 |
+|----|------|----------|------------------|
+| 1 | **平台信息** | `GET /api/platform/info` 或麒麟验收脚本 | 实机架构/麒麟/LoongArch/`deliveryTargetMatch`、最小权限用户 |
+| 2 | **安全自检** | 顶栏 **安全自检** → 弹窗 | 真实探针调用安全门：未注册工具、注入、高危意图、只读 vs 写 四类全部 PASS |
+| 3 | **效果评分** | Tab **9** 运维效果评分 | 综合分仪表盘 + 五维雷达；强调「安全拦截 N 次」「释放空间 X GB」 |
+| 4 | **日志仪表盘** | Tab **7** 日志分析仪表盘 | 近 7 日日志量、异常率、任务趋势（日志分析主线） |
+| 5 | **工作台对话** | Tab **1** | 「磁盘使用情况」或「请执行全自动运维」；展示感知 + 编排 |
+| 6 | **二次确认预览** | Tab **1** 或 Tab **2** | 「帮我预览清理临时文件」→ 须确认 → 仍为 dry-run，不会真删 |
+| 7 | **审计六步** | Tab **4** 运维链路审计 | 打开 traceId，展示接收→感知→推理→校验→执行→验证 CoT |
+
+**答辩前 10 分钟预热**：跑 1–2 次 MCP（含一条被拦截请求）、1 次巡检或自主运维，Tab9 数据会更饱满。
 
 ---
 
@@ -826,6 +841,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 | 2026-05-24 | MCP 二次确认与 `INTENT_TOOL_MISMATCH`；读写合一 Gateway 工具；仪表盘/历史筛选修复 |
 | 2026-05-24 | **一键安全自检**：`GET /api/security/self-check`；顶栏弹窗 + `SecuritySelfCheckService` 探针 |
 | 2026-05-24 | **运维效果评分仪表板**：Tab9 + `GET /api/ops/effect/dashboard`；`OpsEffectDashboardService` 聚合审计/巡检/自愈 |
+| 2026-05-24 | **答辩对齐**：五维改名（含资源优化/释放空间 GB）；安全自检四类评委标签；README **7 步演示路径** |
 
 ---
 

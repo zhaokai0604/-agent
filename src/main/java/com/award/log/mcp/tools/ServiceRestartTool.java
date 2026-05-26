@@ -133,6 +133,7 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
     }
 
     private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<String>(false, null, error, duration, false));
+        return objectMapper.writeValueAsString(
+                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
     }
 }

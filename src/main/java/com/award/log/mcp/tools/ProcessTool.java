@@ -27,8 +27,8 @@ import java.util.regex.Pattern;
 @Component
 public class ProcessTool extends AbstractCommandExecutor {
 
-    private static final Pattern PS_AUX_PATTERN = Pattern.compile(
-        "^(\\S+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d:]+)\\s+(\\S+)\\s+(.*)$"
+    private static final Pattern PS_LIST_PATTERN = Pattern.compile(
+        "^(\\S+)\\s+(\\d+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+(\\S+)\\s+(\\S+)\\s+(.*)$"
     );
 
     private final ObjectMapper objectMapper;
@@ -44,7 +44,7 @@ public class ProcessTool extends AbstractCommandExecutor {
         this.minPrivilegeExecutor = minPrivilegeExecutor;
     }
 
-    @Tool(name = "listProcesses", description = "列出进程：Linux 用 ps aux；Windows 用 WMI 性能计数器近似 CPU%，内存为物理内存占比。默认列出 CPU 或内存超过阈值（默认 5%）的进程")
+    @Tool(name = "listProcesses", description = "列出进程：Linux 用 ps -eo 稳定列格式；Windows 用 WMI 性能计数器近似 CPU%，并按逻辑处理器数归一化到 0-100%，内存为物理内存占比。默认列出 CPU 或内存超过阈值（默认 5%）的进程")
     @Cacheable(value = McpToolsConfig.CACHE_PROCESS_LIST, key = "'processes'", cacheManager = "mcpCacheManager")
     public String listProcesses(
             @ToolParam(description = "最小 CPU 使用率百分比，超过此值的进程会被列出（默认 5.0）", required = false) Double minCpu,
@@ -60,7 +60,8 @@ public class ProcessTool extends AbstractCommandExecutor {
             if (OsRuntime.isWindows()) {
                 return listProcessesWindows(cpuThreshold, memThreshold, startTime);
             }
-            AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of("ps", "aux"));
+            AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of(
+                    "ps", "-eo", "user,pid,pcpu,pmem,etime,stat,command", "--sort=-pcpu,-pmem", "--no-headers"));
 
             if (!result.success()) {
                 String errorJson = buildErrorResponse("ps 命令执行失败: " + result.error(), startTime);
@@ -86,14 +87,16 @@ public class ProcessTool extends AbstractCommandExecutor {
      */
     private String listProcessesWindows(double cpuThreshold, double memThreshold, long startTime) throws JsonProcessingException {
         String psPerf =
-                "$t=(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize*1KB;"
+                "$cpuCount=[math]::Max(1,[int][Environment]::ProcessorCount);"
+                        + "$t=(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize*1KB;"
                         + "$list=@(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction SilentlyContinue"
-                        + "|Where-Object{$_.IDProcess -gt 0 -and $_.Name -ne 'Idle'});"
-                        + "$list|Sort-Object WorkingSet -Descending|Select-Object -First 80 "
+                        + "|Where-Object{$_.IDProcess -gt 0 -and $_.Name -ne 'Idle' -and $_.Name -ne '_Total'});"
+                        + "$list|Select-Object "
                         + "@{N='ProcessName';E={($_.Name -split '#')[0]}},@{N='Id';E={$_.IDProcess}},"
-                        + "@{N='cpuPct';E={[math]::Round([double]$_.PercentProcessorTime,2)}},"
+                        + "@{N='cpuPct';E={[math]::Round([math]::Min(100,[double]$_.PercentProcessorTime/($cpuCount+0.0)),2)}},"
                         + "@{N='memPct';E={[math]::Round(100*[double]$_.WorkingSet/($t+1),2)}},"
-                        + "@{N='wsMb';E={[math]::Round($_.WorkingSet/1MB,2)}}|ConvertTo-Json -Compress -Depth 5";
+                        + "@{N='wsMb';E={[math]::Round($_.WorkingSet/1MB,2)}}"
+                        + "|Sort-Object cpuPct,memPct -Descending|ConvertTo-Json -Compress -Depth 5";
         AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
                 List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psPerf), 60_000L);
         List<Map<String, String>> processList = parseWindowsProcessJson(result, cpuThreshold, memThreshold, true);
@@ -176,18 +179,19 @@ public class ProcessTool extends AbstractCommandExecutor {
             line = line.trim();
             if (line.isEmpty()) continue;
 
-            Matcher matcher = PS_AUX_PATTERN.matcher(line);
+            Matcher matcher = PS_LIST_PATTERN.matcher(line);
             if (!matcher.matches()) {
                 log.debug("无法解析的行: {}", line);
                 continue;
             }
 
             String user = matcher.group(1);
-            double cpu = parsePercent(matcher.group(2));
-            double mem = parsePercent(matcher.group(3));
-            String etime = matcher.group(4);
-            String state = matcher.group(5);
-            String command = matcher.group(6).trim();
+            String pid = matcher.group(2);
+            double cpu = parsePercent(matcher.group(3));
+            double mem = parsePercent(matcher.group(4));
+            String etime = matcher.group(5);
+            String state = matcher.group(6);
+            String command = matcher.group(7).trim();
 
             boolean isZombie = state != null && state.contains("Z");
             boolean cpuExceeds = cpu > cpuThreshold;
@@ -199,7 +203,7 @@ public class ProcessTool extends AbstractCommandExecutor {
 
             Map<String, String> info = new LinkedHashMap<>();
             info.put("user", user);
-            info.put("pid", getPidFromCommand(command));
+            info.put("pid", pid);
             info.put("cpu", String.format("%.1f", cpu));
             info.put("mem", String.format("%.1f", mem));
             info.put("etime", etime);
@@ -218,16 +222,6 @@ public class ProcessTool extends AbstractCommandExecutor {
         }
     }
 
-    private String getPidFromCommand(String command) {
-        String[] parts = command.split("\\s+");
-        for (String part : parts) {
-            if (part.matches("\\d+")) {
-                return part;
-            }
-        }
-        return "unknown";
-    }
-
     private String truncateCommand(String command) {
         if (command.length() > 200) {
             return command.substring(0, 200) + "...";
@@ -244,7 +238,8 @@ public class ProcessTool extends AbstractCommandExecutor {
     }
 
     private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<String>(false, null, error, duration, false));
+        return objectMapper.writeValueAsString(
+                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
     }
 
     @Tool(name = "terminateProcess",

@@ -316,15 +316,28 @@ const toggleVoiceInput = () => {
 
 const TOOLS_UNWRAP_INNER = new Set([
   'DiskTool',
+  'DiskOpsTool',
+  'DiskAnalyzeTool',
+  'DiskInsightTool',
   'ProcessTool',
+  'ProcessOpsTool',
   'SystemLoadTool',
   'LogAnalysisTool',
+  'LogOpsTool',
   'CleanTempTool',
   'LogCleanupTool',
   'ServiceRestartTool',
+  'ServiceOpsTool',
+  'SystemdTool',
   'ConfigCheckTool',
+  'ConfigDriftTool',
   'NetworkTool',
-  'PrivilegeTool'
+  'PortHealthTool',
+  'SslCertTool',
+  'PrivilegeTool',
+  'DockerTool',
+  'ContainerOpsTool',
+  'OsInsightTool'
 ])
 
 function parseMaybeJsonString(val) {
@@ -336,6 +349,164 @@ function parseMaybeJsonString(val) {
   } catch {
     return val
   }
+}
+
+function unwrapNestedToolPayload(val) {
+  let current = parseMaybeJsonString(val)
+  while (
+    current &&
+    typeof current === 'object' &&
+    !Array.isArray(current) &&
+    typeof current.success === 'boolean'
+  ) {
+    if (current.success !== true) {
+      return {
+        success: false,
+        error: current.error || current.message || '子工具执行失败'
+      }
+    }
+    if (current.data == null) break
+    const next = parseMaybeJsonString(current.data)
+    if (next === current.data) return next
+    current = next
+  }
+  return current
+}
+
+function formatBytesCompact(value) {
+  if (value == null || value === '') return '-'
+  if (typeof value === 'string' && /[a-zA-Z%]/.test(value)) return value
+  const n = Number(value)
+  if (!Number.isFinite(n)) return String(value)
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = Math.max(0, n)
+  let idx = 0
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024
+    idx += 1
+  }
+  const digits = size >= 100 || idx === 0 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[idx]}`
+}
+
+function formatKbCompact(kb) {
+  const n = Number(kb)
+  if (!Number.isFinite(n)) return kb == null ? '-' : String(kb)
+  return formatBytesCompact(n * 1024)
+}
+
+function parsePercentNumber(value) {
+  const n = Number.parseFloat(String(value ?? '').replace('%', ''))
+  return Number.isFinite(n) ? n : -1
+}
+
+function formatDiskAnalyzeOverview(rawOverview) {
+  const overview = unwrapNestedToolPayload(rawOverview)
+  if (overview && typeof overview === 'object' && !Array.isArray(overview) && overview.success === false) {
+    return `分区概况获取失败：${overview.error || '未知错误'}`
+  }
+  const rows = Array.isArray(overview) ? overview : []
+  if (!rows.length) return '分区概况：未返回有效分区数据。'
+  const sorted = [...rows].sort((a, b) => parsePercentNumber(b.usePercent) - parsePercentNumber(a.usePercent))
+  return '分区概况:\n' + sorted
+    .slice(0, 6)
+    .map((d) => {
+      const mount = d.mountedOn || d.filesystem || d.path || '-'
+      const used = formatBytesCompact(d.used)
+      const size = formatBytesCompact(d.size)
+      return `• ${mount}: 使用率 ${d.usePercent || '-'}，已用 ${used} / 共 ${size}`
+    })
+    .join('\n')
+}
+
+function formatDiskUsageSummary(rawData) {
+  const unwrapped = unwrapNestedToolPayload(rawData)
+  const diskArr = Array.isArray(rawData) ? rawData : Array.isArray(unwrapped) ? unwrapped : null
+  if (!diskArr?.length) return ''
+  const sorted = [...diskArr].sort((a, b) => parsePercentNumber(b.usePercent) - parsePercentNumber(a.usePercent))
+  const highUsage = sorted.filter((d) => parsePercentNumber(d.usePercent) > 80)
+  if (highUsage.length > 0) {
+    return `发现 ${highUsage.length} 个分区使用率超过 80%:\n` +
+      highUsage
+        .slice(0, 6)
+        .map((d) => `• ${d.mountedOn || d.filesystem || '-'}: ${d.usePercent || '-'} (已用 ${formatBytesCompact(d.used)} / 共 ${formatBytesCompact(d.size)})`)
+        .join('\n')
+  }
+  const top = sorted[0]
+  return `所有磁盘分区使用率正常，当前最高为 ${(top && top.usePercent) || '-'}（${(top && (top.mountedOn || top.filesystem)) || '-'}）`
+}
+
+function formatDiskHotspotsSummary(rawHotspots, title = '目录热点') {
+  const hotspots = unwrapNestedToolPayload(rawHotspots)
+  if (hotspots && typeof hotspots === 'object' && !Array.isArray(hotspots) && hotspots.success === false) {
+    return `${title}获取失败：${hotspots.error || '未知错误'}`
+  }
+  if (!hotspots || typeof hotspots !== 'object' || Array.isArray(hotspots)) {
+    return `${title}：未返回可解析结果。`
+  }
+  const entries = Array.isArray(hotspots.entries) ? hotspots.entries : []
+  const root = hotspots.root || hotspots.rootPath || '-'
+  if (!entries.length) {
+    return `${title}（${root}）：未发现明显大目录。`
+  }
+  return `${title}（${root}）:\n` +
+    entries
+      .slice(0, 10)
+      .map((e, i) => `${i + 1}. ${formatKbCompact(e.kb)} - ${e.path || '-'}`)
+      .join('\n')
+}
+
+function formatDiskAnalyzeHotspots(rawHotspots) {
+  return formatDiskHotspotsSummary(rawHotspots, '目录热点')
+}
+
+function formatProcessListSummary(list) {
+  const unwrapped = unwrapNestedToolPayload(list)
+  const arr = Array.isArray(list) ? list : Array.isArray(unwrapped) ? unwrapped : null
+  if (!arr?.length) return ''
+  return `当前有 ${arr.length} 个进程 CPU/内存占用超过阈值:\n` +
+    arr.slice(0, 8).map((p, i) => {
+      const cpuText = p.cpu === 'n/a' || p.cpu == null ? 'CPU: 未采集' : `CPU: ${p.cpu}%`
+      return `${i + 1}. ${p.command?.substring(0, 40) || 'unknown'} (PID: ${p.pid}, ${cpuText}, MEM: ${p.mem}%)`
+    }).join('\n')
+}
+
+function formatPortHealthSummary(data) {
+  if (!data || typeof data !== 'object') return ''
+  const target = `${data.host || '-'}:${data.port || '-'}`
+  if (data.reachable) {
+    return `端口连通性检查 (${target}):\n• 状态: 可达\n• 建连耗时: ${data.connectMs ?? '-'} ms\n• 超时阈值: ${data.timeoutMs ?? '-'} ms`
+  }
+  return `端口连通性检查 (${target}):\n• 状态: 不可达\n• 建连耗时: ${data.connectMs ?? '-'} ms\n• 原因: ${data.error || '连接失败'}`
+}
+
+function formatSslCertSummary(data) {
+  if (!data || typeof data !== 'object') return ''
+  const status = data.expired ? '证书已过期' : data.expiringSoon ? '证书即将到期' : '证书有效'
+  return `TLS 证书检查 (${data.host || '-'}:${data.port || 443}):\n` +
+    `• 状态: ${status}\n` +
+    `• 剩余天数: ${data.daysUntilExpiry ?? '-'}\n` +
+    `• 到期时间: ${data.notAfter || '-'}\n` +
+    `• 签发者: ${data.issuer || '-'}`
+}
+
+function formatConfigDriftSummary(data) {
+  if (!data || typeof data !== 'object') return ''
+  const status = data.firstObservation ? '已建立基线快照' : data.drifted ? '检测到配置漂移' : '与上次快照一致'
+  return `配置漂移检查 (${data.configPath || '-'}):\n• 结论: ${status}\n• 信息: ${data.message || '-'}`
+}
+
+function formatCommandOutputSummary(data, title) {
+  if (!data || typeof data !== 'object') return ''
+  const heading = title || data.tool || '命令结果'
+  const summary = data.error || data.stderr || ''
+  const out = (data.output || data.stderrOrOutput || '').trim()
+  const head = out.length > 1200 ? out.slice(0, 1200) + '\n...[truncated]' : out
+  const lines = [heading]
+  if (data.command) lines.push(`命令: ${data.command}`)
+  if (summary) lines.push(`结果: ${summary}`)
+  if (head) lines.push(head)
+  return lines.join('\n')
 }
 
 const getToolCommand = (toolName) => getMcpToolCommandHint(toolName)
@@ -620,7 +791,7 @@ const formatObjectAsNaturalLanguage = (obj, depth = 0) => {
           val
             .slice(0, 12)
             .map((e, i) => {
-              const kb = e.kb != null ? `${e.kb} KB` : ''
+              const kb = e.kb != null ? formatKbCompact(e.kb) : ''
               return `  ${i + 1}. ${kb} ${e.path || ''}`.trim()
             })
             .join('\n')
@@ -638,36 +809,56 @@ const formatObjectAsNaturalLanguage = (obj, depth = 0) => {
 
 const generateHumanReadableResponse = (toolName, result) => {
   try {
-    let data = typeof result === 'string' ? JSON.parse(result) : result
+    let data = parseMaybeJsonString(result)
 
     if (TOOLS_UNWRAP_INNER.has(toolName) && data && data.success === true && data.data != null) {
       const rawInner = data.data
       data = typeof rawInner === 'string' ? parseMaybeJsonString(rawInner) : rawInner
     }
 
+    if (data && typeof data === 'object' && data.success === false) {
+      const errMsg = data.error || data.message
+      if (errMsg) {
+        return `执行失败：${errMsg}`
+      }
+    }
+
     switch (toolName) {
-      case 'DiskTool': {
-        const diskArr = Array.isArray(data) ? data : null
-        if (diskArr?.length) {
-          const highUsage = diskArr.filter(d => {
-            const percent = parseInt(String(d.usePercent || '').replace('%', ''), 10)
-            return percent > 80
-          })
-          if (highUsage.length > 0) {
-            return `发现 ${highUsage.length} 个分区使用率超过 80%:\n` +
-              highUsage.map(d => `• ${d.mountedOn}: ${d.usePercent} (已用 ${d.used}/共 ${d.size})`).join('\n')
-          }
-          return '所有磁盘分区使用率正常，最高为 ' + (diskArr[0].usePercent || '-')
+      case 'DiskTool':
+      case 'DiskOpsTool': {
+        if (data?.overview != null || data?.hotspotsRank != null) {
+          const parts = ['**磁盘综合诊断**']
+          if (data?.overview != null) parts.push(formatDiskAnalyzeOverview(data.overview))
+          if (data?.hotspotsRank != null) parts.push(formatDiskAnalyzeHotspots(data.hotspotsRank))
+          if (data?.hint) parts.push(String(data.hint))
+          return parts.join('\n\n')
+        }
+        if (Array.isArray(data)) {
+          return formatDiskUsageSummary(data)
+        }
+        if (data?.entries) {
+          return formatDiskHotspotsSummary(data, '磁盘热点')
+        }
+        if (data?.mode === 'DRY-RUN') {
+          return `临时文件清理预览:\n• 路径: ${data.path}\n• 将删除 ${data.filesFound} 个文件\n• 预览前 ${data.previewCount} 个:\n` +
+            (data.preview || []).map((f) => `  - ${f}`).join('\n')
+        }
+        if (data?.filesDeleted != null) {
+          return `临时文件清理结果:\n• 路径: ${data.path}\n• 发现文件: ${data.filesFound}\n• 实际删除: ${data.filesDeleted} 个文件`
         }
         break
       }
 
       case 'ProcessTool':
+      case 'ProcessOpsTool':
         if (Array.isArray(data)) {
-          return `当前有 ${data.length} 个进程 CPU/内存占用超过阈值:\n` +
-            data.slice(0, 5).map((p, i) =>
-              `${i + 1}. ${p.command?.substring(0, 30) || 'unknown'} (PID: ${p.pid}, CPU: ${p.cpu}%, MEM: ${p.mem}%)`
-            ).join('\n')
+          return formatProcessListSummary(data)
+        }
+        if (data?.mode === 'DRY-RUN') {
+          return `结束进程预览:\n• PID: ${data.pid}\n• ${data.plan || ''}`
+        }
+        if (data?.pid != null && data?.command) {
+          return `结束进程结果:\n• PID: ${data.pid}\n• 命令: ${data.command}\n• success=${data.success}\n• ${data.error || data.output || ''}`
         }
         break
 
@@ -688,6 +879,7 @@ const generateHumanReadableResponse = (toolName, result) => {
       }
 
       case 'LogAnalysisTool':
+      case 'LogOpsTool':
         if (data.status) {
           const statusText = data.status === 'HEALTHY' ? '✅ 健康' : '⚠️ 存在异常'
           let response = `日志分析完成 (${data.logPath})\n状态: ${statusText}\n分析行数: ${data.linesAnalyzed}`
@@ -701,6 +893,16 @@ const generateHumanReadableResponse = (toolName, result) => {
             response += `\n\n修复建议:\n${data.recommendation}`
           }
           return response
+        }
+        if (data?.mode === 'DRY-RUN') {
+          return `日志清理 Dry-Run:\n` +
+            `• 路径: ${data.path}\n` +
+            `• 候选文件: ${data.filesFound}\n` +
+            `• 预览 ${data.previewCount ?? '-'} 条:\n` +
+            (data.preview || []).map(f => `  - ${f}`).join('\n')
+        }
+        if (data?.filesDeleted != null) {
+          return `日志清理执行:\n• 路径: ${data.path}\n• 候选: ${data.filesFound}\n• 已删: ${data.filesDeleted}`
         }
         break
 
@@ -729,33 +931,26 @@ const generateHumanReadableResponse = (toolName, result) => {
         return `日志清理执行:\n• 路径: ${data.path}\n• 候选: ${data.filesFound}\n• 已删: ${data.filesDeleted}`
 
       case 'ServiceRestartTool':
+      case 'ServiceOpsTool':
         if (data.mode === 'DRY-RUN') {
           return `服务重启预览:\n• ${data.service}\n• ${data.plan || ''}`
         }
-        return `服务重启结果:\n• ${data.service}\n• success=${data.success}\n• ${data.stderr || ''}`
+        if (data?.service) {
+          return `服务重启结果:\n• ${data.service}\n• success=${data.success}\n• ${data.stderr || ''}`
+        }
+        if (data?.tool || data?.output || data?.stderr) {
+          return formatCommandOutputSummary(data, '服务巡检结果')
+        }
+        break
 
       case 'DiskAnalyzeTool': {
-        let d = data
-        if (typeof d === 'string') {
-          try {
-            d = JSON.parse(d)
-          } catch {
-            break
-          }
-        }
+        const d = parseMaybeJsonString(data)
         const parts = ['**磁盘综合诊断**']
         if (d?.overview != null) {
-          parts.push(
-            typeof d.overview === 'string' ? d.overview : formatObjectAsNaturalLanguage(d.overview)
-          )
+          parts.push(formatDiskAnalyzeOverview(d.overview))
         }
         if (d?.hotspotsRank != null) {
-          parts.push(
-            '**目录热点**\n' +
-              (typeof d.hotspotsRank === 'string'
-                ? d.hotspotsRank
-                : formatObjectAsNaturalLanguage(d.hotspotsRank))
-          )
+          parts.push(formatDiskAnalyzeHotspots(d.hotspotsRank))
         }
         if (d?.hint) parts.push(String(d.hint))
         if (parts.length > 1) return parts.join('\n\n')
@@ -769,6 +964,12 @@ const generateHumanReadableResponse = (toolName, result) => {
           `• 结果: ${passed}\n` +
           `• 退出码: ${data.exitCode}\n` +
           (data.message ? `• 信息: ${data.message}` : '')
+
+      case 'ConfigDriftTool':
+        if (data?.configPath) {
+          return formatConfigDriftSummary(data)
+        }
+        break
 
       case 'NetworkTool':
         if (data.type === 'ping') {
@@ -787,6 +988,18 @@ const generateHumanReadableResponse = (toolName, result) => {
         }
         break
 
+      case 'PortHealthTool':
+        if (data?.host && data?.port != null) {
+          return formatPortHealthSummary(data)
+        }
+        break
+
+      case 'SslCertTool':
+        if (data?.host) {
+          return formatSslCertSummary(data)
+        }
+        break
+
       case 'PrivilegeTool':
         const hasPriv = data.hasPrivilege ? '✅ 有权限' : (data.needsSudo ? '⚠️ 需要 sudo' : '❌ 无权限')
         return `权限检查 (${data.resource}):\n` +
@@ -795,33 +1008,27 @@ const generateHumanReadableResponse = (toolName, result) => {
           `• 权限状态: ${hasPriv}\n` +
           (data.suggestion ? `• 建议: ${data.suggestion}` : '')
 
-      case 'DiskInsightTool': {
-        if (data && data.success === false) {
-          return `磁盘热点扫描失败: ${data.error || ''}`
+      case 'DiskInsightTool':
+        return formatDiskHotspotsSummary(data, '磁盘热点')
+
+      case 'SystemdTool':
+        if (data?.tool || data?.output || data?.stderr) {
+          return formatCommandOutputSummary(data, '服务巡检结果')
         }
-        let inner = data
-        if (inner && inner.data != null && typeof inner.entries === 'undefined') {
-          inner = typeof inner.data === 'string' ? JSON.parse(inner.data) : inner.data
+        break
+
+      case 'DockerTool':
+      case 'ContainerOpsTool':
+        if (data?.mode === 'DRY-RUN') {
+          return `容器操作预览:\n• 容器: ${data.containerName || '-'}\n• ${data.plan || ''}`
         }
-        if (!inner || typeof inner !== 'object') {
-          return '磁盘热点：返回数据格式异常'
+        if (data?.tool || data?.output || data?.error) {
+          return formatCommandOutputSummary(data, '容器巡检结果')
         }
-        const entries = inner.entries || []
-        if (!entries.length) {
-          return `目录 ${inner.root || ''} 下未返回占用条目（可能为空或无权限）。`
-        }
-        const fmtKb = (kb) => {
-          const n = Number(kb) || 0
-          if (n >= 1048576) return `${(n / 1048576).toFixed(2)} GB`
-          if (n >= 1024) return `${(n / 1024).toFixed(2)} MB`
-          return `${n} KB`
-        }
-        return `磁盘热点 (${inner.root || inner.rootPath || ''})，深度 ${inner.maxDepth ?? '-'}，前 ${entries.length} 条：\n` +
-          entries.map((e, i) => `${i + 1}. ${fmtKb(e.kb)} — ${e.path}`).join('\n')
-      }
+        break
 
       case 'OsInsightTool': {
-        let p = typeof result === 'string' ? JSON.parse(result) : result
+        let p = parseMaybeJsonString(result)
         if (p && p.success === true && p.data != null) {
           p = typeof p.data === 'string' ? parseMaybeJsonString(p.data) : p.data
         }
