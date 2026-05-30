@@ -1,8 +1,16 @@
 package com.award.log.service.impl;
 
-import com.award.log.service.*;
-import com.award.log.util.AiChatResponseSupport;
+import com.award.log.security.IntentRiskFilter;
+import com.award.log.security.McpInvocationSecurityGate;
+import com.award.log.security.PromptInjectionGuard;
+import com.award.log.security.RiskLevel;
+import com.award.log.service.AiTool;
+import com.award.log.service.ChatAnalysisService;
+import com.award.log.service.ChatMemoryService;
 import com.award.log.service.ChatMemoryService.MemoryEntry;
+import com.award.log.service.IntentRecognitionService;
+import com.award.log.service.ToolRegistryService;
+import com.award.log.util.AiChatResponseSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -41,6 +49,12 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
     @Autowired
     private ChatModel chatModel;
 
+    @Autowired(required = false)
+    private PromptInjectionGuard promptInjectionGuard;
+
+    @Autowired(required = false)
+    private IntentRiskFilter intentRiskFilter;
+
     private final Map<String, List<ChatMessage>> conversationHistories = new ConcurrentHashMap<>();
     private static final int MAX_HISTORY_SIZE = 50;
     private static final String DEFAULT_SESSION_ID = "default";
@@ -55,22 +69,37 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
     @Override
     public Flux<String> chat(String userMessage) {
         log.info("收到聊天消息: [{}]", userMessage);
+        String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
+                userMessage == null ? "" : userMessage.trim(), 16_000);
+        if (safe.isBlank()) {
+            return Flux.just("请输入有效问题。");
+        }
+        if (promptInjectionGuard != null && promptInjectionGuard.isInjection(safe)) {
+            return Flux.just("检测到提示注入特征，已拦截。请直接描述日志分析需求。");
+        }
+        if (intentRiskFilter != null && intentRiskFilter.evaluate(safe) == RiskLevel.HIGH) {
+            return Flux.just("检测到高风险意图，日志分析助手无法执行系统变更类操作。");
+        }
 
         try {
-            IntentRecognitionService.RecognitionResult intent = intentRecognitionService.recognize(userMessage);
+            IntentRecognitionService.RecognitionResult intent = intentRecognitionService.recognize(safe);
 
             String memoryContext = buildMemoryContext();
             String toolResult = null;
             String analysisContext = "";
 
-            if (shouldCallTool(intent, userMessage)) {
-                toolResult = executeToolWithMemory(intent, userMessage);
+            if (shouldCallTool(intent, safe)) {
+                toolResult = executeToolWithMemory(intent, safe);
                 if (toolResult != null) {
                     analysisContext = "\n\n工具执行结果：\n" + toolResult;
+                } else {
+                    analysisContext = "\n\n【无工具结果】请基于用户问题给出分析框架，禁止编造具体日志行或监控数值。";
                 }
+            } else {
+                analysisContext = "\n\n【未调用工具】请勿陈述未经验证的具体日志内容或指标。";
             }
 
-            String aiResponse = generateAiResponse(userMessage, intent, analysisContext, memoryContext);
+            String aiResponse = generateAiResponse(safe, intent, analysisContext, memoryContext);
 
             addToHistory(new ChatMessage("user", userMessage, intent.getIntent().name()));
             addToHistory(new ChatMessage("assistant", aiResponse));
@@ -128,11 +157,10 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         }
 
         String lowerMsg = userMessage.toLowerCase();
-        return lowerMsg.contains("查询") || lowerMsg.contains("诊断") ||
-               lowerMsg.contains("报告") || lowerMsg.contains("分析") ||
-               lowerMsg.contains("统计") || lowerMsg.contains("最近") ||
-               lowerMsg.contains("错误") || lowerMsg.contains("异常") ||
-               lowerMsg.contains("看看") || lowerMsg.contains("检查");
+        return lowerMsg.contains("查询") || lowerMsg.contains("诊断")
+                || lowerMsg.contains("报告") || lowerMsg.contains("分析")
+                || lowerMsg.contains("统计") || lowerMsg.contains("最近")
+                || lowerMsg.contains("错误") || lowerMsg.contains("异常");
     }
 
     private String executeToolWithMemory(IntentRecognitionService.RecognitionResult intent, String userMessage) {

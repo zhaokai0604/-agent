@@ -39,7 +39,12 @@ public class AutonomousOpsTool {
         long start = System.currentTimeMillis();
         String msg = userIntent == null || userIntent.isBlank() ? "自动运维" : userIntent.trim();
         if (Boolean.TRUE.equals(forceRemediate)) {
-            msg = msg + " 执行修复";
+            OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+            if (ctx != null && ctx.isChatAgentPath() && !ctx.isUserConfirmedWrite()) {
+                forceRemediate = false;
+            } else {
+                msg = msg + " 执行修复";
+            }
         }
         McpToolSurface surface = McpToolSurface.FULL;
         OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();

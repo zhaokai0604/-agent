@@ -99,7 +99,7 @@ cat > "$OUT/README-DEPLOY.txt" << 'EOF'
 ThreshCore (award-log) 部署说明
 ================================
 
-1) 启动后端（需已配置 MySQL 等，见 application.yml / 环境变量）
+1) 启动后端（需已配置 MariaDB 等，见 application.yml / 环境变量）
 
    java -jar award-log.jar
 

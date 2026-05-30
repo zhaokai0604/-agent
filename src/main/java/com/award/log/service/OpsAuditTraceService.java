@@ -29,27 +29,31 @@ public class OpsAuditTraceService {
 
     @PostConstruct
     public void initTable() {
-        jdbcTemplate.execute(
-                "CREATE TABLE IF NOT EXISTS ops_audit_trace (" +
-                        "id BIGINT PRIMARY KEY AUTO_INCREMENT," +
-                        "trace_id VARCHAR(64) NOT NULL," +
-                        "channel VARCHAR(32) NOT NULL," +
-                        "user_input TEXT," +
-                        "risk_level VARCHAR(32)," +
-                        "security_outcome VARCHAR(64)," +
-                        "tool_name VARCHAR(128)," +
-                        "execution_ok TINYINT(1) DEFAULT 0," +
-                        "result_summary TEXT," +
-                        "steps_json LONGTEXT," +
-                        "duration_ms BIGINT," +
-                        "operator_user_id VARCHAR(64)," +
-                        "policy_version VARCHAR(64)," +
-                        "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
-                        "KEY idx_trace_id (trace_id)," +
-                        "KEY idx_created_at (created_at)" +
-                        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-        );
-        migrateLegacyTable();
+        try {
+            jdbcTemplate.execute(
+                    "CREATE TABLE IF NOT EXISTS ops_audit_trace (" +
+                            "id BIGINT PRIMARY KEY AUTO_INCREMENT," +
+                            "trace_id VARCHAR(64) NOT NULL," +
+                            "channel VARCHAR(32) NOT NULL," +
+                            "user_input TEXT," +
+                            "risk_level VARCHAR(32)," +
+                            "security_outcome VARCHAR(64)," +
+                            "tool_name VARCHAR(128)," +
+                            "execution_ok TINYINT(1) DEFAULT 0," +
+                            "result_summary TEXT," +
+                            "steps_json LONGTEXT," +
+                            "duration_ms BIGINT," +
+                            "operator_user_id VARCHAR(64)," +
+                            "policy_version VARCHAR(64)," +
+                            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
+                            "KEY idx_trace_id (trace_id)," +
+                            "KEY idx_created_at (created_at)" +
+                            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            );
+            migrateLegacyTable();
+        } catch (Exception e) {
+            log.warn("ops_audit_trace 表初始化失败（请确认数据库已启动且已执行 schema.sql）: {}", e.getMessage());
+        }
     }
 
     /** 已有库升级列（忽略重复列错误）。 */

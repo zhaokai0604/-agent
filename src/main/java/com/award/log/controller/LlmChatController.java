@@ -33,7 +33,7 @@ public class LlmChatController {
                 for (String token : result.split("")) {
                     emitter.send(SseEmitter.event().name("token").data(token));
                 }
-                emitter.send(SseEmitter.event().name("done").data(Map.of("toolCalled", "analyzeLog")));
+                emitter.send(SseEmitter.event().name("done").data(Map.of("completed", true)));
                 emitter.complete();
             } catch (IOException e) {
                 emitter.completeWithError(e);
@@ -47,6 +47,6 @@ public class LlmChatController {
     public Result<Map<String, Object>> chatSync(@RequestBody Map<String, Object> body) {
         String prompt = String.valueOf(body.getOrDefault("prompt", ""));
         String answer = aiAnalysisService.analyzeLog(prompt);
-        return Result.success(Map.of("answer", answer, "chainOfThought", "基于日志关键字与知识库检索得出结论"));
+        return Result.success(Map.of("answer", answer));
     }
 }

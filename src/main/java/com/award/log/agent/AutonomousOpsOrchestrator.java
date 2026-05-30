@@ -4,6 +4,7 @@ import com.award.log.config.AgentOpsProperties;
 import com.award.log.mcp.tools.*;
 import com.award.log.security.AgenticRiskScoreEngine;
 import com.award.log.security.McpToolSurface;
+import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.OpsTrustPolicy;
 import com.award.log.security.OpsTrustTier;
 import com.award.log.security.RiskLevel;
@@ -175,7 +176,12 @@ public class AutonomousOpsOrchestrator {
     }
 
     public RunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
-        return runInternal(userMessage, surface, intentRisk, opsIntentRouter.forceRemediate(userMessage));
+        boolean force = opsIntentRouter.forceRemediate(userMessage);
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        if (ctx != null && ctx.isUserConfirmedWrite()) {
+            force = true;
+        }
+        return runInternal(userMessage, surface, intentRisk, force);
     }
 
     /** 供 REST / 巡检回调：无用户话术时也可触发全栈闭环 */
@@ -231,6 +237,11 @@ public class AutonomousOpsOrchestrator {
             RemediationSummary remediationSummary = null;
             if (!findings.isEmpty() && surface != McpToolSurface.READ_ONLY) {
                 metricsBeforeRemediation = remediationEffectEvaluator.captureMetrics();
+                if (!forceRemediate) {
+                    md.append("### 处置计划\n\n");
+                    md.append(buildRemediationPlan(findings));
+                    md.append("\n");
+                }
                 auditRecorder.addCot(steps, 4, "安全校验", "按 OpsTrustPolicy 评估写操作风险分档");
                 auditRecorder.addCot(steps, 5, "执行", "按策略执行预览或自动修复");
                 remediationSummary = remediate(findings, forceRemediate, steps);
@@ -444,7 +455,7 @@ public class AutonomousOpsOrchestrator {
         if (tier == OpsTrustTier.BLOCK) {
             return RemediationOutcome.skipped("- 临时目录：风险分过高，已拒绝。");
         }
-        boolean run = force || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
+        boolean run = force || (!chatPreviewOnly() && (tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY));
         if (!run) {
             return RemediationOutcome.previewed("- 临时目录：预览 **" + found + "** 个文件，待确认。");
         }
@@ -467,7 +478,7 @@ public class AutonomousOpsOrchestrator {
         if (tier == OpsTrustTier.BLOCK) {
             return RemediationOutcome.skipped("- 日志目录：风险分过高，已拒绝。");
         }
-        boolean run = force || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
+        boolean run = force || (!chatPreviewOnly() && (tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY));
         if (!run) {
             return RemediationOutcome.previewed("- 日志目录：预览 **" + found + "** 个可删文件，待确认。");
         }
@@ -485,7 +496,7 @@ public class AutonomousOpsOrchestrator {
         if (tier == OpsTrustTier.BLOCK) {
             return RemediationOutcome.skipped("- 服务 **" + serviceName + "**：风险分过高，已拒绝重启。");
         }
-        boolean run = force || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
+        boolean run = force || (!chatPreviewOnly() && (tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY));
         if (!run) {
             serviceRestartTool.restartService(serviceName, true, false);
             return RemediationOutcome.previewed("- 服务 **" + serviceName + "**：已预览，待确认后重启。");
@@ -518,6 +529,42 @@ public class AutonomousOpsOrchestrator {
             }
         }
         return ports.isEmpty() ? List.of(8080) : ports;
+    }
+
+    private static boolean chatPreviewOnly() {
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        if (ctx != null && ctx.isUserConfirmedWrite()) {
+            return false;
+        }
+        return ctx != null && ctx.isChatAgentPath();
+    }
+
+    private String buildRemediationPlan(List<Finding> findings) {
+        StringBuilder sb = new StringBuilder();
+        int i = 1;
+        for (Finding f : findings) {
+            sb.append(i++).append(". **").append(f.title()).append("** — ").append(f.detail()).append("\n");
+            String action = planActionFor(f);
+            if (action != null) {
+                sb.append("   - 建议动作：").append(action).append("\n");
+            }
+        }
+        sb.append("\n> 以上为基于当前采集的处置建议。回复 **「确认执行」** 将在策略允许范围内自动落地；否则仅预览。\n");
+        return sb.toString();
+    }
+
+    private static String planActionFor(Finding f) {
+        if (f == null || f.kind() == null) {
+            return null;
+        }
+        return switch (f.kind()) {
+            case "DISK_PRESSURE" -> "扫描热点目录 → 预览清理临时/陈旧日志 → 验证磁盘使用率";
+            case "CPU_HIGH" -> "定位高 CPU 进程 → 评估是否重启白名单内服务";
+            case "LOG_ANOMALY" -> "分析异常日志 → 预览日志目录清理";
+            case "MEM_HIGH" -> "列出内存占用进程 → 建议限流或扩容";
+            case "FAILED_SERVICE" -> "检查失败单元 → 预览重启（白名单内）";
+            default -> "调用对应 MCP 工具验证后按策略处置";
+        };
     }
 
     private String safeCall(Callable<String> call, String label, List<Map<String, Object>> steps) {

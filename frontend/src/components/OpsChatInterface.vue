@@ -6,10 +6,10 @@
           <el-icon :size="20"><ChatLineRound /></el-icon>
         </div>
         <div class="header-info">
-          <h3>工作台助手</h3>
+          <h3>对话</h3>
           <span class="status-text">
             <span class="online-dot"></span>
-            Agent · MCP 工具 · 路径白名单 · 延时任务
+            在线 · 受策略保护
           </span>
         </div>
       </div>
@@ -31,9 +31,10 @@
     <div class="chat-messages" ref="messagesContainer">
       <div v-if="messages.length === 0" class="welcome-area">
         <div class="welcome-intro">
-          <h2>运维工作台</h2>
+          <h2>有什么可以帮您？</h2>
           <p>
-            基于当前宿主的上下文进行多轮对话；工具在<strong>服务端操作系统</strong>上执行，写操作默认预览并受路径白名单约束。
+            描述问题或下达检查指令：我会采集本机真实状态、给出诊断与处置计划。
+            涉及删除、重启等写操作默认仅预览，确认后才会落地。
           </p>
         </div>
         <div
@@ -54,7 +55,7 @@
               <span class="cap-label">{{ item.label }}</span>
             </button>
             <button
-              v-if="group.name === '处置与自动化' && patrolPending?.hasPending"
+              v-if="group.name === '处置' && patrolPending?.hasPending"
               type="button"
               class="capability-item capability-item--alert"
               @click="continuePatrolPending"
@@ -79,7 +80,7 @@
           <div v-if="msg.isToolCalling" class="tool-calling">
             <div class="tool-calling-header">
               <el-icon class="is-loading"><Loading /></el-icon>
-              <span>正在调用 {{ msg.toolName }} 工具...</span>
+              <span>正在执行 {{ msg.toolName ? mcpToolDisplayName(msg.toolName) : '工具' }}…</span>
             </div>
             <div class="tool-command" v-if="msg.toolCommand">
               <code>{{ msg.toolCommand }}</code>
@@ -93,10 +94,16 @@
               class="markdown-content assistant-markdown"
               v-html="renderAssistantMarkdown(msg.content)"
             />
-            <div v-if="msg.traceId" class="trace-id-hint">
-              链路 traceId: <code>{{ msg.traceId }}</code>
-              <span class="trace-hint">（可在「运维链路审计」Tab 查询）</span>
-            </div>
+            <RemediationPlanCard
+              v-if="msg.remediationPlan && !msg.writeConfirmed"
+              :plan="msg.remediationPlan"
+              :loading="loading && confirmPlanIndex === index"
+              @confirm="confirmPlanFromMessage(index)"
+            />
+            <AssistantEvidenceBar
+              :rag-hits="msg.ragHits"
+              @open-knowledge="openKnowledge"
+            />
           </div>
           <div v-else class="message-bubble user-bubble">
             {{ msg.content }}
@@ -151,7 +158,7 @@
           v-model="inputMessage"
           type="textarea"
           :autosize="{ minRows: 1, maxRows: 4 }"
-          placeholder="Windows / Linux 均可提问；可说「20分钟后检查磁盘」；支持附件与语音"
+          placeholder="描述运维问题，例如：检查磁盘、分析最近错误日志…"
           @keydown.enter.exact.prevent="handleSend"
           @keydown.shift.enter="handleNewLine"
         />
@@ -164,6 +171,7 @@
         <span class="hint">Enter 发送 · Shift+Enter 换行 · 语音为浏览器识别（Chrome 较稳）· 附件限文本类，并入本条消息</span>
       </div>
     </div>
+    <ToolResultDialog ref="toolResultDialogRef" />
   </div>
 </template>
 
@@ -180,38 +188,40 @@ import {
   scheduleDeferredOpsTask
 } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
-import { getMcpToolCommandHint, applyMcpWriteConfirmParams } from '../utils/mcpToolsMeta'
+import { getMcpToolCommandHint, applyMcpWriteConfirmParams, mcpToolDisplayName } from '../utils/mcpToolsMeta'
 import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
 import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
 import { isWorkbenchHighRiskMessage, workbenchHighRiskBlockMarkdown } from '../utils/opsIntentSafety'
+import {
+  userDeclinesTools,
+  shouldUseNaturalLanguageAssistant,
+  userConfirmedRemediation,
+  isOpsMissionIntent
+} from '../utils/opsMissionIntent'
 import { formatErrorMarkdown } from '../utils/apiError.js'
-import MarkdownIt from 'markdown-it'
+import { formatResultPreview, fieldLabel, formatBytes } from '../utils/structuredDataView'
+import ToolResultDialog from './ToolResultDialog.vue'
+import RemediationPlanCard from './RemediationPlanCard.vue'
+import AssistantEvidenceBar from './AssistantEvidenceBar.vue'
+import { renderAssistantMarkdown } from '../utils/assistantMarkdown'
+import { parseRemediationPlan, hasActionableRemediationPlan } from '../utils/remediationPlan'
+import { handleAssistantSsePayload } from '../utils/assistantSseMeta'
 
 const workbenchQuickGroups = WORKBENCH_QUICK_GROUPS
 const patrolQuickItem = PATROL_QUICK_ITEM
-
-const assistantMd = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true,
-  typographer: false
-})
-
-/** 助手正文统一走 Markdown，避免模型输出 ###、** 等符号时整段挤成「一坨」 */
-function renderAssistantMarkdown(raw) {
-  if (raw == null || raw === '') return ''
-  return assistantMd.render(String(raw))
-}
 
 const messages = ref([])
 const inputMessage = ref('')
 const loading = ref(false)
 const messagesContainer = ref(null)
+const toolResultDialogRef = ref(null)
 const fileInputRef = ref(null)
 const pendingAttachment = ref(null)
 const patrolPending = ref({ hasPending: false })
 const patrolContinueLoading = ref(false)
 const listeningVoice = ref(false)
+const confirmPlanIndex = ref(-1)
+const skipRemediationConfirm = ref(false)
 let speechRecognition = null
 
 const refreshPatrolPending = async () => {
@@ -733,6 +743,15 @@ const extractParameters = (message, toolName) => {
 /** 将工具返回对象转成可读中文，避免对话里出现大段 JSON */
 const formatMcpFailureBlock = (result) => formatErrorMarkdown(result)
 
+const formatBoolLabel = (v) => (v === true || v === 'true' ? '是' : v === false || v === 'false' ? '否' : String(v))
+
+const formatModeLabel = (mode) => {
+  if (mode == null || mode === '') return mode
+  const m = String(mode).toUpperCase()
+  if (m === 'DRY-RUN' || m === 'DRY_RUN') return '预览模式（不实际写入）'
+  return String(mode)
+}
+
 const formatObjectAsNaturalLanguage = (obj, depth = 0) => {
   if (obj == null) return '（无返回内容）'
   if (typeof obj === 'string') {
@@ -747,7 +766,7 @@ const formatObjectAsNaturalLanguage = (obj, depth = 0) => {
     return t.length > 3500 ? t.slice(0, 3500) + '\n…（输出已截断）' : t
   }
   if (typeof obj === 'number' || typeof obj === 'boolean') {
-    return String(obj)
+    return typeof obj === 'boolean' ? formatBoolLabel(obj) : String(obj)
   }
   if (Array.isArray(obj)) {
     if (!obj.length) return '（空列表）'
@@ -760,26 +779,19 @@ const formatObjectAsNaturalLanguage = (obj, depth = 0) => {
     const lines = []
     for (const [key, val] of Object.entries(obj)) {
       if (val == null || val === '') continue
-      const label = {
-        mode: '模式',
-        path: '路径',
-        plan: '将执行',
-        note: '说明',
-        filesFound: '发现文件数',
-        filesDeleted: '已删除文件数',
-        deletableCount: '可删除数',
-        protectedSkipped: '已跳过受保护',
-        previewCount: '预览条数',
-        success: '是否成功',
-        error: '错误',
-        service: '服务',
-        stderr: '错误输出',
-        command: '命令',
-        tool: '子工具',
-        output: '输出',
-        root: '扫描根',
-        entries: '条目'
-      }[key] || key
+      const label = fieldLabel(key)
+      if (key === 'mode') {
+        lines.push(`${label}: ${formatModeLabel(val)}`)
+        continue
+      }
+      if (key === 'success' && typeof val === 'boolean') {
+        lines.push(`${label}: ${formatBoolLabel(val)}`)
+        continue
+      }
+      if (typeof val === 'number' && /available|used|size|capacity|free|total|bytes/i.test(key)) {
+        lines.push(`${label}: ${formatBytes(val)}`)
+        continue
+      }
       if (key === 'preview' && Array.isArray(val)) {
         lines.push(
           `${label}（${val.length} 条）:\n` + val.slice(0, 8).map((p) => `  · ${p}`).join('\n')
@@ -858,7 +870,7 @@ const generateHumanReadableResponse = (toolName, result) => {
           return `结束进程预览:\n• PID: ${data.pid}\n• ${data.plan || ''}`
         }
         if (data?.pid != null && data?.command) {
-          return `结束进程结果:\n• PID: ${data.pid}\n• 命令: ${data.command}\n• success=${data.success}\n• ${data.error || data.output || ''}`
+          return `结束进程结果:\n• 进程 ID: ${data.pid}\n• 命令: ${data.command}\n• 结果: ${data.success ? '成功' : '失败'}\n• ${data.error || data.output || ''}`
         }
         break
 
@@ -895,7 +907,7 @@ const generateHumanReadableResponse = (toolName, result) => {
           return response
         }
         if (data?.mode === 'DRY-RUN') {
-          return `日志清理 Dry-Run:\n` +
+          return `日志清理预览:\n` +
             `• 路径: ${data.path}\n` +
             `• 候选文件: ${data.filesFound}\n` +
             `• 预览 ${data.previewCount ?? '-'} 条:\n` +
@@ -908,7 +920,7 @@ const generateHumanReadableResponse = (toolName, result) => {
 
       case 'CleanTempTool':
         if (data.mode === 'DRY-RUN') {
-          return `Dry-Run 预览:\n` +
+          return `清理预览（不实际删除）:\n` +
             `• 路径: ${data.path}\n` +
             `• 将删除 ${data.filesFound} 个文件\n` +
             `• 预览前 ${data.previewCount} 个:\n` +
@@ -922,7 +934,7 @@ const generateHumanReadableResponse = (toolName, result) => {
 
       case 'LogCleanupTool':
         if (data.mode === 'DRY-RUN') {
-          return `日志清理 Dry-Run:\n` +
+          return `日志清理预览（不实际删除）:\n` +
             `• 路径: ${data.path}\n` +
             `• 候选文件: ${data.filesFound}\n` +
             `• 预览 ${data.previewCount ?? '-'} 条:\n` +
@@ -936,7 +948,7 @@ const generateHumanReadableResponse = (toolName, result) => {
           return `服务重启预览:\n• ${data.service}\n• ${data.plan || ''}`
         }
         if (data?.service) {
-          return `服务重启结果:\n• ${data.service}\n• success=${data.success}\n• ${data.stderr || ''}`
+          return `服务重启结果:\n• 服务: ${data.service}\n• 结果: ${data.success ? '成功' : '失败'}\n• ${data.stderr || data.message || ''}`
         }
         if (data?.tool || data?.output || data?.stderr) {
           return formatCommandOutputSummary(data, '服务巡检结果')
@@ -1168,7 +1180,7 @@ const scheduleDeferredCleanupFlow = async (plan, rawMessage) => {
 
 const scheduleDeferredToolFlow = async (plan, rawMessage) => {
   if (!DEFERRED_ALLOWED_TOOLS.has(plan.toolName)) {
-    ElMessage.warning(`延时执行暂不支持「${plan.toolName}」，请使用清理/巡检类工具或在工作台即时执行`)
+    ElMessage.warning(`延时执行暂不支持「${plan.toolName}」，请使用清理/巡检类工具或即时执行`)
     return
   }
   if (plan.toolName === 'CleanTempTool') {
@@ -1207,25 +1219,6 @@ const scheduleDeferredToolFlow = async (plan, rawMessage) => {
   scrollToBottom()
 }
 
-/** 用户明确要求不要走本地 MCP 工具时，禁止工具路由（避免「系统状态 不调用工具」仍触发 SystemLoadTool） */
-const userDeclinesTools = (text) => {
-  const t = (text || '').trim()
-  if (!t) return false
-  return /不调用工具|不要调用工具|不用工具|别用工具|禁止工具|不要工具|不要执行工具|别执行工具|仅文字|只要文字|纯对话|不要跑命令|别跑命令|不调工具|别用mcp|不用mcp/i.test(
-    t
-  )
-}
-
-/** 偏解释、追问、总结 → 走大模型多轮对话；简短直达指令 → 仍可走 MCP */
-const shouldUseNaturalLanguageAssistant = (text) => {
-  const t = text.trim()
-  if (userDeclinesTools(t)) return true
-  if (t.length > 140) return true
-  if (/[？?]|为什么|怎么|如何|含义|说明一下|是什么意思|总结|讨论|建议|是否|能否|有没有|什么意思/.test(t)) return true
-  if (/刚才|之前|上面|这个结果|那条|接着|还有/.test(t)) return true
-  return false
-}
-
 const buildConversationHistory = (priorMessages) => {
   const out = []
   for (const msg of priorMessages) {
@@ -1246,6 +1239,70 @@ const buildConversationHistory = (priorMessages) => {
   return out.slice(-24)
 }
 
+function applySseToAssistant (assistantIdx, payload) {
+  handleAssistantSsePayload(payload, {
+    onMeta: (meta) => {
+      const msg = messages.value[assistantIdx]
+      if (!msg) return
+      msg.meta = meta
+      if (Array.isArray(meta.ragHits)) msg.ragHits = meta.ragHits
+      if (meta.writeConfirmed) msg.writeConfirmed = true
+    },
+    onContent: (text) => {
+      if (messages.value[assistantIdx]) {
+        messages.value[assistantIdx].content += text
+      }
+    }
+  })
+}
+
+function finalizeAssistantMessage (assistantIdx) {
+  const msg = messages.value[assistantIdx]
+  if (!msg) return
+  if (msg.content) {
+    msg.content = msg.content
+      .replace(/^>\s*\*\*traceId:\*\*\s*`[^`]+`\s*\n\n?/gim, '')
+      .replace(/^追踪\s*ID[：:]\s*`?[a-f0-9-]{8,}`?\s*\n?/gim, '')
+  }
+  if (!msg.ragHits?.length && msg.meta?.ragHits?.length) msg.ragHits = msg.meta.ragHits
+  if (msg.meta?.writeConfirmed) msg.writeConfirmed = true
+  if (!msg.writeConfirmed && hasActionableRemediationPlan(msg.content)) {
+    msg.remediationPlan = parseRemediationPlan(msg.content)
+  }
+}
+
+async function confirmRemediationDialog () {
+  await ElMessageBox.confirm(
+    '将按上一轮处置计划在路径白名单与策略允许范围内执行写操作（清理、重启等）。此操作可能改变系统状态，是否继续？',
+    '确认执行处置',
+    {
+      type: 'warning',
+      confirmButtonText: '确认执行',
+      cancelButtonText: '取消',
+      closeOnClickModal: false
+    }
+  )
+}
+
+function openKnowledge () {
+  window.dispatchEvent(new CustomEvent('ops-navigate-tab', { detail: { tab: 'knowledge' } }))
+}
+
+const confirmPlanFromMessage = async (index) => {
+  confirmPlanIndex.value = index
+  try {
+    await confirmRemediationDialog()
+    skipRemediationConfirm.value = true
+    inputMessage.value = '确认执行'
+    await handleSend()
+  } catch {
+    // cancelled
+  } finally {
+    confirmPlanIndex.value = -1
+    skipRemediationConfirm.value = false
+  }
+}
+
 const runNaturalLanguageStream = async (message) => {
   const prior = messages.value.slice(0, -1)
   const history = buildConversationHistory(prior)
@@ -1258,7 +1315,10 @@ const runNaturalLanguageStream = async (message) => {
   loading.value = true
 
   try {
-    const response = await assistantChatStream(message, history, { useToolAgent: true })
+    const response = await assistantChatStream(message, history, {
+      useToolAgent: !userDeclinesTools(message),
+      confirmRemediation: userConfirmedRemediation(message)
+    })
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         messages.value[assistantIdx].content =
@@ -1288,23 +1348,20 @@ const runNaturalLanguageStream = async (message) => {
       if (done) break
       const chunk = decoder.decode(value, { stream: true })
       sseBuf = appendSsePayloadFromChunk(sseBuf, chunk, (payload) => {
-        messages.value[assistantIdx].content += payload
+        applySseToAssistant(assistantIdx, payload)
       })
     }
     flushSseBuffer(sseBuf, (payload) => {
-      messages.value[assistantIdx].content += payload
+      applySseToAssistant(assistantIdx, payload)
     })
     if (!messages.value[assistantIdx].content.trim()) {
       messages.value[assistantIdx].content = '（未返回内容，请检查模型服务）'
     }
-    const traceMatch = messages.value[assistantIdx].content.match(/>\s*\*\*traceId:\*\*\s*`([^`]+)`/i)
-    if (traceMatch) {
-      messages.value[assistantIdx].traceId = traceMatch[1]
-    }
+    finalizeAssistantMessage(assistantIdx)
   } catch (e) {
     console.error('自然语言对话失败', e)
     messages.value[assistantIdx].content =
-      '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端已启动且 Spring AI 模型已正确配置。'
+      '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
   } finally {
     loading.value = false
   }
@@ -1328,6 +1385,20 @@ const handleSend = async () => {
     timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   })
   scrollToBottom()
+
+  if (userConfirmedRemediation(message) && !skipRemediationConfirm.value) {
+    try {
+      await confirmRemediationDialog()
+    } catch {
+      messages.value.push({
+        role: 'assistant',
+        content: '已取消执行。',
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      })
+      scrollToBottom()
+      return
+    }
+  }
 
   if (isWorkbenchHighRiskMessage(message)) {
     loading.value = true
@@ -1410,7 +1481,7 @@ const handleSend = async () => {
       messages.value.splice(toolCallingIndex, 1)
       loading.value = false
       try {
-        await ElMessageBox.confirm(buildMcpRiskConfirmMessage(result), '安全护栏 · Agentic 风险 · 二次确认', {
+        await ElMessageBox.confirm(buildMcpRiskConfirmMessage(result), '操作确认', {
           confirmButtonText: '确认执行',
           cancelButtonText: '取消',
           type: 'warning',
@@ -1420,7 +1491,7 @@ const handleSend = async () => {
       } catch {
         messages.value.push({
           role: 'assistant',
-          content: '已取消执行（未通过中等风险二次确认）。',
+          content: '已取消执行。',
           timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
         })
         scrollToBottom()
@@ -1448,41 +1519,25 @@ const handleSend = async () => {
 
     result = normalizeMcpToolResponse(result)
 
-    const humanReadable = generateHumanReadableResponse(toolName, result.data)
-    const traceId = result.traceId ? String(result.traceId) : ''
-    const traceLine = traceId
-      ? `\n\n---\n**追踪 ID**（与「运维链路 / 审计」关联）：\`${traceId}\`\n`
-      : ''
+    const preview = formatResultPreview(result.data ?? result)
+    const label = mcpToolDisplayName(toolName)
+    const statusTitle = result.success ? '已完成' : result.securityCode ? '已拒绝' : '执行失败'
+    const brief =
+      preview && preview !== '—'
+        ? `${label} ${statusTitle}：${preview}`
+        : `${label} ${statusTitle}。`
 
-    let summaryMd = humanReadable && String(humanReadable).trim() ? humanReadable : ''
-    if (!summaryMd) {
-      summaryMd = result.success
-        ? '工具已执行完成，但未解析到可展示字段。'
-        : `**失败说明**\n\n${formatMcpFailureBlock(result)}`
-    }
-    if (!result.success && (result.securityCode != null || result.riskScore != null)) {
-      const gate = []
-      if (result.error) gate.push(`- ${String(result.error)}`)
-      if (result.securityCode) gate.push(`- 安全码: \`${result.securityCode}\``)
-      if (result.riskScore != null) gate.push(`- Agentic 风险分: **${result.riskScore} / 10**`)
-      if (result.riskExplanation) gate.push(`- ${result.riskExplanation}`)
-      summaryMd = `### 安全门拦截\n\n${gate.join('\n')}\n\n---\n\n` + summaryMd
-    }
-
-    const statusTitle =
-      result.success
-        ? '执行成功'
-        : result.securityCode
-          ? '安全拦截'
-          : '执行失败'
-    const durationLine =
-      result.duration != null && result.duration > 0 ? `\n\n*耗时约 ${result.duration} ms*` : ''
-    const fullMd =
-      `## ${toolName}\n\n### ${statusTitle}\n\n` + summaryMd + durationLine + traceLine
+    toolResultDialogRef.value?.open({
+      toolName,
+      success: result.success,
+      duration: result.duration || 0,
+      raw: result,
+      showTrace: false
+    })
 
     messages.value.push({
       role: 'assistant',
-      content: fullMd,
+      content: brief,
       toolName,
       success: result.success,
       duration: result.duration || 0,

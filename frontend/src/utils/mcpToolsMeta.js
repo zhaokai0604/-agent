@@ -3,13 +3,47 @@
  * 供「工具控制台」与「工作台」共用，避免前端散落硬编码。
  */
 
+/** 工具在界面上的展示名称（隐藏 Java 类名） */
+export const MCP_TOOL_DISPLAY_NAMES = {
+  DiskOpsTool: '磁盘管理',
+  LogOpsTool: '日志管理',
+  ServiceOpsTool: '服务管理',
+  ContainerOpsTool: '容器管理',
+  ProcessOpsTool: '进程管理',
+  DiskTool: '磁盘空间',
+  DiskInsightTool: '目录占用',
+  DiskAnalyzeTool: '磁盘诊断',
+  ProcessTool: '进程列表',
+  SystemLoadTool: '系统负载',
+  LogAnalysisTool: '日志分析',
+  CleanTempTool: '临时文件清理',
+  LogCleanupTool: '日志清理',
+  ServiceRestartTool: '服务重启',
+  ConfigCheckTool: '配置检查',
+  NetworkTool: '网络检测',
+  PrivilegeTool: '权限检查',
+  OsInsightTool: '系统洞察',
+  PortHealthTool: '端口检测',
+  DockerTool: '容器状态',
+  CronJobTool: '计划任务',
+  FirewallTool: '防火墙',
+  SslCertTool: '证书检查',
+  SystemdTool: '系统服务',
+  AutonomousOpsTool: '综合巡检',
+  ConfigDriftTool: '配置漂移'
+}
+
+export function mcpToolDisplayName(name) {
+  return MCP_TOOL_DISPLAY_NAMES[name] || String(name || '').replace(/Tool$/, '')
+}
+
 export const MCP_TOOL_COMMAND_HINT = {
   DiskTool: 'df -h',
   DiskInsightTool: 'du -xk --max-depth=N（白名单路径）',
   DiskAnalyzeTool: 'df + 可选 du 热点（白名单）',
   ProcessTool: 'ps aux --sort=-%cpu',
   SystemLoadTool: 'top -bn1 + /proc/loadavg',
-  LogAnalysisTool: '日志采样 + Drain-Plus',
+  LogAnalysisTool: '日志采样与分析',
   CleanTempTool: 'find 白名单临时目录 + 可选 rm',
   LogCleanupTool: 'find /var/log 类目录 + 可选 rm（白名单）',
   ServiceRestartTool: 'systemctl restart（白名单单元）',
@@ -23,7 +57,7 @@ export const MCP_TOOL_COMMAND_HINT = {
   FirewallTool: 'ufw | firewalld | netsh',
   SslCertTool: 'TLS 握手读证书',
   SystemdTool: 'systemctl --failed | status',
-  AutonomousOpsTool: '全工具融合：感知→诊断→修复→验证',
+  AutonomousOpsTool: '感知→诊断→修复→验证',
   ConfigDriftTool: '配置 checksum 漂移（只读）',
   DiskOpsTool: 'df|hotspots|analyze|clean-temp（读写合一）',
   LogOpsTool: 'analyze|cleanup（读写合一）',
@@ -125,7 +159,7 @@ export function mcpToolBadge(name) {
   return map[name] || (name ? String(name).replace(/Tool$/, '').slice(0, 3).toUpperCase() : '—')
 }
 
-/** 演示页表单：名称须与后端 toolName 一致 */
+/** 工具箱表单：名称须与后端 toolName 一致 */
 export const MCP_TOOL_DEFINITIONS = [
   {
     name: 'DiskOpsTool',
@@ -242,7 +276,7 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'LogAnalysisTool',
-    description: '日志分析与 Drain-Plus',
+    description: '日志采样与分析',
     params: [
       { name: 'logPath', label: '日志路径', placeholder: '/var/log/syslog', hint: '可选' },
       { name: 'lines', label: '分析行数', placeholder: '100', hint: '可选' }
@@ -363,9 +397,9 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'AutonomousOpsTool',
-    description: '一键自主运维（融合全部工具）',
+    description: '综合巡检与修复建议',
     params: [
-      { name: 'userIntent', label: '意图', placeholder: '自动运维', hint: '可选' },
+      { name: 'userIntent', label: '意图', placeholder: '检查系统状态', hint: '可选' },
       { name: 'forceRemediate', label: '强制修复', placeholder: 'false', hint: 'true=策略内直接执行写操作' }
     ]
   },
@@ -379,9 +413,12 @@ export const MCP_TOOL_DEFINITIONS = [
 ]
 
 /**
- * 将服务端 /api/mcp/tools 与本地定义合并：标注在线/缺失。
+ * 将服务端 /api/mcp/tools 与本地定义合并：标注在线/缺失/未连接。
+ * @param {object|null} serverResponse
+ * @param {{ registryLoaded?: boolean }} options registryLoaded=false 表示未能连上后端
  */
-export function mergeToolRegistry(serverResponse) {
+export function mergeToolRegistry(serverResponse, options = {}) {
+  const registryLoaded = options.registryLoaded !== false
   const serverList = Array.isArray(serverResponse?.data)
     ? serverResponse.data
     : Array.isArray(serverResponse)
@@ -393,18 +430,28 @@ export function mergeToolRegistry(serverResponse) {
     }
   }
   const serverNames = new Set(serverList.map((t) => t?.name).filter(Boolean))
+  const hasServerList = serverList.length > 0
   const byServer = Object.fromEntries(serverList.map((t) => [t.name, t]))
 
   return MCP_TOOL_DEFINITIONS.map((def) => {
     const s = byServer[def.name]
-    const online = serverNames.size === 0 || serverNames.has(def.name)
+    let status = 'unknown'
+    let statusText = '未连接服务'
+    if (registryLoaded && hasServerList) {
+      status = serverNames.has(def.name) ? 'online' : 'offline'
+      statusText = status === 'online' ? '在线' : '未在服务端注册'
+    } else if (registryLoaded && !hasServerList) {
+      status = 'offline'
+      statusText = '服务端无可用工具'
+    }
     return {
       ...def,
+      displayName: mcpToolDisplayName(def.name),
       summary: s?.summary || def.summary,
       description: s?.description || def.description,
       endpoint: s?.endpoint,
-      status: online ? 'online' : 'offline',
-      statusText: online ? '在线' : '未在服务端注册'
+      status,
+      statusText
     }
   })
 }

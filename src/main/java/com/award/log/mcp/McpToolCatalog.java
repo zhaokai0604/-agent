@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.stereotype.Component;
+import org.springframework.util.ClassUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -35,8 +36,16 @@ public class McpToolCatalog {
     @Getter
     private Set<String> readOnlyObservationToolNames = Set.of();
 
-    public McpToolCatalog(ApplicationContext applicationContext) {
+    /**
+     * 为 true 时，{@link McpKnownTools#DISPATCHABLE} 内工具一律视为 HTTP/Agent 可调用（整体授权）。
+     */
+    private final boolean httpAllowAllRegistered;
+
+    public McpToolCatalog(
+            ApplicationContext applicationContext,
+            @org.springframework.beans.factory.annotation.Value("${agent.security.mcp-http-allow-all-registered:true}") boolean httpAllowAllRegistered) {
         this.applicationContext = applicationContext;
+        this.httpAllowAllRegistered = httpAllowAllRegistered;
     }
 
     @PostConstruct
@@ -51,11 +60,12 @@ public class McpToolCatalog {
             } catch (Exception e) {
                 continue;
             }
-            Class<?> type = bean.getClass();
+            Class<?> type = ClassUtils.getUserClass(bean);
             if (!type.getPackageName().startsWith(TOOLS_PACKAGE)) {
                 continue;
             }
-            if (!type.getSimpleName().endsWith("Tool")) {
+            String simpleName = type.getSimpleName();
+            if (!simpleName.endsWith("Tool")) {
                 continue;
             }
             McpTool ann = AnnotationUtils.findAnnotation(type, McpTool.class);
@@ -71,6 +81,7 @@ public class McpToolCatalog {
             map.putIfAbsent(toolName, new McpToolDescriptor(toolName, type.getName(), httpAllowed, risk, readOnly));
         }
 
+        ensureDispatchableToolsRegistered(map);
         applyBuiltinRiskDefaults(map);
 
         descriptors = Collections.unmodifiableMap(map);
@@ -142,9 +153,48 @@ public class McpToolCatalog {
         };
     }
 
+    public boolean isRegistered(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return false;
+        }
+        String key = toolName.trim();
+        return descriptors.containsKey(key) || McpKnownTools.isDispatchable(key);
+    }
+
     public boolean isHttpAllowed(String toolName) {
-        McpToolDescriptor d = descriptors.get(toolName);
+        if (toolName == null || toolName.isBlank()) {
+            return false;
+        }
+        String key = toolName.trim();
+        if (httpAllowAllRegistered && McpKnownTools.isDispatchable(key)) {
+            return true;
+        }
+        McpToolDescriptor d = descriptors.get(key);
         return d != null && d.httpAllowed();
+    }
+
+    private static void ensureDispatchableToolsRegistered(Map<String, McpToolDescriptor> map) {
+        for (String name : McpKnownTools.DISPATCHABLE) {
+            map.compute(name, (k, existing) -> {
+                if (existing != null) {
+                    if (!existing.httpAllowed()) {
+                        return new McpToolDescriptor(
+                                existing.toolName(),
+                                existing.beanClassName(),
+                                true,
+                                existing.defaultRiskScore(),
+                                existing.readOnlyObservation());
+                    }
+                    return existing;
+                }
+                return new McpToolDescriptor(
+                        k,
+                        null,
+                        true,
+                        defaultRiskFor(k),
+                        isReadOnlyByConvention(k));
+            });
+        }
     }
 
     public boolean isReadOnlyObservation(String toolName) {

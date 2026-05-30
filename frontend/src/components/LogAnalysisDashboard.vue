@@ -3,10 +3,10 @@
     <el-card class="dashboard-card">
       <template #header>
         <div class="card-header">
-          <span>日志分析仪表盘</span>
+          <span>趋势看板</span>
           <div class="card-header-actions">
             <el-button type="success" plain size="small" @click="goToOpsAgent">
-              打开工作台对话
+              打开对话
             </el-button>
             <el-button type="primary" @click="refreshData">刷新数据</el-button>
             <el-button type="info" plain size="small" @click="exportDashboardPng">导出 PNG</el-button>
@@ -121,7 +121,7 @@
                 plain
                 @click="opsAgentForFailedTask(scope.row)"
               >
-                对话复核
+                去对话排查
               </el-button>
               <el-button
                 v-if="shouldOfferAgentDeepDive(scope.row)"
@@ -130,7 +130,7 @@
                 plain
                 @click="opsAgentDeepDiveTask(scope.row)"
               >
-                对话深挖
+                继续分析
               </el-button>
             </template>
           </el-table-column>
@@ -224,7 +224,7 @@ const exportDashboardPdf = async () => {
     `近7日：日志 ${summary.totalLogs ?? 0} · 异常 ${summary.anomalyLogs ?? 0} · 异常率 ${(summary.anomalyRate ?? 0).toFixed(2)}% · 任务 ${summary.totalTasks ?? 0}`
   try {
     await exportDashboardPdfDocument({
-      title: '日志分析仪表盘 · 近7日报告',
+      title: '趋势看板 · 近7日',
       summaryLine,
       chartImages: images,
       filename: `log-dashboard-report-${formatLocalDateKey(new Date())}.pdf`
@@ -607,11 +607,11 @@ const goToOpsAgent = () => {
 }
 
 const opsAgentForFailedTask = (row) => {
-  dispatchOpsAgentPrefill(`【仪表盘】${agentPrefillFailedTask(row)}`)
+  dispatchOpsAgentPrefill(agentPrefillFailedTask(row))
 }
 
 const opsAgentDeepDiveTask = (row) => {
-  dispatchOpsAgentPrefill(`【仪表盘】${agentPrefillHighAnomaly(row)}`)
+  dispatchOpsAgentPrefill(agentPrefillHighAnomaly(row))
 }
 
 // 查看任务详情

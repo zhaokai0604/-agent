@@ -62,7 +62,8 @@ public class DiskAnalyzeTool {
             if (!ok) {
                 Map<String, Object> err = new LinkedHashMap<>();
                 err.put("success", false);
-                err.put("error", map.getOrDefault("error", "子工具执行失败"));
+                Object errorMsg = map.get("error");
+                err.put("error", errorMsg != null ? errorMsg : "子工具执行失败");
                 if (map.containsKey("durationMs")) {
                     err.put("durationMs", map.get("durationMs"));
                 }

@@ -1,7 +1,7 @@
 [Unit]
 Description=ThreshCore award-log (Kylin V11 LoongArch)
-After=network.target mysql.service
-Wants=mysql.service
+After=network.target mariadb.service
+Wants=mariadb.service
 
 [Service]
 Type=simple

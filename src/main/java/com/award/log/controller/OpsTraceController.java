@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 运维推理链路审计查询（赛题「可追溯」）。
+ * 运维推理链路审计查询。
  */
 @RestController
 @RequestMapping("/api/ops-trace")

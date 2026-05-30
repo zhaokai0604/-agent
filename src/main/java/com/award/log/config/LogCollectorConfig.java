@@ -1,5 +1,6 @@
 package com.award.log.config;
 
+import com.award.log.collector.LogCollectorPathResolver;
 import com.award.log.collector.LogCollectorManager;
 import com.award.log.collector.impl.DatabaseLogCollector;
 import com.award.log.collector.impl.FileLogCollector;
@@ -12,6 +13,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import javax.sql.DataSource;
 import jakarta.annotation.PreDestroy;
+
+import java.util.List;
 
 /**
  * 日志采集器配置类
@@ -32,7 +35,13 @@ public class LogCollectorConfig {
     @Value("${log.collector.enabled:true}")
     private boolean enabled;
 
-    @Value("${log.collector.file.path:logs}")
+    @Value("${log.collector.file.max-depth:4}")
+    private int maxDepth;
+
+    @Value("${log.collector.file.poll-interval-ms:5000}")
+    private int pollIntervalMs;
+
+    @Value("${log.collector.file.path:auto}")
     private String filePath;
 
     @Value("${log.collector.file.include-extensions:.log,.txt,.out,.err,.debug,.info,.warn,.error,.fatal,.access,.audit,.trace}")
@@ -71,14 +80,27 @@ public class LogCollectorConfig {
         if (enabled) {
             log.info("[采集器配置] 初始化日志采集器");
 
-            // 初始化文件采集器
-            if (!filePath.isEmpty()) {
-                try {
-                    FileLogCollector fileCollector = new FileLogCollector(filePath, "file-collector", includeExtensions, excludeDirectories);
-                    collectorManager.addCollector(fileCollector);
-                    log.info("[采集器配置] 文件采集器初始化成功，路径: {}", filePath);
-                } catch (Exception e) {
-                    log.error("[采集器配置] 初始化文件采集器失败: {}", e.getMessage(), e);
+            // 初始化文件采集器（支持 auto 多根路径）
+            List<String> roots = LogCollectorPathResolver.resolve(filePath);
+            if (roots.isEmpty()) {
+                log.warn("[采集器配置] 未解析到任何日志采集根路径");
+            } else {
+                log.info("[采集器配置] 文件采集模式: {}，根路径数: {}",
+                        LogCollectorPathResolver.isAutoMode(filePath) ? "自动感知" : "手动指定",
+                        roots.size());
+                int idx = 0;
+                for (String root : roots) {
+                    try {
+                        String collectorName = roots.size() == 1
+                                ? "file-collector"
+                                : "file-collector-" + (++idx);
+                        FileLogCollector fileCollector = new FileLogCollector(
+                                root, collectorName, includeExtensions, excludeDirectories, maxDepth, pollIntervalMs);
+                        collectorManager.addCollector(fileCollector);
+                        log.info("[采集器配置] 文件采集器 {} → {}", collectorName, root);
+                    } catch (Exception e) {
+                        log.error("[采集器配置] 初始化文件采集器失败 [{}]: {}", root, e.getMessage(), e);
+                    }
                 }
             }
 

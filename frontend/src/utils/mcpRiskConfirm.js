@@ -11,7 +11,7 @@ export function buildMcpRiskConfirmMessage(result) {
   const parts = []
   if (result.message) parts.push(String(result.message))
   if (result.riskScore != null && Number.isFinite(Number(result.riskScore))) {
-    parts.push(`Agentic 风险分：${result.riskScore} / 10`)
+    parts.push(`风险评分：${result.riskScore} / 10`)
   }
   if (result.riskDimensions && typeof result.riskDimensions === 'object') {
     const dimText = formatRiskDimensions(result.riskDimensions)

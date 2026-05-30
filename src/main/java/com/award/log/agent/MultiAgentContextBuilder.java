@@ -51,10 +51,17 @@ public class MultiAgentContextBuilder {
     }
 
     public Map<String, Object> build() {
+        return build(null);
+    }
+
+    /**
+     * @param userQuery 当前用户问题，用于知识库 RAG 检索相似运维案例
+     */
+    public Map<String, Object> build(String userQuery) {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("perceptionAgent", buildPerception());
         root.put("cleanupAgentPolicy", buildCleanupPolicy());
-        root.put("diagnosisAgent", buildDiagnosis());
+        root.put("diagnosisAgent", buildDiagnosis(userQuery));
         root.put("orchestratorAgent", buildOrchestratorHints());
         root.put("correlationDigest", buildCorrelationDigest());
         if (opsOpenIncidentService != null) {
@@ -107,7 +114,7 @@ public class MultiAgentContextBuilder {
         return m;
     }
 
-    private Map<String, Object> buildDiagnosis() {
+    private Map<String, Object> buildDiagnosis(String userQuery) {
         Map<String, Object> m = new LinkedHashMap<>();
         try {
             Map<String, Object> alarms = aiLogAlarmService.getAlarmStatistics(1, null, null);
@@ -124,7 +131,7 @@ public class MultiAgentContextBuilder {
         } catch (Exception e) {
             m.put("anomalyLogDay1", Map.of("unavailable", true));
         }
-        m.put("similarHistoricalCases", searchSimilarCases());
+        m.put("similarHistoricalCases", searchSimilarCases(userQuery));
         return m;
     }
 
@@ -165,12 +172,16 @@ public class MultiAgentContextBuilder {
         return titles;
     }
 
-    private List<Map<String, Object>> searchSimilarCases() {
+    private List<Map<String, Object>> searchSimilarCases(String userQuery) {
         if (knowledgeBaseService == null) {
             return List.of();
         }
         StringBuilder q = new StringBuilder();
-        q.append("运维 异常 日志 磁盘 内存 CPU 告警 服务");
+        if (userQuery != null && !userQuery.isBlank()) {
+            q.append(userQuery.trim());
+        } else {
+            q.append("运维 异常 日志 磁盘 内存 CPU 告警 服务");
+        }
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> perf = (Map<String, Object>) statisticsService.getSystemPerformance(null);
@@ -180,9 +191,9 @@ public class MultiAgentContextBuilder {
             // ignore
         }
         try {
-            return knowledgeBaseService.search(q.toString(), 3);
+            return knowledgeBaseService.search(q.toString(), 5);
         } catch (Exception e) {
-            log.debug("Qdrant 相似案例检索跳过: {}", e.getMessage());
+            log.debug("知识库 RAG 检索跳过: {}", e.getMessage());
             return List.of();
         }
     }
@@ -192,7 +203,7 @@ public class MultiAgentContextBuilder {
         m.put("role", "调度 Agent（UnifiedAssistantService）");
         m.put("workflow", List.of(
                 "1. 用 perceptionAgent 事实陈述环境",
-                "2. 用 diagnosisAgent 做证据链与相似案例引用（若有）",
+                "2. 用 diagnosisAgent 做证据链；引用 similarHistoricalCases（知识库 RAG）时须标注来源标题",
                 "3. 涉及写操作前引用 cleanupAgentPolicy 并提示二次确认",
                 "4. 用户意图高危时明确拒绝并引用安全结论"
         ));

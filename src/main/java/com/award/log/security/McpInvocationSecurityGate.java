@@ -93,8 +93,11 @@ public class McpInvocationSecurityGate {
             log.warn("非法工具名格式: {}", toolName);
             return GateDecision.block("TOOL_NAME_REJECTED", "工具名称格式不合法");
         }
-        if (!mcpToolCatalog.isHttpAllowed(toolName)) {
+        if (!mcpToolCatalog.isRegistered(toolName)) {
             return GateDecision.block("UNKNOWN_TOOL", "未知或未授权的工具: " + toolName);
+        }
+        if (!mcpToolCatalog.isHttpAllowed(toolName)) {
+            return GateDecision.block("TOOL_NOT_HTTP_ALLOWED", "工具未开放 HTTP/Agent 调用: " + toolName);
         }
 
         if (profile == McpSecurityProfile.INITIAL_REQUEST || profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
@@ -156,9 +159,19 @@ public class McpInvocationSecurityGate {
         boolean needByScore = profile == McpSecurityProfile.INITIAL_REQUEST
                 && scoreResult.total() >= autoMax
                 && scoreResult.total() <= confirmMax;
+        // 仅当风险分也进入确认区间时才因 MEDIUM 意图要求二次确认，避免「改配置/重启」类常规运维一律弹窗
         boolean needByIntent = profile == McpSecurityProfile.INITIAL_REQUEST
-                && intentRisk == RiskLevel.MEDIUM;
+                && intentRisk == RiskLevel.MEDIUM
+                && scoreResult.total() >= autoMax;
         if (profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
+            OpsSecurityContext.Ctx secCtx = OpsSecurityContext.get();
+            boolean chatPath = secCtx == null || secCtx.isChatAgentPath();
+        if (chatPath && !(secCtx != null && secCtx.isUserConfirmedWrite())
+                && ChatToolWriteGuard.requestsRealMutation(toolName, parameters)) {
+                return GateDecision.block("CHAT_WRITE_FORBIDDEN",
+                        ChatToolWriteGuard.blockMessage(toolName),
+                        scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
+            }
             return GateDecision.allow(intentRisk, scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
         if (needByScore || needByIntent) {
@@ -195,11 +208,20 @@ public class McpInvocationSecurityGate {
     }
 
     /**
-     * 工作台 ChatClient 多步 {@code @Tool}：与 HTTP 共用评分/注入/意图规则，但不触发 NEED_CONFIRM（由工具层 dry-run/confirm 参数约束）。
+     * 工作台 ChatClient 多步 {@code @Tool}：与 HTTP 共用评分/注入/意图；对话路径禁止真实写操作。
      */
-    public GateDecision evaluateChatToolInvocation(String toolBeanName, String instruction) {
+    public GateDecision evaluateChatToolInvocation(String toolBeanName, Map<String, Object> parameters,
+                                                   String instruction, String userUtterance) {
         String instr = instruction == null ? "" : instruction.trim();
-        return evaluate(toolBeanName, Map.of(), instr, null, McpSecurityProfile.CHAT_AGENT_TOOL);
+        String user = userUtterance == null ? "" : userUtterance.trim();
+        return evaluate(toolBeanName, parameters == null ? Map.of() : parameters, instr, user,
+                McpSecurityProfile.CHAT_AGENT_TOOL);
+    }
+
+    /** @deprecated 请使用带 parameters 的重载 */
+    @Deprecated
+    public GateDecision evaluateChatToolInvocation(String toolBeanName, String instruction) {
+        return evaluateChatToolInvocation(toolBeanName, Map.of(), instruction, null);
     }
 
     private static String mergeRiskUtterance(String userUtterance, String instruction) {
@@ -239,9 +261,6 @@ public class McpInvocationSecurityGate {
             return false;
         }
         String u = userUtterance.trim();
-        if (intentRiskFilter.evaluate(u) == RiskLevel.HIGH) {
-            return true;
-        }
         return DESTRUCTIVE_UTTERANCE_CN.matcher(u).find();
     }
 

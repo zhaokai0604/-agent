@@ -1,12 +1,15 @@
 package com.award.log.controller;
 
+import com.award.log.collector.LogCollectorPathResolver;
 import com.award.log.common.Result;
+import com.award.log.config.OpsDryRunProperties;
 import com.award.log.decision.RandomForestDecisionEngine;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.platform.KylinCommandProbe;
 import com.award.log.util.OsRuntime;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -16,10 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * 验收用：平台/OS/架构与生产 profile 快照（不含密钥明文）。
+ * 平台与运行环境快照（不含密钥明文）。
  */
 @Tag(name = "平台信息")
 @RestController
@@ -29,20 +33,32 @@ public class PlatformInfoController {
     private final Environment environment;
     private final RandomForestDecisionEngine randomForestDecisionEngine;
     private final MinPrivilegeExecutor minPrivilegeExecutor;
+    private final OpsDryRunProperties opsDryRunProperties;
+
+    @Autowired(required = false)
+    private ChatClient chatClient;
+
+    @Value("${spring.ai.openai.api-key:}")
+    private String aiApiKey;
+
+    @Value("${log.collector.file.path:}")
+    private String logCollectorPath;
 
     @Autowired(required = false)
     private KylinCommandProbe kylinCommandProbe;
 
-    @Value("${platform.kylin.expected-arch:loongarch64}")
-    private String expectedArch;
-
-    public PlatformInfoController(Environment environment, RandomForestDecisionEngine randomForestDecisionEngine) {
+    public PlatformInfoController(
+            Environment environment,
+            RandomForestDecisionEngine randomForestDecisionEngine,
+            MinPrivilegeExecutor minPrivilegeExecutor,
+            OpsDryRunProperties opsDryRunProperties) {
         this.environment = environment;
         this.randomForestDecisionEngine = randomForestDecisionEngine;
-        this.minPrivilegeExecutor = null;
+        this.minPrivilegeExecutor = minPrivilegeExecutor;
+        this.opsDryRunProperties = opsDryRunProperties;
     }
 
-    @Operation(summary = "平台与生产就绪快照（麒麟 V11 + LoongArch 验收）")
+    @Operation(summary = "平台与运行环境快照")
     @GetMapping("/info")
     public Result<Map<String, Object>> info() {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -53,14 +69,11 @@ public class PlatformInfoController {
         body.put("prodProfileActive", Arrays.stream(active).anyMatch(p -> p.contains("prod")));
         body.put("kylinProfileActive", Arrays.stream(active).anyMatch(p -> "kylin".equals(p)));
 
-        Map<String, Object> acceptance = new LinkedHashMap<>();
-        acceptance.put("expectedArch", expectedArch);
-        acceptance.put("archMatch", OsRuntime.osArch().toLowerCase().contains(expectedArch.toLowerCase())
-                || (OsRuntime.isLoongArch() && expectedArch.toLowerCase().contains("loong")));
-        acceptance.put("kylinDetected", OsRuntime.isKylin());
-        acceptance.put("loongArchDetected", OsRuntime.isLoongArch());
-        acceptance.put("deliveryTargetMatch", OsRuntime.isKylin() && OsRuntime.isLoongArch());
-        body.put("acceptance", acceptance);
+        Map<String, Object> platformDetails = new LinkedHashMap<>();
+        platformDetails.put("arch", OsRuntime.osArch());
+        platformDetails.put("kylin", OsRuntime.isKylin());
+        platformDetails.put("loongArch", OsRuntime.isLoongArch());
+        body.put("platformDetails", platformDetails);
 
         body.put("randomForest", randomForestDecisionEngine.healthSnapshot());
 
@@ -74,7 +87,18 @@ public class PlatformInfoController {
         security.put("aiAuditRelaxedRead", environment.getProperty("app.security.ai-audit-relaxed-read"));
         security.put("autoRemediationEnabled", environment.getProperty("ops.auto-remediation.enabled"));
         security.put("autonomousOpsEnabled", environment.getProperty("agent.autonomous.enabled"));
+        security.put("globalDryRun", opsDryRunProperties.isGlobalDryRun());
+        security.put("aiConfigured", chatClient != null && aiApiKey != null && !aiApiKey.isBlank());
         body.put("security", security);
+
+        Map<String, Object> runtime = new LinkedHashMap<>();
+        List<String> collectorRoots = LogCollectorPathResolver.resolve(logCollectorPath);
+        boolean collectorAuto = LogCollectorPathResolver.isAutoMode(logCollectorPath);
+        runtime.put("logCollectorMode", collectorAuto ? "auto" : "manual");
+        runtime.put("logCollectorPaths", collectorRoots);
+        runtime.put("logCollectorPath", LogCollectorPathResolver.displaySummary(logCollectorPath, collectorRoots));
+        runtime.put("dataSource", "live");
+        body.put("runtime", runtime);
 
         return Result.success(body);
     }

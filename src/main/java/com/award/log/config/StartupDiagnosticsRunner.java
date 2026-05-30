@@ -49,10 +49,6 @@ public class StartupDiagnosticsRunner implements ApplicationRunner {
             active = "(默认)";
         }
 
-        String mailUser = environment.getProperty("spring.mail.username", "");
-        String mailPass = environment.getProperty("spring.mail.password", "");
-        boolean mailUserOk = StringUtils.hasText(mailUser);
-        boolean mailPassOk = StringUtils.hasText(mailPass);
         String dbPass = environment.getProperty("spring.datasource.password", "");
         boolean dbPassOk = StringUtils.hasText(dbPass);
 
@@ -61,8 +57,7 @@ public class StartupDiagnosticsRunner implements ApplicationRunner {
         log.info("[ThreshCore] platform os={} arch={} kylin={} loongArch={} deliveryMatch={}",
                 OsRuntime.osName(), OsRuntime.osArch(), OsRuntime.isKylin(), OsRuntime.isLoongArch(),
                 OsRuntime.isKylin() && OsRuntime.isLoongArch());
-        log.info("[ThreshCore] classpath:application-local.yml 是否存在={}（为 false 时仅使用 application.yml / 环境变量里的邮件配置）", localPresent);
-        log.info("[ThreshCore] spring.mail.username 已配置={}，spring.mail.password 已配置={}（告警等发信用；不打印明文）", mailUserOk, mailPassOk);
+        log.info("[ThreshCore] classpath:application-local.yml 是否存在={}", localPresent);
         log.info("[ThreshCore] spring.datasource.password 已配置={}（未配置时 JDBC 将失败；开发请用 application-local.yml 或 DB_PASSWORD）", dbPassOk);
         log.info("[ThreshCore] 日志：本控制台 + 相对启动目录下 logs/award-log.log");
         log.info("==============================================");

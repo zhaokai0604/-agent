@@ -22,8 +22,8 @@ public class AgenticRiskScoreEngine {
 
     public AgenticRiskScoreEngine(
             McpToolCatalog mcpToolCatalog,
-            @Value("${agent.security.risk-score-auto-max:3}") double autoMax,
-            @Value("${agent.security.risk-score-confirm-max:7}") double confirmMax) {
+            @Value("${agent.security.risk-score-auto-max:5}") double autoMax,
+            @Value("${agent.security.risk-score-confirm-max:9.5}") double confirmMax) {
         this.mcpToolCatalog = mcpToolCatalog;
         this.autoMax = clamp(autoMax, 0, 10);
         this.confirmMax = clamp(confirmMax, this.autoMax, 10);

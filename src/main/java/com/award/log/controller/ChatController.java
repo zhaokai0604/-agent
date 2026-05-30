@@ -13,6 +13,8 @@ import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.OpsSecurityRejectedException;
 import com.award.log.security.PromptInjectionGuard;
 import com.award.log.security.RiskLevel;
+import com.award.log.security.McpToolSurface;
+import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.trace.TraceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -96,6 +98,9 @@ public class ChatController {
 
     @Autowired
     private ToolSurfaceResolver toolSurfaceResolver;
+
+    @Autowired
+    private ReadOnlySurfaceDenylist readOnlySurfaceDenylist;
 
     @PostMapping("/chat")
     public Map<String, Object> chat(@RequestBody Map<String, Object> request) {
@@ -210,13 +215,13 @@ public class ChatController {
                     """;
             
             RiskLevel surfaceRisk = intentRiskFilter.evaluate(userInput);
-            OpsSecurityContext.open(traceId, userInput, false,
-                    toolSurfaceResolver.resolve(userInput, surfaceRisk));
+            McpToolSurface surface = toolSurfaceResolver.resolve(userInput, surfaceRisk);
+            OpsSecurityContext.openChatAgent(traceId, userInput, surface);
             try {
                 String response = chatClient.prompt()
                         .system(systemPrompt)
                         .user(userInput)
-                        .tools(mcpToolRegistry.getToolBeans())
+                        .toolCallbacks(mcpToolRegistry.getToolCallbacksForChatAgent(surface, readOnlySurfaceDenylist))
                         .call()
                         .content();
                 log.info("AI Agent 处理完成: {}", response);

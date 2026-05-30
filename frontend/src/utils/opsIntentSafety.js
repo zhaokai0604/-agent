@@ -23,9 +23,9 @@ export function isWorkbenchHighRiskMessage(text) {
 
 export function workbenchHighRiskBlockMarkdown(text) {
   return (
-    `### 安全门拦截\n\n` +
-    `检测到**高风险或破坏性表述**，已拒绝执行任何本机工具（与对话入口风控一致）。\n\n` +
+    `### 操作已拒绝\n\n` +
+    `检测到**高风险表述**，未执行任何系统操作。\n\n` +
     `- 您的输入：${(text || '').slice(0, 200)}\n` +
-    `- 说明：工作台不会将「删除/破坏系统」类指令路由到 \`SystemLoadTool\` 等只读工具；请改为**观测、分析**类需求，或通过 MCP 工具台在审批后执行。\n`
+    `- 说明：请改用**查看、分析**类需求；如需执行修改操作，请通过「工具箱」并在确认后执行。\n`
   )
 }

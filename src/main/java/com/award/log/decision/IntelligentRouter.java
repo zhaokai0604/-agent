@@ -23,6 +23,17 @@ public class IntelligentRouter {
     public DecisionResult decide(DecisionInput input) {
         DecisionResult rule = ruleEngineV2.evaluate(input);
         DecisionResult rf = randomForestDecisionEngine.evaluate(input);
+        if (input != null && input.isSkipLlm()) {
+            return ensembleService.fuse(rule, rf, DecisionResult.builder()
+                    .engineType(EngineType.LLM)
+                    .shouldAlert(false)
+                    .confidence(0.0)
+                    .featureVersion(rule.getFeatureVersion())
+                    .modelVersion("skipped")
+                    .reason("批量模式跳过 LLM")
+                    .recommendation("")
+                    .build());
+        }
         DecisionResult llm = llmDecisionEngine.evaluate(input);
         return ensembleService.fuse(rule, rf, llm);
     }

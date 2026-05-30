@@ -7,8 +7,10 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.util.ClassUtils;
 
 import java.util.Arrays;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -30,11 +32,14 @@ public class McpToolSecurityAspect {
             return pjp.proceed();
         }
 
-        String toolBeanName = pjp.getTarget().getClass().getSimpleName();
+        String toolBeanName = ClassUtils.getUserClass(pjp.getTarget()).getSimpleName();
+        Map<String, Object> parameters = ChatToolParamExtractor.extract(pjp);
         String instruction = buildInstruction(pjp, toolBeanName);
+        String userUtterance = ctx.getUserMessage();
 
         McpInvocationSecurityGate.GateDecision decision =
-                mcpInvocationSecurityGate.evaluateChatToolInvocation(toolBeanName, instruction);
+                mcpInvocationSecurityGate.evaluateChatToolInvocation(
+                        toolBeanName, parameters, instruction, userUtterance);
 
         if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.BLOCK) {
             log.warn("Tool 调用被统一安全门拦截: {} code={} msg={}", toolBeanName, decision.getCode(), decision.getMessage());

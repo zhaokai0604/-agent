@@ -153,13 +153,8 @@
   box-shadow: var(--ops-shadow-sm) !important;
 }
 
-.ops-page .radar-scan {
-  border-color: rgba(13, 148, 136, 0.25) !important;
-}
-
-.ops-page .radar-scan::before {
+.ops-page .processing-spinner {
   border-top-color: var(--ops-primary) !important;
-  border-right-color: var(--ops-primary) !important;
 }
 
 .ops-page .scan-progress .el-progress__bar__inner {
@@ -278,8 +273,7 @@
   padding: 0 !important;
 }
 
-.ops-page .log-analysis-dashboard,
-.ops-page .alarm-history-analysis {
+.ops-page .log-analysis-dashboard {
   padding: 0 !important;
 }
 
@@ -290,6 +284,6 @@
   background: transparent !important;
 }
 
-.ops-page .mcp-tools-demo {
+.ops-page .tool-console {
   padding: 0 !important;
 }

@@ -16,8 +16,8 @@ public class LogAlarm {
     private String level;           // 告警级别：FATAL/ERROR/WARNING/INFO
     private String rootCause;       // AI分析的根因
     private String solution;        // AI提供的解决方案
-    private String pushChannels;    // 推送渠道：WECHAT/EMAIL/BOTH
-    private String pushStatus;      // 推送状态：SUCCESS/FAILED/RETRYING
+    private String pushChannels;    // 历史字段，外发渠道已下线
+    private String pushStatus;      // RECORDED / SKIPPED:* / SUCCESS（历史）
     private String lifecycleStatus; // 生命周期状态：NEW/ACKNOWLEDGED/HANDLED/CLOSED
     private String ackBy;           // 确认人
     private LocalDateTime ackTime;  // 确认时间

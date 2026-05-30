@@ -1,0 +1,329 @@
+import { reactive, ref, computed, onMounted, onUnmounted } from 'vue'
+import {
+  getPerformanceData,
+  getPatrolAlertsRecent,
+  getPatrolCorrelationLatest,
+  getPatrolHistoryTrend,
+  getPatrolRemediationPending,
+  getOpsTraceRecent,
+  getPlatformInfo
+} from '../api/index.js'
+
+const METRIC_DEFS = [
+  { key: 'cpuUsage', label: 'CPU', color: '#38bdf8' },
+  { key: 'memoryUsage', label: '内存', color: '#a78bfa' },
+  { key: 'diskUsage', label: '磁盘', color: '#fbbf24' },
+  { key: 'networkUsage', label: '网络', color: '#34d399' }
+]
+
+const RING_CAP = 360
+const INTERVAL_MS = 5000
+const PATROL_POLL_MS = 15000
+const SLOW_POLL_MS = 60000
+const HTTP_SKIP_AFTER_WS_MS = 12000
+const WS_RECONNECT_CAP = 10
+
+const runtimeProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+const VITE_AWARD_LOG_WS_URL =
+  typeof import.meta.env?.VITE_AWARD_LOG_WS_URL === 'string'
+    ? import.meta.env.VITE_AWARD_LOG_WS_URL.trim()
+    : ''
+
+function performanceWsUrl () {
+  if (VITE_AWARD_LOG_WS_URL) return VITE_AWARD_LOG_WS_URL
+  const wsScheme = runtimeProtocol === 'https:' ? 'wss:' : 'ws:'
+  const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8088'
+  return `${wsScheme}//${host}/award-log/ws/performance`
+}
+
+function formatClockTime (d = new Date()) {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
+function formatAxisLabel (d = new Date()) {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/**
+ * 实时大屏数据：性能 WS + 环形缓冲、巡检、溯源、平台信息（无 mock）。
+ */
+export function useLiveWallFeed () {
+  const metricsMap = reactive({
+    cpuUsage: null,
+    memoryUsage: null,
+    diskUsage: null,
+    networkUsage: null
+  })
+
+  const seriesRing = reactive({
+    labels: [],
+    cpu: [],
+    memory: [],
+    disk: [],
+    network: []
+  })
+
+  const patrolAlerts = ref([])
+  const patrolTrend = ref([])
+  const correlation = ref({})
+  const pendingRemediation = ref({ hasPending: false })
+  const recentTraces = ref([])
+  const platformInfo = ref(null)
+
+  const lastUpdated = ref('')
+  const dataSource = ref('')
+  const wsConnected = ref(false)
+  const loadError = ref('')
+
+  const lastPerfWsAt = ref(0)
+  let perfWs = null
+  let wsReconnectTimer = null
+  let wsReconnectAttempt = 0
+  let perfWsUnmounting = false
+  let tickTimer = null
+  let patrolTimer = null
+  let slowTimer = null
+
+  const diskHotspots = computed(() => {
+    const top = correlation.value?.diskHotspotsTop
+    return Array.isArray(top) ? top : []
+  })
+
+  const envSummary = computed(() => {
+    const p = platformInfo.value
+    if (!p) return { label: '连接中…', dryRun: false, ai: false }
+    const profiles = Array.isArray(p.activeProfiles) ? p.activeProfiles.join('+') : 'default'
+    const os = p.platform?.osName || ''
+    const dry = p.security?.globalDryRun === true
+    let label = dry ? `${profiles} · 演练` : profiles
+    if (os) label += ` · ${os}`
+    return {
+      label,
+      dryRun: dry,
+      ai: p.security?.aiConfigured === true,
+      host: typeof window !== 'undefined' ? window.location.hostname : ''
+    }
+  })
+
+  function pushSeriesPoint () {
+    const now = new Date()
+    const label = formatAxisLabel(now)
+    seriesRing.labels.push(label)
+    seriesRing.cpu.push(metricsMap.cpuUsage ?? null)
+    seriesRing.memory.push(metricsMap.memoryUsage ?? null)
+    seriesRing.disk.push(metricsMap.diskUsage ?? null)
+    seriesRing.network.push(metricsMap.networkUsage ?? null)
+    if (seriesRing.labels.length > RING_CAP) {
+      seriesRing.labels.shift()
+      seriesRing.cpu.shift()
+      seriesRing.memory.shift()
+      seriesRing.disk.shift()
+      seriesRing.network.shift()
+    }
+    lastUpdated.value = formatClockTime(now)
+  }
+
+  function applyPerformancePayload (data) {
+    if (data.cpuUsage != null) metricsMap.cpuUsage = Number(data.cpuUsage)
+    if (data.memoryUsage != null) metricsMap.memoryUsage = Number(data.memoryUsage)
+    if (data.diskUsage != null) metricsMap.diskUsage = Number(data.diskUsage)
+    if (data.networkUsage != null) metricsMap.networkUsage = Number(data.networkUsage)
+    if (data.timestamp) {
+      const parts = String(data.timestamp).split(' ')
+      lastUpdated.value = parts.length >= 2 ? parts[1] : data.timestamp
+    } else {
+      lastUpdated.value = formatClockTime()
+    }
+    dataSource.value = 'WebSocket /award-log/ws/performance'
+    lastPerfWsAt.value = Date.now()
+    loadError.value = ''
+    pushSeriesPoint()
+  }
+
+  function applyPatrolWsEnvelope (data) {
+    if (data?.correlation && typeof data.correlation === 'object') {
+      correlation.value = { ...data.correlation }
+    }
+    const ts = data?.timestamp || ''
+    const findings = Array.isArray(data?.findings) ? data.findings : []
+    if (findings.length) {
+      const rows = findings.map((f) => ({ ...f, timestamp: f.timestamp || ts }))
+      patrolAlerts.value = [...rows, ...patrolAlerts.value].slice(0, 40)
+    }
+  }
+
+  function handlePerfWsMessage (ev) {
+    let data
+    try {
+      data = JSON.parse(ev.data)
+    } catch {
+      return
+    }
+    const ch = data.channel
+    if (ch === 'performance') {
+      applyPerformancePayload(data)
+      return
+    }
+    if (ch === 'patrol_alert') {
+      applyPatrolWsEnvelope(data)
+    }
+  }
+
+  function schedulePerfWsReconnect () {
+    if (wsReconnectAttempt >= WS_RECONNECT_CAP) return
+    wsReconnectAttempt += 1
+    const delay = Math.min(30000, 2000 * 2 ** (wsReconnectAttempt - 1))
+    wsReconnectTimer = window.setTimeout(() => {
+      wsReconnectTimer = null
+      connectPerformanceWs()
+    }, delay)
+  }
+
+  function disconnectPerformanceWs (resetAttempt, forUnmount) {
+    if (forUnmount) perfWsUnmounting = true
+    if (wsReconnectTimer != null) {
+      clearTimeout(wsReconnectTimer)
+      wsReconnectTimer = null
+    }
+    if (perfWs) {
+      perfWs.onopen = null
+      perfWs.onmessage = null
+      perfWs.onclose = null
+      perfWs.onerror = null
+      try {
+        perfWs.close()
+      } catch {
+        /* noop */
+      }
+      perfWs = null
+    }
+    wsConnected.value = false
+    if (resetAttempt) wsReconnectAttempt = 0
+  }
+
+  function connectPerformanceWs () {
+    if (perfWsUnmounting) return
+    disconnectPerformanceWs(false, false)
+    try {
+      perfWs = new WebSocket(performanceWsUrl())
+    } catch {
+      schedulePerfWsReconnect()
+      return
+    }
+    perfWs.onopen = () => {
+      wsReconnectAttempt = 0
+      wsConnected.value = true
+    }
+    perfWs.onmessage = handlePerfWsMessage
+    perfWs.onclose = () => {
+      wsConnected.value = false
+      if (!perfWsUnmounting) schedulePerfWsReconnect()
+    }
+    perfWs.onerror = () => {
+      wsConnected.value = false
+    }
+  }
+
+  async function httpPerformanceFallback () {
+    const wsFresh = lastPerfWsAt.value && Date.now() - lastPerfWsAt.value < HTTP_SKIP_AFTER_WS_MS
+    if (wsFresh) return
+    try {
+      const data = await getPerformanceData()
+      METRIC_DEFS.forEach(({ key }) => {
+        metricsMap[key] = data[key] ?? null
+      })
+      dataSource.value = 'GET /admin/statistics/performance'
+      loadError.value = ''
+      pushSeriesPoint()
+    } catch {
+      loadError.value = '性能数据拉取失败'
+    }
+  }
+
+  async function fetchPatrolBundle () {
+    try {
+      const [alerts, corr, trend, pending] = await Promise.all([
+        getPatrolAlertsRecent(30),
+        getPatrolCorrelationLatest(),
+        getPatrolHistoryTrend(7),
+        getPatrolRemediationPending()
+      ])
+      patrolAlerts.value = Array.isArray(alerts) ? alerts : []
+      correlation.value = corr && typeof corr === 'object' ? { ...corr } : {}
+      patrolTrend.value = Array.isArray(trend) ? trend : []
+      pendingRemediation.value =
+        pending && typeof pending === 'object' ? { ...pending } : { hasPending: false }
+    } catch {
+      /* 保留上次真实数据 */
+    }
+  }
+
+  async function fetchTraces () {
+    try {
+      const rows = await getOpsTraceRecent(20)
+      recentTraces.value = (Array.isArray(rows) ? rows : [])
+        .filter((r) => r?.toolName && r.toolName !== 'NONE')
+        .slice(0, 12)
+    } catch {
+      recentTraces.value = []
+    }
+  }
+
+  async function fetchPlatform () {
+    try {
+      platformInfo.value = await getPlatformInfo()
+    } catch {
+      platformInfo.value = null
+    }
+  }
+
+  async function refreshAll () {
+    await Promise.all([httpPerformanceFallback(), fetchPatrolBundle(), fetchTraces(), fetchPlatform()])
+  }
+
+  function start () {
+    connectPerformanceWs()
+    httpPerformanceFallback()
+    fetchPatrolBundle()
+    fetchTraces()
+    fetchPlatform()
+    tickTimer = window.setInterval(httpPerformanceFallback, INTERVAL_MS)
+    patrolTimer = window.setInterval(fetchPatrolBundle, PATROL_POLL_MS)
+    slowTimer = window.setInterval(() => {
+      fetchTraces()
+      fetchPlatform()
+    }, SLOW_POLL_MS)
+  }
+
+  function stop () {
+    if (tickTimer) clearInterval(tickTimer)
+    if (patrolTimer) clearInterval(patrolTimer)
+    if (slowTimer) clearInterval(slowTimer)
+    tickTimer = null
+    patrolTimer = null
+    slowTimer = null
+    disconnectPerformanceWs(true, true)
+  }
+
+  onMounted(start)
+  onUnmounted(stop)
+
+  return {
+    METRIC_DEFS,
+    metricsMap,
+    seriesRing,
+    patrolAlerts,
+    patrolTrend,
+    correlation,
+    diskHotspots,
+    pendingRemediation,
+    recentTraces,
+    platformInfo,
+    envSummary,
+    lastUpdated,
+    dataSource,
+    wsConnected,
+    loadError,
+    refreshAll
+  }
+}

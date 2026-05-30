@@ -2,18 +2,29 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { formatApiError } from '../utils/apiError.js'
 
-const runtimeHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
-const runtimeProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
-
 /** 生产/同源部署：构建或 .env 中设置 VITE_AWARD_LOG_BASE_URL（须含 /award-log 后缀，无末尾斜杠） */
 const viteAwardBase =
   typeof import.meta !== 'undefined' && import.meta.env?.VITE_AWARD_LOG_BASE_URL
     ? String(import.meta.env.VITE_AWARD_LOG_BASE_URL).trim().replace(/\/$/, '')
     : ''
 
-const runtimeBaseUrl =
-  viteAwardBase ||
-  `${runtimeProtocol}//${runtimeHost}:8088/award-log`
+/** 解析 API 基址：dev(3000) 须带当前端口走 Vite proxy；8088 直连后端；生产同域 /award-log */
+function buildRuntimeBaseUrl() {
+  if (viteAwardBase) {
+    return viteAwardBase.replace(/\/$/, '')
+  }
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8088/award-log'
+  }
+  const { protocol, hostname, port } = window.location
+  if (port === '8088') {
+    return `${protocol}//${hostname}:8088/award-log`
+  }
+  const portPart = port ? `:${port}` : ''
+  return `${protocol}//${hostname}${portPart}/award-log`
+}
+
+const runtimeBaseUrl = buildRuntimeBaseUrl()
 
 const API_TIMEOUT_MS = (() => {
   const raw = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_API_TIMEOUT_MS : undefined
@@ -179,7 +190,8 @@ export const assistantChatStream = (message, history = [], options = {}) =>
     body: JSON.stringify({
       message,
       history: Array.isArray(history) ? history : [],
-      useToolAgent: options.useToolAgent !== false
+      useToolAgent: options.useToolAgent !== false,
+      confirmRemediation: options.confirmRemediation === true
     })
   })
 export const getApiBaseUrl = () => runtimeBaseUrl
@@ -381,6 +393,9 @@ export const getMcpTools = () => request.get('/api/mcp/tools')
 /** 一键安全自检（探针走真实安全门，不执行系统命令） */
 export const getSecuritySelfCheck = () => request.get('/api/security/self-check')
 
+/** 平台与运行环境（本机 OS、profile、演练模式等） */
+export const getPlatformInfo = () => request.get('/api/platform/info')
+
 export const getPatrolHistory = (days = 7, limit = 50) =>
   request.get('/api/ops/patrol/history', { params: { days, limit } })
 
@@ -396,3 +411,22 @@ export const runAutonomousOps = (forceRemediate = false, readOnly = false) =>
   request.post('/api/ops/autonomous/run', null, {
     params: { forceRemediate, readOnly }
   })
+
+/** 运维知识库 RAG */
+export const getKnowledgeStatus = () => request.get('/api/v1/knowledge/status')
+
+export const listKnowledgeDocuments = (page = 1, pageSize = 20) =>
+  request.get('/api/v1/knowledge/documents', { params: { page, pageSize } })
+
+export const uploadKnowledgeText = (body) => request.post('/api/v1/knowledge/upload', body)
+
+export const uploadKnowledgeFile = (formData) =>
+  request.post('/api/v1/knowledge/upload/file', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+
+export const searchKnowledge = (query, topK = 5) =>
+  request.get('/api/v1/knowledge/search', { params: { query, topK } })
+
+export const deleteKnowledgeDocument = (documentId) =>
+  request.delete(`/api/v1/knowledge/document/${documentId}`)

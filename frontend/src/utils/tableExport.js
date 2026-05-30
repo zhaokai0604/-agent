@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
+import { rasterizePdfTextBlock } from './pdfTextRaster.js'
 
 function unlockTableScroll (rootEl) {
   if (!rootEl) return () => {}
@@ -88,8 +89,9 @@ export async function exportTableAsPdf ({ element, title, summaryLine, filename 
   const pageW = pdf.internal.pageSize.getWidth()
   const pageH = pdf.internal.pageSize.getHeight()
   const margin = 36
-  const headerBlock = title ? 44 : 24
   const contentW = pageW - margin * 2
+  const headerRaster = rasterizePdfTextBlock({ title, summaryLine, widthPt: contentW })
+  const headerBlock = headerRaster ? headerRaster.heightPt + 12 : margin
   const pageContentH = pageH - margin - headerBlock
 
   const scale = contentW / canvas.width
@@ -98,15 +100,15 @@ export async function exportTableAsPdf ({ element, title, summaryLine, filename 
   let pageIndex = 0
 
   const drawHeader = () => {
-    if (title) {
-      pdf.setFont('helvetica', 'bold')
-      pdf.setFontSize(14)
-      pdf.text(title, margin, margin)
-    }
-    if (summaryLine) {
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(9)
-      pdf.text(summaryLine, margin, margin + (title ? 18 : 10))
+    if (headerRaster) {
+      pdf.addImage(
+        headerRaster.dataUrl,
+        'PNG',
+        margin,
+        margin,
+        headerRaster.widthPt,
+        headerRaster.heightPt
+      )
     }
   }
 
@@ -152,4 +154,40 @@ export async function exportTableAsPdf ({ element, title, summaryLine, filename 
 export function buildTableSummaryLine (rowCount, extra = '') {
   const base = `共 ${rowCount} 条记录 · 导出时间 ${new Date().toLocaleString()}`
   return extra ? `${base} · ${extra}` : base
+}
+
+function escapeCsvCell (value) {
+  if (value == null) return ''
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`
+  }
+  return text
+}
+
+/**
+ * 将行数据导出为 CSV（UTF-8 BOM，Excel 友好）。
+ * @param {{ rows: object[], columns: { key: string, label: string }[], filename?: string }} opts
+ */
+export function exportRowsAsCsv ({ rows, columns, filename }) {
+  if (!Array.isArray(rows) || !rows.length) {
+    throw new Error('暂无数据可导出')
+  }
+  if (!Array.isArray(columns) || !columns.length) {
+    throw new Error('未指定导出列')
+  }
+  const header = columns.map((c) => escapeCsvCell(c.label)).join(',')
+  const body = rows.map((row) =>
+    columns.map((c) => escapeCsvCell(row[c.key])).join(',')
+  )
+  const csv = `\uFEFF${[header, ...body].join('\n')}`
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = filename || `export-${Date.now()}.csv`
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(link.href)
 }

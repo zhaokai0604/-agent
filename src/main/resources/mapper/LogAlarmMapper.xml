@@ -185,7 +185,7 @@
     <select id="selectAlarmStatistics" resultType="java.util.Map">
         SELECT
             COUNT(*) AS total_alarms,
-            SUM(CASE WHEN push_status = 'SUCCESS' THEN 1 ELSE 0 END) AS success_alarms,
+            SUM(CASE WHEN push_status IN ('SUCCESS', 'RECORDED') THEN 1 ELSE 0 END) AS success_alarms,
             SUM(CASE WHEN push_status = 'FAILED' THEN 1 ELSE 0 END) AS failed_alarms
         FROM log_alarm
         WHERE create_time >= DATE_SUB(NOW(), INTERVAL #{days} DAY)

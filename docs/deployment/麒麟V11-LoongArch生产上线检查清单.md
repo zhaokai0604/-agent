@@ -13,17 +13,29 @@
 | 操作系统 | 银河麒麟高级服务器版 V11 |
 | CPU | LoongArch64（`uname -m` → `loongarch64`） |
 | JDK | 17（龙架构本地构建，非 x86 交叉运行） |
-| MySQL | 8.0+，库表已执行 `schema.sql` |
+| MariaDB | 10.6+（麒麟 V11 系统自带），库表已执行 `schema.sql` |
 | 可选 | Nginx 反代、systemd 托管 |
 
 ---
 
 ## 二、构建（在目标架构机器执行）
 
+> **注意**：Jar 必须在 **LoongArch 本机** 编译，不能在 x86 Windows 上交叉打包后拷贝。
+
 ```bash
 cd /path/to/threshcore
 bash scripts/deploy/deploy_kylin_loongarch.sh
-# 产物: deploy/release-kylin/
+# 产物: deploy/release-kylin/（含 jar、dist、systemd、nginx、验收脚本）
+```
+
+**或：在 Windows 仅同步源码，到麒麟机再构建**
+
+```bash
+# Windows：git push / scp 源码包到目标机
+# 麒麟目标机：
+cd /path/to/threshcore
+sudo bash scripts/deploy/setup_kylin_host.sh    # 首次：MariaDB + award-agent
+bash scripts/deploy/deploy_kylin_loongarch.sh
 ```
 
 - [ ] `uname -m` 为 `loongarch64`
@@ -34,6 +46,16 @@ bash scripts/deploy/deploy_kylin_loongarch.sh
 ---
 
 ## 三、部署
+
+**MariaDB 初始化（首次）**
+
+```bash
+sudo systemctl enable --now mariadb
+mariadb -u root -p -e "CREATE DATABASE IF NOT EXISTS log_analysis DEFAULT CHARSET utf8mb4;"
+mariadb -u root -p -e "CREATE USER IF NOT EXISTS 'threshcore'@'localhost' IDENTIFIED BY 'CHANGE_ME';"
+mariadb -u root -p -e "GRANT ALL PRIVILEGES ON log_analysis.* TO 'threshcore'@'localhost'; FLUSH PRIVILEGES;"
+mariadb -u root -p log_analysis < src/main/resources/schema.sql
+```
 
 ```bash
 sudo mkdir -p /opt/threshcore/logs
@@ -46,6 +68,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now award-log
 ```
 
+- [ ] MariaDB 已启动（`systemctl status mariadb`）
+- [ ] `DB_URL` 为 `jdbc:mariadb://…`（见 `env.kylin.prod.example`）
 - [ ] 环境变量文件权限 `chmod 600 /etc/threshcore/threshcore.env`
 - [ ] `SPRING_PROFILES_ACTIVE=prod-kylin`
 - [ ] `RF_FORCE_HEURISTIC_LOONGARCH=true`（ONNX 龙架构回退）
@@ -94,7 +118,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 
 - [ ] Knife4j `/doc.html` 不对公网开放  
 - [ ] Actuator 仅内网  
-- [ ] `agent.service-restart.allowlist` 无 sshd/mysqld 等关键服务  
+- [ ] `agent.service-restart.allowlist` 无 sshd、mariadb/mysqld 等关键服务  
 - [ ] `agent.paths` 白名单与现场目录一致  
 - [ ] `agent.autonomous.run-after-patrol=false`（首轮建议）
 
@@ -111,7 +135,7 @@ sudo systemctl start award-log
 
 ---
 
-## 九、交付物清单（赛题/验收）
+## 九、交付物清单（生产验收）
 
 - [ ] `deploy/release-kylin/` 构建产物  
 - [ ] 目标机 `uname -a`、`java -version` 截图  

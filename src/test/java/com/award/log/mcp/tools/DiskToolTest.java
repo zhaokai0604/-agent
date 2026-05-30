@@ -28,7 +28,7 @@ class DiskToolTest {
     void setUp() {
         executorService = Executors.newSingleThreadExecutor();
         objectMapper = new ObjectMapper();
-        MinPrivilegeExecutor minPrivilegeExecutor = new MinPrivilegeExecutor("root", false, executorService);
+        MinPrivilegeExecutor minPrivilegeExecutor = new MinPrivilegeExecutor("root", false, null, executorService);
         diskTool = new DiskTool(executorService, objectMapper, minPrivilegeExecutor, null);
         System.out.println("=== DiskTool Test Setup Complete ===");
     }

@@ -31,8 +31,14 @@ public class OpsIntentRouter {
                     + "(高负载|cpu高|内存紧张|系统慢)",
             Pattern.CASE_INSENSITIVE);
 
+    private static final Pattern GENERAL_OPS_CHECK = Pattern.compile(
+            "(检查|排查|诊断|体检|巡检|看看|分析).*(系统|服务器|主机|本机|机器|环境|状况)|"
+                    + "(系统|服务器|主机|本机|环境).*(检查|排查|诊断|健康|状态|怎么样|如何|正常)|"
+                    + "健康检查|运维检查|全面检查|帮我运维|系统状态|检查本机",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
     private static final Pattern EXECUTE_FOLLOWUP = Pattern.compile(
-            "(执行清理|按预览执行|真实删除|确认执行|开始清理|执行删除|执行修复)",
+            "(执行清理|按预览执行|真实删除|确认执行|开始清理|执行删除|执行修复|立即执行|执行处置)",
             Pattern.CASE_INSENSITIVE);
 
     public enum Playbook {
@@ -47,7 +53,13 @@ public class OpsIntentRouter {
         if (userMessage == null || userMessage.isBlank()) {
             return Playbook.NONE;
         }
+        if (EXECUTE_FOLLOWUP.matcher(userMessage).find()) {
+            return Playbook.FULL_AUTONOMOUS;
+        }
         if (AUTONOMOUS_INTENT.matcher(userMessage).find()) {
+            return Playbook.FULL_AUTONOMOUS;
+        }
+        if (GENERAL_OPS_CHECK.matcher(userMessage).find()) {
             return Playbook.FULL_AUTONOMOUS;
         }
         if (PATROL_CONTINUE.matcher(userMessage).find()) {
@@ -56,7 +68,7 @@ public class OpsIntentRouter {
         if (CPU_INTENT.matcher(userMessage).find() && !CLEANUP_INTENT.matcher(userMessage).find()) {
             return Playbook.CPU_PRESSURE;
         }
-        if (CLEANUP_INTENT.matcher(userMessage).find() || EXECUTE_FOLLOWUP.matcher(userMessage).find()) {
+        if (CLEANUP_INTENT.matcher(userMessage).find()) {
             return Playbook.DISK_CLEANUP;
         }
         return Playbook.NONE;

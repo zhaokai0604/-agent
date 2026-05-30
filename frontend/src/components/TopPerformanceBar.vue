@@ -3,6 +3,7 @@
     <div class="top-perf-title">
       <el-icon class="pulse"><Odometer /></el-icon>
       <span>本机负载</span>
+      <el-tag v-if="envLabel" size="small" :type="envTagType" class="env-chip">{{ envLabel }}</el-tag>
     </div>
     <div
       v-for="m in metrics"
@@ -43,7 +44,7 @@
       type="success"
       plain
       class="sec-check-btn"
-      title="调用真实安全门探针，向评委展示护栏是否生效"
+      title="检测安全策略是否正常工作"
       @click="securityCheckVisible = true"
     >
       <el-icon><Lock /></el-icon>
@@ -72,7 +73,7 @@
           type="warning"
           :closable="false"
           class="rem-pending-alert"
-          title="待确认自动修复（安全护栏 · 高分项由您决策）"
+          title="待确认修复项（高风险操作需您确认）"
         >
           <div v-if="pendingRemediation.riskPatrolAutoMax != null" class="rem-threshold">
             自动执行阈值：风险分 &lt; {{ Number(pendingRemediation.riskPatrolAutoMax).toFixed(1) }} 的步骤已尝试自动执行（若有）。
@@ -88,12 +89,12 @@
             :loading="remConfirmLoading"
             @click="onConfirmRemediation"
           >
-            确认并执行（口令与 MCP 一致：确认执行）
+            确认并执行
           </el-button>
         </el-alert>
 
         <template v-if="remediationCoverage.length">
-          <el-divider content-position="left">处置车道（自动 vs 确认后）</el-divider>
+          <el-divider content-position="left">处置方式</el-divider>
           <ul class="cov-list">
             <li v-for="(row, i) in remediationCoverage" :key="'cov-' + i" class="cov-li">
               <div class="cov-li-head">
@@ -156,7 +157,8 @@ import {
   getPatrolRemediationPending,
   confirmPatrolRemediation,
   getPatrolRemediationCoverage,
-  getPatrolHistoryTrend
+  getPatrolHistoryTrend,
+  getPlatformInfo
 } from '../api/index.js'
 
 const runtimeHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
@@ -209,6 +211,8 @@ let wsReconnectTimer = null
 let wsReconnectAttempt = 0
 let perfWsUnmounting = false
 const lastPerfWsAt = ref(0)
+const envLabel = ref('')
+const envTagType = ref('info')
 
 const perfDataSourceHint = computed(() => {
   if (lastPerfWsAt.value && Date.now() - lastPerfWsAt.value < HTTP_SKIP_AFTER_WS_MS) {
@@ -481,7 +485,7 @@ const corrSummaryLines = computed(() => {
   if (c.alarmTotal24h != null) lines.push(`告警总数(24h 窗) ${c.alarmTotal24h}（ERROR≈${c.alarmErrorApprox ?? 0} FATAL≈${c.alarmFatalApprox ?? 0}）`)
   if (c.anomalyLogsDay1 != null && c.anomalyLogsDay1 !== -1) lines.push(`异常日志(近 1 天统计) ${c.anomalyLogsDay1}`)
   if (c.zombieProcesses != null) lines.push(`僵尸进程 ${c.zombieProcesses}`)
-  if (c.novelDrainTemplateKinds1h != null) lines.push(`近 1h 新 Drain 模板种类 ${c.novelDrainTemplateKinds1h}`)
+  if (c.novelDrainTemplateKinds1h != null) lines.push(`近 1h 新日志模板 ${c.novelDrainTemplateKinds1h} 种`)
   return lines
 })
 
@@ -665,7 +669,26 @@ async function tick () {
   }
 }
 
+async function loadPlatformEnv () {
+  try {
+    const info = await getPlatformInfo()
+    const profiles = Array.isArray(info?.activeProfiles) ? info.activeProfiles.join('+') : 'default'
+    const profileLabels = { dev: '开发环境', prod: '生产环境', test: '测试环境', 'test-kylin': '麒麟测试' }
+    const profileText = profiles.split('+').map((p) => profileLabels[p] || p).join('+')
+    const os = info?.platform?.osName || info?.platform?.os || ''
+    const dry = info?.security?.globalDryRun === true
+    envLabel.value = dry ? `${profileText} · 演练` : profileText
+    envTagType.value = dry ? 'warning' : (info?.prodProfileActive ? 'success' : 'info')
+    if (os && !dry) {
+      envLabel.value = `${envLabel.value} · ${os}`
+    }
+  } catch {
+    envLabel.value = ''
+  }
+}
+
 onMounted(() => {
+  loadPlatformEnv()
   tick()
   timer = setInterval(tick, INTERVAL_MS)
   patrolTick()
@@ -709,6 +732,15 @@ onUnmounted(() => {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-weight: 600;
+}
+
+.env-chip {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pulse {

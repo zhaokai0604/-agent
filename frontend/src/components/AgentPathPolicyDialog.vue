@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="MCP 路径与服务白名单"
+    title="路径白名单"
     width="720px"
     destroy-on-close
     @open="loadPolicy"
@@ -22,7 +22,7 @@
       </p>
 
       <el-form label-position="top">
-        <el-form-item label="可读 / 扫描路径（日志分析、du 热点等）">
+        <el-form-item label="可读 / 扫描路径">
           <div v-for="(_, idx) in form.readPrefixes" :key="'r' + idx" class="row">
             <el-input v-model="form.readPrefixes[idx]" placeholder="/var/log" />
             <el-button type="danger" link @click="removeItem('readPrefixes', idx)">删除</el-button>
@@ -30,7 +30,7 @@
           <el-button type="primary" link @click="addItem('readPrefixes', defaultPathHint)">+ 添加路径</el-button>
         </el-form-item>
 
-        <el-form-item label="临时目录清理白名单（CleanTempTool）">
+        <el-form-item label="临时目录清理白名单">
           <div v-for="(_, idx) in form.cleanRoots" :key="'c' + idx" class="row">
             <el-input v-model="form.cleanRoots[idx]" placeholder="/tmp" />
             <el-button type="danger" link @click="removeItem('cleanRoots', idx)">删除</el-button>
@@ -38,7 +38,7 @@
           <el-button type="primary" link @click="addItem('cleanRoots', '/tmp')">+ 添加路径</el-button>
         </el-form-item>
 
-        <el-form-item label="日志清理白名单（LogCleanupTool）">
+        <el-form-item label="日志清理白名单">
           <div v-for="(_, idx) in form.logCleanupRoots" :key="'l' + idx" class="row">
             <el-input v-model="form.logCleanupRoots[idx]" placeholder="/var/log" />
             <el-button type="danger" link @click="removeItem('logCleanupRoots', idx)">删除</el-button>
@@ -46,7 +46,7 @@
           <el-button type="primary" link @click="addItem('logCleanupRoots', '/var/log')">+ 添加路径</el-button>
         </el-form-item>
 
-        <el-form-item label="可重启服务名（ServiceRestartTool，不含 .service）">
+        <el-form-item label="可重启服务名">
           <div v-for="(_, idx) in form.serviceRestartAllowlist" :key="'s' + idx" class="row">
             <el-input v-model="form.serviceRestartAllowlist[idx]" placeholder="nginx" />
             <el-button type="danger" link @click="removeItem('serviceRestartAllowlist', idx)">删除</el-button>

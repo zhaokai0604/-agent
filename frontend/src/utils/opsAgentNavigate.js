@@ -25,23 +25,23 @@ export function agentPrefillHighAnomaly(row) {
       ? `${(Number(row.summary.anomalyRate) * 100).toFixed(2)}%`
       : '?'
   return (
-    `任务「${row.taskId}」已完成，但异常条目较多（异常 ${ac} / 总计 ${total}，异常率约 ${rate}，文件「${row.fileName || '未知'}」）。` +
-    `请结合上下文协助归纳日志根因，并给出 journalctl 窗口、DiskAnalyzeTool 磁盘综合诊断、磁盘热点与 /tmp 临时目录 dry-run 清理建议。`
+    `任务「${row.taskId}」已完成，但异常较多（异常 ${ac} / 总计 ${total}，约 ${rate}，文件「${row.fileName || '未知'}」）。` +
+    `请协助归纳可能根因，并给出日志窗口、磁盘诊断与临时目录清理建议。`
   )
 }
 
 export function agentPrefillFailedTask(row) {
   return (
     `日志任务失败：「${row.taskId}」文件「${row.fileName || '未知'}」。` +
-    `请协助复核：日志异常趋势、磁盘综合诊断（DiskAnalyzeTool）、磁盘热点与 /tmp 清理 dry-run。`
+    `请协助排查：日志异常趋势、磁盘占用与临时目录清理建议。`
   )
 }
 
 export function agentPrefillEngineFailure(taskId, errorMsg) {
   const id = taskId || '未知'
-  const err = errorMsg ? `报错信息：${errorMsg}。` : ''
+  const err = errorMsg ? `报错：${errorMsg}。` : ''
   return (
-    `日志分析引擎失败（任务 ${id}）。${err}` +
-    `请协助做运维复核：先分析系统日志异常，再用磁盘综合诊断（DiskAnalyzeTool）与热点扫描查看空间占用，并给出临时目录清理的 dry-run 预览建议。`
+    `日志分析失败（任务 ${id}）。${err}` +
+    `请协助排查系统日志异常、磁盘空间与临时目录清理方案。`
   )
 }

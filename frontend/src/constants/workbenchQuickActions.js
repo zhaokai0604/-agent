@@ -1,7 +1,6 @@
 import {
   Coin,
   FolderOpened,
-  Folder,
   TrendCharts,
   Document,
   Connection,
@@ -16,8 +15,15 @@ import {
   Clock
 } from '@element-plus/icons-vue'
 
-/** 工作台快捷指令：分组展示，无 emoji */
+/** 助手快捷指令 */
 export const WORKBENCH_QUICK_GROUPS = [
+  {
+    name: '自主',
+    items: [
+      { label: '全面检查', icon: DataAnalysis, cmd: '帮我全面检查系统状态，发现问题并给出修复计划' },
+      { label: '自动运维', icon: RefreshRight, cmd: '自动运维：检查本机并处理问题' }
+    ]
+  },
   {
     name: '观测',
     items: [
@@ -31,26 +37,22 @@ export const WORKBENCH_QUICK_GROUPS = [
   {
     name: '诊断',
     items: [
-      { label: '日志分析', icon: Document, cmd: '分析最近的系统日志' },
+      { label: '最近日志', icon: Document, cmd: '分析最近的系统日志' },
       { label: 'OS 日志', icon: Connection, cmd: '查看 journalctl 最近30分钟日志' },
-      { label: '端口套接字', icon: Connection, cmd: '查看本机监听端口与网络套接字概况' },
-      {
-        label: '跨平台磁盘',
-        icon: Folder,
-        cmd: '请对比说明 Linux 与 Windows 服务器上如何排查磁盘占满：常用命令、临时目录路径与安全注意点？'
-      },
+      { label: '端口监听', icon: Connection, cmd: '查看本机监听端口概况' },
       { label: '磁盘综合', icon: DataAnalysis, cmd: '磁盘压力综合分析（含热点）' }
     ]
   },
   {
-    name: '处置与自动化',
+    name: '处置',
     items: [
       { label: '临时清理', icon: Delete, cmd: '清理7天前的临时文件' },
-      { label: '日志清理预览', icon: Files, cmd: '预览清理 /var/log 下 30 天前的陈旧日志文件' },
-      { label: '服务重启预览', icon: RefreshRight, cmd: '预览重启 nginx 服务（dry-run）' },
-      { label: '闭环清理', icon: Delete, cmd: '帮我清理系统垃圾' },
-      { label: '自主运维', icon: RefreshRight, cmd: '请执行全自动运维：察觉问题并自动修复' },
-      { label: '延时清理', icon: Timer, cmd: '30分钟之后帮我预览清理临时文件' },
+      { label: '日志清理', icon: Files, cmd: '预览清理 /var/log 下 30 天前的陈旧日志文件' },
+      { label: '服务重启', icon: RefreshRight, cmd: '预览重启 nginx 服务' },
+      { label: '系统清理', icon: Delete, cmd: '帮我清理系统垃圾' },
+      { label: '巡检修复', icon: RefreshRight, cmd: '检查系统状态，发现问题后给出修复建议' },
+      { label: '确认执行', icon: RefreshRight, cmd: '确认执行' },
+      { label: '延时清理', icon: Timer, cmd: '30分钟之后帮我清理临时文件' },
       { label: '延时巡检', icon: Clock, cmd: '20分钟之后检查磁盘使用情况' }
     ]
   }

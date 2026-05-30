@@ -18,7 +18,7 @@
             </div>
             <div class="logo-text" v-if="!isSidebarCollapsed">
               <div class="main-title">ThreshCore</div>
-              <div class="sub-title">日志 · 工具 · 审计 · 告警</div>
+              <div class="sub-title">智能运维</div>
             </div>
           </div>
           
@@ -44,22 +44,15 @@
               </div>
               <div class="page-head">
                 <h1 class="page-title">{{ breadcrumbText }}</h1>
-                <span class="page-sub">ThreshCore 智能运维控制台</span>
+                <span class="page-sub">{{ pageSubtitle }}</span>
               </div>
             </div>
 
-            <TopPerformanceBar />
+            <TopPerformanceBar v-if="activeTab !== 'live-wall'" />
 
             <div class="top-status-right">
             <div class="ops-toolbar">
-              <el-button text size="small" @click="showAlarmConfig">告警策略</el-button>
-              <el-button text size="small" @click="showPathPolicy">路径白名单</el-button>
-              <el-tooltip
-                placement="bottom"
-                content="快捷键：1 对话 · 2 MCP · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 仪表盘 · 8 告警 · 9 效果评分"
-              >
-                <el-button text circle size="small" :icon="QuestionFilled" aria-label="快捷键说明" />
-              </el-tooltip>
+              <el-button text size="small" @click="activeTab = 'environment'">环境状态</el-button>
             </div>
 
             <div class="user-profile">
@@ -80,13 +73,14 @@
           </div>
 
           <!-- 主内容：不用 Suspense 包裹（轮询触发 App 更新时 patchSuspense 易与 async 子组件竞态）；lazy 页使用 suspensible:false -->
-          <div class="main-content">
+          <div class="main-content" :class="{ 'main-content--wall': activeTab === 'live-wall' }">
             <component
               :is="currentComponent"
               :key="activeTab"
               ref="componentRef"
               :initial-task-id="targetTaskId"
               @view-task="handleViewTask"
+              @open-path-policy="showPathPolicy"
             />
           </div>
         </div>
@@ -102,7 +96,7 @@ import Login from './components/Login.vue'
 import AppSideNavMenu from './components/AppSideNavMenu.vue'
 import TopPerformanceBar from './components/TopPerformanceBar.vue'
 import AgentPathPolicyDialog from './components/AgentPathPolicyDialog.vue'
-import { DataLine, Clock, ChatLineSquare, Connection, Menu, Close, PieChart, WarningFilled, ArrowDown, List, Document, QuestionFilled, TrendCharts } from '@element-plus/icons-vue'
+import { DataLine, Clock, ChatLineSquare, Connection, Menu, Close, PieChart, ArrowDown, List, Monitor, Collection, Setting } from '@element-plus/icons-vue'
 import { logout } from './api'
 
 /** Tab 懒加载：不参与父级 Suspense，减少定时刷新整树 patch 时的 emitsOptions / vnode null */
@@ -124,31 +118,31 @@ const isMobile = ref(window.innerWidth < 768)
 const LogAnalysis = defineTabAsyncComponent(() => import('./components/LogAnalysis.vue'))
 const HistoryList = defineTabAsyncComponent(() => import('./components/HistoryList.vue'))
 const LogAnalysisDashboard = defineTabAsyncComponent(() => import('./components/LogAnalysisDashboard.vue'))
-const AlarmHistoryAnalysis = defineTabAsyncComponent(() => import('./components/AlarmHistoryAnalysis.vue'))
-const McpToolsDemo = defineTabAsyncComponent(() => import('./components/McpToolsDemo.vue'))
+const ToolConsole = defineTabAsyncComponent(() => import('./components/ToolConsole.vue'))
 const OpsChatInterface = defineTabAsyncComponent(() => import('./components/OpsChatInterface.vue'))
-const AiAuditCenter = defineTabAsyncComponent(() => import('./components/AiAuditCenter.vue'))
-const OpsTraceCenter = defineTabAsyncComponent(() => import('./components/OpsTraceCenter.vue'))
-const OpsEffectDashboard = defineTabAsyncComponent(() => import('./components/OpsEffectDashboard.vue'))
+const AuditCenter = defineTabAsyncComponent(() => import('./components/AuditCenter.vue'))
+const OpsLiveWall = defineTabAsyncComponent(() => import('./components/OpsLiveWall.vue'))
+const KnowledgeBase = defineTabAsyncComponent(() => import('./components/KnowledgeBase.vue'))
+const EnvironmentStatus = defineTabAsyncComponent(() => import('./components/EnvironmentStatus.vue'))
 const pathPolicyDialogRef = ref(null)
 
 const tabConfig = {
-  'ops-chat': { label: '工作台对话', component: OpsChatInterface, icon: ChatLineSquare },
-  'mcp-tools': { label: '工具控制台', component: McpToolsDemo, icon: Connection },
-  audit: { label: '执行审计', component: AiAuditCenter, icon: List },
-  'ops-audit-trace': { label: '运维链路审计', component: OpsTraceCenter, icon: Document },
-  'ops-effect': { label: '运维效果评分', component: OpsEffectDashboard, icon: TrendCharts },
-  analysis: { label: '日志分析', component: LogAnalysis, icon: DataLine },
-  history: { label: '任务记录', component: HistoryList, icon: Clock },
-  dashboard: { label: '日志分析仪表盘', component: LogAnalysisDashboard, icon: PieChart },
-  'alarm-history': { label: '告警历史分析', component: AlarmHistoryAnalysis, icon: WarningFilled }
+  'ops-chat': { label: '对话', subtitle: '自然语言排查与处置', component: OpsChatInterface, icon: ChatLineSquare },
+  'mcp-tools': { label: '工具箱', subtitle: '一键执行运维操作', component: ToolConsole, icon: Connection },
+  audit: { label: '溯源', subtitle: '访问与操作全记录', component: AuditCenter, icon: List },
+  analysis: { label: '诊断', subtitle: '上传日志，定位异常', component: LogAnalysis, icon: DataLine },
+  history: { label: '报告', subtitle: '历次诊断结果', component: HistoryList, icon: Clock },
+  dashboard: { label: '看板', subtitle: '异常趋势与统计', component: LogAnalysisDashboard, icon: PieChart },
+  knowledge: { label: '知识库', subtitle: 'Runbook 入库与 RAG 检索', component: KnowledgeBase, icon: Collection },
+  environment: { label: '环境', subtitle: '连接状态与执行策略', component: EnvironmentStatus, icon: Setting },
+  'live-wall': { label: '态势', subtitle: '本机运行实时大屏', component: OpsLiveWall, icon: Monitor }
 }
 
 const defaultTab = 'ops-chat'
 
 const NAV_GROUP_ORDER = [
-  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'mcp-tools', 'audit', 'ops-audit-trace', 'ops-effect'] },
-  { title: '日志与分析', keys: ['analysis', 'history', 'dashboard', 'alarm-history'] }
+  { title: '工作台', keys: ['ops-chat', 'mcp-tools', 'audit', 'knowledge', 'environment'] },
+  { title: '洞察', keys: ['live-wall', 'analysis', 'history', 'dashboard'] }
 ]
 
 const visibleNavGroups = computed(() =>
@@ -173,12 +167,12 @@ const shortcutTabMap = {
   '1': 'ops-chat',
   '2': 'mcp-tools',
   '3': 'audit',
-  '4': 'ops-audit-trace',
-  '5': 'analysis',
-  '6': 'history',
-  '7': 'dashboard',
-  '8': 'alarm-history',
-  '9': 'ops-effect'
+  '4': 'knowledge',
+  '5': 'environment',
+  '6': 'live-wall',
+  '7': 'analysis',
+  '8': 'history',
+  '9': 'dashboard'
 }
 
 // 切换侧边栏
@@ -245,6 +239,15 @@ const handleOpsNavigateAgent = (ev) => {
   callComponentMethod('applyPrefill', [msg.trim()])
 }
 
+const handleNavigateTab = (ev) => {
+  const tab = ev.detail?.tab
+  if (!tab || !tabConfig[tab]) return
+  activeTab.value = tab
+  if (tab === 'audit' && ev.detail?.traceId) {
+    callComponentMethod('focusTrace', [ev.detail.traceId])
+  }
+}
+
 // 组件挂载时检查登录状态
 onMounted(() => {
   checkLoginStatus()
@@ -253,6 +256,7 @@ onMounted(() => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('keydown', handleGlobalKeydown)
   window.addEventListener('ops-navigate-agent', handleOpsNavigateAgent)
+  window.addEventListener('ops-navigate-tab', handleNavigateTab)
   // 初始化时检查一次
   handleResize()
 })
@@ -262,10 +266,17 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleGlobalKeydown)
   window.removeEventListener('ops-navigate-agent', handleOpsNavigateAgent)
+  window.removeEventListener('ops-navigate-tab', handleNavigateTab)
 })
 
 watch(isMobile, (newValue) => {
   isSidebarCollapsed.value = newValue
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'live-wall' && !isMobile.value) {
+    isSidebarCollapsed.value = true
+  }
 })
 
 watch(
@@ -282,6 +293,10 @@ watch(
 // 根据当前激活的标签计算面包屑文本
 const breadcrumbText = computed(() => {
     return tabConfig[activeTab.value]?.label || tabConfig[defaultTab].label
+})
+
+const pageSubtitle = computed(() => {
+    return tabConfig[activeTab.value]?.subtitle || tabConfig[defaultTab].subtitle
 })
 
 const currentComponent = computed(() => {
@@ -321,12 +336,6 @@ const handleViewTask = (taskId) => {
     targetTaskId.value = taskId
     activeTab.value = 'analysis'
     callComponentMethod('loadTask', [taskId])
-}
-
-// 显示告警配置弹窗
-const showAlarmConfig = () => {
-    activeTab.value = 'analysis'
-    callComponentMethod('showAlarmConfig')
 }
 
 const showPathPolicy = () => {
@@ -412,7 +421,6 @@ const showPathPolicy = () => {
   height: 60px;
   overflow: hidden;
   border-radius: 8px;
-  filter: drop-shadow(0 0 10px var(--shell-glow));
 }
 
 .brand-logo {
@@ -577,6 +585,11 @@ const showPathPolicy = () => {
   overflow-y: auto;
   background: var(--ops-bg);
   transition: padding 0.2s ease;
+}
+
+.main-content--wall {
+  padding: 8px 12px 12px;
+  background: #f8fafc;
 }
 
 /* 功能页卡片（与 ops-console-theme 变量对齐） */

@@ -3,7 +3,7 @@
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <span class="title">历史分析任务</span>
+          <span class="title">诊断报告</span>
           <el-button :icon="Refresh" circle @click="fetchHistory" />
         </div>
       </template>
@@ -79,13 +79,13 @@
               type="warning"
               link
               @click="goOpsAgentForHistoryRow(scope.row)"
-            >对话复核</el-button>
+            >去对话排查</el-button>
             <el-button
               v-if="shouldOfferAgentDeepDive(scope.row)"
               type="success"
               link
               @click="goOpsAgentDeepDive(scope.row)"
-            >对话深挖</el-button>
+            >继续分析</el-button>
             <el-button type="danger" link @click="confirmDelete(scope.row.taskId)">删除</el-button>
           </template>
         </el-table-column>
@@ -108,7 +108,7 @@
       title="确认删除"
       width="400px"
     >
-      <span>确定要删除此历史任务吗？此操作不可恢复。</span>
+      <span>确定删除这份报告吗？此操作不可恢复。</span>
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="dialogVisible = false">取消</el-button>
@@ -191,12 +191,12 @@
             v-if="currentTask && shouldOfferAgentDeepDive(currentTask)"
             type="success"
             @click="goOpsAgentFromDetailDeep"
-          >对话深挖</el-button>
+          >继续分析</el-button>
           <el-button
             v-if="currentTask && (currentTask.status === 'FAILED' || currentTask.errorMsg)"
             type="primary"
             @click="goOpsAgentFromDetail"
-          >打开工作台对话</el-button>
+          >打开对话</el-button>
           <el-button @click="detailDialogVisible = false">关闭</el-button>
         </span>
       </template>
@@ -347,7 +347,7 @@ const goOpsAgentFromDetail = () => {
   if (!currentTask.value) return
   const t = currentTask.value
   const err = t.errorMsg ? `报错：${t.errorMsg}。` : ''
-  const msg = `任务「${t.taskId}」状态 ${t.status}。${err}请协助运维复核：日志 + 磁盘 + 临时目录清理预览。`
+  const msg = `任务「${t.taskId}」状态 ${t.status}。${err}请协助排查日志异常与磁盘占用情况。`
   detailDialogVisible.value = false
   dispatchOpsAgentPrefill(msg)
 }

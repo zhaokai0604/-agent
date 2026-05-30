@@ -113,7 +113,7 @@ public class UserProfileController {
         return Result.success(aiAuditLogService.listRecentByUserId(String.valueOf(uid), limit));
     }
 
-    @Operation(summary = "生成演示用 API Key（仅存当前会话）")
+    @Operation(summary = "生成临时 API Key（仅存当前会话）")
     @PostMapping("/generate-api-key")
     public Result<Map<String, String>> generateApiKey(HttpSession session) {
         Object uid = session.getAttribute(AuthInterceptor.SESSION_USER_ID);

@@ -1,5 +1,6 @@
 package com.award.log.security;
 
+import com.award.log.collector.LogCollectorPathResolver;
 import com.award.log.config.AgentOpsProperties;
 import com.award.log.util.OsRuntime;
 import jakarta.annotation.PostConstruct;
@@ -69,21 +70,23 @@ public class OpsPathPolicy {
         windowsConfigPrefixes = copyNormalize(cfg.getWindowsConfigPrefixes());
         windowsPrivilegePrefixes = copyNormalize(cfg.getWindowsPrivilegePrefixes());
 
-        if (!OsRuntime.isWindows() && logCollectorFilePath != null && !logCollectorFilePath.isBlank()) {
-            String norm = normalizeUnixPath(logCollectorFilePath.trim());
-            if (!norm.isEmpty()) {
-                List<String> merged = new ArrayList<>(readPrefixes);
-                boolean exists = false;
-                for (String e : merged) {
-                    if (normalizeUnixPath(e).equals(norm)) {
-                        exists = true;
-                        break;
+        if (!OsRuntime.isWindows()) {
+            for (String root : LogCollectorPathResolver.resolve(logCollectorFilePath)) {
+                String norm = normalizeUnixPath(root);
+                if (!norm.isEmpty()) {
+                    List<String> merged = new ArrayList<>(readPrefixes);
+                    boolean exists = false;
+                    for (String e : merged) {
+                        if (normalizeUnixPath(e).equals(norm)) {
+                            exists = true;
+                            break;
+                        }
                     }
+                    if (!exists) {
+                        merged.add(norm);
+                    }
+                    readPrefixes = merged;
                 }
-                if (!exists) {
-                    merged.add(norm);
-                }
-                readPrefixes = merged;
             }
         }
         if (OsRuntime.isWindows()) {
@@ -92,8 +95,8 @@ public class OpsPathPolicy {
                 addIfAbsent(windowsReadPrefixes, tmp);
                 addIfAbsent(windowsCleanRoots, tmp);
             }
-            if (logCollectorFilePath != null && !logCollectorFilePath.isBlank()) {
-                addIfAbsent(windowsReadPrefixes, logCollectorFilePath.trim());
+            for (String root : LogCollectorPathResolver.resolve(logCollectorFilePath)) {
+                addIfAbsent(windowsReadPrefixes, root.trim());
             }
         }
         log.info("OpsPathPolicy [{}] read={} clean={} logCleanup={} config={} privilege={} winRead={} winClean={}",
