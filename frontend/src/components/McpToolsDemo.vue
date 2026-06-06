@@ -138,9 +138,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu } from '@element-plus/icons-vue'
 import { executeMcpTool, confirmMcpExecute, getMcpTools } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
+import { formatMcpResultPreview } from '../utils/mcpHumanReadable'
 import { mergeToolRegistry, getMcpToolCommandHint, applyMcpWriteConfirmParams, mcpToolBadge } from '../utils/mcpToolsMeta'
 import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
-import { formatResultPreview } from '../utils/structuredDataView'
 import StructuredResultView from './StructuredResultView.vue'
 
 const activeTab = ref('overview')
@@ -218,14 +218,12 @@ const executeTool = async () => {
 
     data = normalizeMcpToolResponse(data)
 
-    const previewRaw = data.success ? data.data : (data.data?.error ?? data.error ?? data.message)
-
     const result = {
       toolName: selectedTool.value,
       timestamp: new Date().toLocaleString('zh-CN'),
       duration: data.duration || 0,
       success: data.success,
-      resultPreview: formatResultPreview(previewRaw != null ? previewRaw : data),
+      resultPreview: formatMcpResultPreview(selectedTool.value, data),
       fullResult: data
     }
 

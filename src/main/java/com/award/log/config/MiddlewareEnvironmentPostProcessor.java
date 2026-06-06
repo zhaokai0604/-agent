@@ -25,6 +25,11 @@ public class MiddlewareEnvironmentPostProcessor implements EnvironmentPostProces
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        MapPropertySource systemConfigSource = loadSystemConfigSource(environment);
+        if (systemConfigSource != null) {
+            environment.getPropertySources().addFirst(systemConfigSource);
+        }
+
         boolean kafkaOn = Boolean.parseBoolean(environment.getProperty("award.middleware.kafka", "false"));
         boolean redisOn = Boolean.parseBoolean(environment.getProperty("award.middleware.redis", "false"));
 
@@ -60,6 +65,18 @@ public class MiddlewareEnvironmentPostProcessor implements EnvironmentPostProces
         environment.getPropertySources().addFirst(new MapPropertySource(
                 "award-middleware-autoconfigure-exclude",
                 Collections.singletonMap(EXCLUDE_KEY, csv)));
+    }
+
+    private MapPropertySource loadSystemConfigSource(ConfigurableEnvironment environment) {
+        String appConfigSecret = environment.getProperty("APP_CONFIG_SECRET", "");
+        java.util.Map<String, Object> props = SystemConfigFileSupport.toSpringProperties(
+                SystemConfigFileSupport.readJsonFile(SystemConfigFileSupport.overrideFile()),
+                SystemConfigFileSupport.readJsonFile(SystemConfigFileSupport.secretFile()),
+                appConfigSecret);
+        if (props.isEmpty()) {
+            return null;
+        }
+        return new MapPropertySource("award-system-config-overrides", props);
     }
 
     @Override

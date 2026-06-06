@@ -256,3 +256,42 @@ CREATE TABLE IF NOT EXISTS `ops_audit_trace` (
   KEY `idx_trace_id` (`trace_id`),
   KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='运维 Agent 推理链路审计';
+
+-- Agent Workflow Memory（AWM 可复用处置套路）
+CREATE TABLE IF NOT EXISTS `ops_workflow_memory` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `workflow_id` varchar(64) NOT NULL COMMENT '唯一 workflow 标识',
+  `domain_tag` varchar(32) NOT NULL COMMENT 'disk | cpu | service | security',
+  `finding_kinds` varchar(256) DEFAULT NULL COMMENT '逗号分隔 finding kind',
+  `title` varchar(255) NOT NULL,
+  `description` text,
+  `steps_json` longtext NOT NULL COMMENT 'OpsWorkflowStep JSON 数组',
+  `source_type` varchar(16) NOT NULL DEFAULT 'seed' COMMENT 'seed | offline | online',
+  `source_trace_id` varchar(64) DEFAULT NULL,
+  `utility_count` int(11) NOT NULL DEFAULT '0',
+  `success_count` int(11) NOT NULL DEFAULT '0',
+  `enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_workflow_id` (`workflow_id`),
+  KEY `idx_domain_tag` (`domain_tag`),
+  KEY `idx_enabled` (`enabled`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent Workflow Memory';
+
+-- Reflexion 失败教训（仅从 REJECT 轨迹沉淀，不存可执行动作）
+CREATE TABLE IF NOT EXISTS `ops_failure_insight` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `insight_key` varchar(160) NOT NULL COMMENT 'securityCode|tool|intent 去重键',
+  `security_code` varchar(64) NOT NULL,
+  `tool_name` varchar(128) DEFAULT NULL,
+  `intent_hint` varchar(512) DEFAULT NULL,
+  `reflection` text NOT NULL,
+  `source_trace_id` varchar(64) DEFAULT NULL,
+  `hit_count` int(11) NOT NULL DEFAULT '1',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_insight_key` (`insight_key`),
+  KEY `idx_security_code` (`security_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Reflexion 失败教训';

@@ -1,7 +1,11 @@
 spring:
   sql:
     init:
-      mode: always
+      # 本地库已手动初始化时关闭自动跑 schema.sql，避免重复建表导致启动失败
+      mode: never
+  datasource:
+    # 开发环境密码：请设 DB_PASSWORD 或复制 application-local.example.yml → application-local.yml
+    password: ${DB_PASSWORD:}
 
 # 开发阶段：登录即可查看「执行审计」列表（无需管理员角色）
 app:
@@ -15,4 +19,4 @@ agent:
 
 logging:
   level:
-    com.award.log.mapper: debug
+    com.award.log: DEBUG

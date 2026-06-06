@@ -21,6 +21,10 @@ public class OpsDryRunProperties {
         return global;
     }
 
+    public void setGlobal(boolean global) {
+        this.global = global;
+    }
+
     /**
      * 判断命令是否可能产生写副作用（用于全局 dry-run 拦截）。
      */

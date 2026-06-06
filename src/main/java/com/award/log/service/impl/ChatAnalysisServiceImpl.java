@@ -1,5 +1,6 @@
 package com.award.log.service.impl;
 
+import com.award.log.agent.awm.FailureInsightService;
 import com.award.log.service.*;
 import com.award.log.util.AiChatResponseSupport;
 import com.award.log.service.ChatMemoryService.MemoryEntry;
@@ -41,6 +42,9 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
     @Autowired
     private ChatModel chatModel;
 
+    @Autowired(required = false)
+    private FailureInsightService failureInsightService;
+
     private final Map<String, List<ChatMessage>> conversationHistories = new ConcurrentHashMap<>();
     private static final int MAX_HISTORY_SIZE = 50;
     private static final String DEFAULT_SESSION_ID = "default";
@@ -59,7 +63,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         try {
             IntentRecognitionService.RecognitionResult intent = intentRecognitionService.recognize(userMessage);
 
-            String memoryContext = buildMemoryContext();
+            String memoryContext = buildMemoryContext(userMessage);
             String toolResult = null;
             String analysisContext = "";
 
@@ -86,32 +90,32 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         }
     }
 
-    private String buildMemoryContext() {
-        List<MemoryEntry> recentMemory = memoryService.getRecentMemory(currentSessionId, 6);
-        if (recentMemory.isEmpty()) {
-            return "";
-        }
-
+    private String buildMemoryContext(String userMessage) {
         StringBuilder context = new StringBuilder();
-        context.append("\n\n【对话记忆摘要】\n");
+        List<MemoryEntry> recentMemory = memoryService.getRecentMemory(currentSessionId, 6);
+        if (!recentMemory.isEmpty()) {
+            context.append("\n\n【对话记忆摘要】\n");
 
-        ChatMemoryService.MemorySummary summary = memoryService.getMemorySummary(currentSessionId);
-        if (summary.getLastIntent() != null) {
-            context.append(String.format("- 最近意图：%s\n", summary.getLastIntent()));
-        }
-        if (summary.getAnalysisCount() > 0) {
-            context.append(String.format("- 已完成%d次分析\n", summary.getAnalysisCount()));
-        }
+            ChatMemoryService.MemorySummary summary = memoryService.getMemorySummary(currentSessionId);
+            if (summary.getLastIntent() != null) {
+                context.append(String.format("- 最近意图：%s\n", summary.getLastIntent()));
+            }
+            if (summary.getAnalysisCount() > 0) {
+                context.append(String.format("- 已完成%d次分析\n", summary.getAnalysisCount()));
+            }
 
-        context.append("\n最近对话：\n");
-        for (int i = Math.max(0, recentMemory.size() - 4); i < recentMemory.size(); i++) {
-            MemoryEntry entry = recentMemory.get(i);
-            String preview = entry.getContent().length() > 100
-                    ? entry.getContent().substring(0, 100) + "..."
-                    : entry.getContent();
-            context.append(String.format("- %s: %s\n", entry.getRole(), preview));
+            context.append("\n最近对话：\n");
+            for (int i = Math.max(0, recentMemory.size() - 4); i < recentMemory.size(); i++) {
+                MemoryEntry entry = recentMemory.get(i);
+                String preview = entry.getContent().length() > 100
+                        ? entry.getContent().substring(0, 100) + "..."
+                        : entry.getContent();
+                context.append(String.format("- %s: %s\n", entry.getRole(), preview));
+            }
         }
-
+        if (failureInsightService != null) {
+            context.append(failureInsightService.buildPromptSection(userMessage));
+        }
         return context.toString();
     }
 

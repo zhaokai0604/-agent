@@ -2,6 +2,7 @@ package com.award.log.service.impl;
 
 import com.award.log.agent.AssistantAuditRecorder;
 import com.award.log.agent.OpsRuntimeService;
+import com.award.log.agent.awm.FailureInsightService;
 import com.award.log.agent.MultiAgentContextBuilder;
 import com.award.log.mcp.McpToolRegistry;
 import com.award.log.security.AgenticRiskScoreEngine;
@@ -29,6 +30,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -53,6 +56,20 @@ public class UnifiedAssistantService {
 
     private static final int MAX_HISTORY_TURNS = 24;
     private static final int MAX_TURN_CHARS = 2800;
+
+    /** 纯寒暄/致谢/告别：不走 MCP 工具链，直接 LLM 流式回复 */
+    private static final Pattern CHITCHAT_PATTERN = Pattern.compile(
+            "^(你好|您好|hello|hi|hey|在吗|在不在|谢谢|感谢|多谢|再见|拜拜|好的|ok|okay|嗯+|哦+|"
+                    + "你是谁|你叫什么|介绍一下|你能做什么|你会什么|怎么用)[\\s!！?？。,，~～…]*$",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** 含运维/观测/处置语义时才启用工具增强 */
+    private static final Pattern OPS_TOOL_INTENT_PATTERN = Pattern.compile(
+            "(磁盘|空间|cpu|内存|进程|负载|日志|网络|服务|巡检|清理|重启|docker|systemd|防火墙|端口|配置|"
+                    + "df|top|ping|journal|temp|tmp|告警|异常|故障|修复|执行|分析|检查|诊断|"
+                    + "autonomous|mcp|运维|主机|容器|ssl|证书|cron|提权|sudo|性能|占用|满了|down|failed|"
+                    + "自动运维|全自动|一键|清理临时|释放空间|谁占用|热点|journalctl|lsof|ss\\b|netstat)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     @Autowired
     private ChatModel chatModel;
@@ -96,6 +113,9 @@ public class UnifiedAssistantService {
     @Autowired(required = false)
     private OpsRuntimeService opsRuntimeService;
 
+    @Autowired(required = false)
+    private FailureInsightService failureInsightService;
+
     @Autowired
     private AssistantAuditRecorder assistantAuditRecorder;
 
@@ -112,6 +132,10 @@ public class UnifiedAssistantService {
     private int toolAgentStreamChunkChars;
 
     public Map<String, Object> getAssistantContext() {
+        return getAssistantContext(null);
+    }
+
+    public Map<String, Object> getAssistantContext(String userMessage) {
         Map<String, Object> context = new HashMap<>();
         context.put("agentHostOs", buildAgentHostOsSummary());
         try {
@@ -156,7 +180,7 @@ public class UnifiedAssistantService {
             context.put("runbooks", List.of());
         }
         try {
-            context.put("agentMultiTeam", multiAgentContextBuilder.build());
+            context.put("agentMultiTeam", multiAgentContextBuilder.buildForUser(userMessage));
         } catch (Exception e) {
             log.warn("助手上下文：多 Agent 摘要不可用: {}", e.getMessage());
             context.put("agentMultiTeam", Map.of("unavailable", true));
@@ -238,14 +262,39 @@ public class UnifiedAssistantService {
     public Flux<String> chatStream(String userMessage, List<ChatTurn> history, boolean useToolAgent) {
         String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
                 userMessage == null ? "" : userMessage.trim(), 32_000);
-        if (useToolAgent && chatClientBuilder != null) {
+        if (shouldRouteToToolAgent(safe, useToolAgent)) {
             return chatStreamWithToolAgent(safe, history);
         }
         return chatStreamPlain(safe, history);
     }
 
+    /**
+     * 闲聊、致谢等不走工具；仅运维相关意图或编排 Playbook 命中时才启用 MCP/编排链路。
+     */
+    private boolean shouldRouteToToolAgent(String userMessage, boolean useToolAgentRequested) {
+        if (!useToolAgentRequested || chatClientBuilder == null) {
+            return false;
+        }
+        if (userMessage == null || userMessage.isBlank()) {
+            return false;
+        }
+        String msg = userMessage.trim();
+        if (CHITCHAT_PATTERN.matcher(msg).matches()) {
+            log.debug("助手路由：寒暄/非运维域，跳过工具增强: {}", msg);
+            return false;
+        }
+        if (orchestratorEnabled && opsRuntimeService != null && opsRuntimeService.shouldOrchestrate(msg)) {
+            return true;
+        }
+        if (OPS_TOOL_INTENT_PATTERN.matcher(msg).find()) {
+            return true;
+        }
+        log.debug("助手路由：未命中运维意图，跳过工具增强: {}", msg);
+        return false;
+    }
+
     private Flux<String> chatStreamPlain(String userMessage, List<ChatTurn> history) {
-        Map<String, Object> context = getAssistantContext();
+        Map<String, Object> context = getAssistantContext(userMessage);
         augmentContextWithSessionSecurity(userMessage, context);
         String systemPrompt = buildSystemPrompt(context);
         List<Message> messages = new ArrayList<>();
@@ -284,13 +333,16 @@ public class UnifiedAssistantService {
      */
     private Flux<String> chatStreamWithToolAgent(String userMessage, List<ChatTurn> history) {
         if (promptInjectionGuard != null && promptInjectionGuard.isInjection(userMessage)) {
+            captureStreamReject(userMessage, "INJECTION", null, "提示注入特征");
             return Flux.just("检测到提示注入特征，已拦截本轮 **自动工具** 链路。请用自然语言直接描述运维目标。");
         }
         if (highRiskCommandDetector != null && highRiskCommandDetector.isHighRiskCommand(userMessage)) {
+            captureStreamReject(userMessage, "HIGH_RISK_COMMAND", null, "高危命令表述");
             return Flux.just("检测到高危命令表述，已暂停自动工具调用。请改为观测/分析类需求，或通过 MCP 控制台在确认后执行。");
         }
         RiskLevel rl = intentRiskFilter.evaluate(userMessage);
         if (rl == RiskLevel.HIGH) {
+            captureStreamReject(userMessage, "HIGH_INTENT", null, "高风险意图");
             return Flux.just("检测到高风险意图，与对话入口风控一致：已暂停 **自动工具多步** 。请拆分需求、降低操作范围，或联系管理员走审批与 MCP 确认执行。");
         }
         if (orchestratorEnabled && opsRuntimeService != null && opsRuntimeService.shouldOrchestrate(userMessage)) {
@@ -328,12 +380,19 @@ public class UnifiedAssistantService {
         });
     }
 
+    private void captureStreamReject(String userMessage, String code, String toolName, String detail) {
+        if (failureInsightService == null) {
+            return;
+        }
+        failureInsightService.captureReject(userMessage, code, toolName, detail, null);
+    }
+
     private String runBlockingToolAugmentedCompletion(String userMessage, List<ChatTurn> history) {
-        Map<String, Object> context = getAssistantContext();
+        Map<String, Object> context = getAssistantContext(userMessage);
         augmentContextWithSessionSecurity(userMessage, context);
         context.put("assistantToolLoop", Boolean.TRUE);
         McpToolSurface surface = parseToolSurface(context);
-        List<Object> tools = mcpToolRegistry.getToolBeansForSurface(surface, readOnlySurfaceDenylist);
+        ToolCallback[] toolCallbacks = mcpToolRegistry.getToolCallbacksForSurface(surface, readOnlySurfaceDenylist);
         String traceId = UUID.randomUUID().toString();
         long t0 = System.currentTimeMillis();
         OpsSecurityContext.open(traceId, userMessage, false, surface);
@@ -341,12 +400,13 @@ public class UnifiedAssistantService {
             ChatClient client = chatClientBuilder.build();
             String systemPrompt = buildSystemPrompt(context);
             String bundledUser = bundleHistoryAndUser(history, userMessage);
-            String content = client.prompt()
+            var promptSpec = client.prompt()
                     .system(systemPrompt)
-                    .user(bundledUser)
-                    .tools(tools)
-                    .call()
-                    .content();
+                    .user(bundledUser);
+            if (toolCallbacks.length > 0) {
+                promptSpec = promptSpec.toolCallbacks(toolCallbacks);
+            }
+            String content = promptSpec.call().content();
             List<Map<String, Object>> steps = assistantAuditRecorder.newSteps();
             assistantAuditRecorder.addCot(steps, 1, "接收", userMessage);
             assistantAuditRecorder.addCot(steps, 2, "感知", "会话上下文已注入 getAssistantContext");

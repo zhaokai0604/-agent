@@ -34,18 +34,16 @@ public class PromptInjectionGuard {
             return false;
         }
 
-        log.info("检测注入攻击，用户输入: {}", userInput);
-
-        if (ruleExpressionEvaluator != null) {
-            boolean result = evaluateWithRuleEngine(userInput);
-            log.info("规则引擎评估注入结果: {}", result);
-            return result;
-        } else {
-            log.warn("规则引擎不可用，使用内置正则评估");
-            boolean result = evaluateWithRegex(userInput);
-            log.info("内置正则评估注入结果: {}", result);
-            return result;
+        if (evaluateWithRegex(userInput)) {
+            log.info("内置正则命中提示注入特征");
+            return true;
         }
+
+        if (ruleExpressionEvaluator != null && evaluateWithRuleEngine(userInput)) {
+            log.info("扩展注入规则引擎命中");
+            return true;
+        }
+        return false;
     }
 
     private boolean evaluateWithRuleEngine(String userInput) {
@@ -54,20 +52,19 @@ public class PromptInjectionGuard {
                 "USER_INPUT", userInput.toUpperCase()
             );
 
-            // 评估所有启用的规则
             for (InjectionRule rule : ruleCache.values()) {
-                if (rule.isEnabled()) {
-                    boolean matched = ruleExpressionEvaluator.evaluate(rule.getRuleExpression(), context);
-                    if (matched) {
-                        log.info("注入规则 [{}] 匹配成功", rule.getName());
-                        return true;
-                    }
+                if (!rule.isEnabled()) {
+                    continue;
+                }
+                if (ruleExpressionEvaluator.evaluate(rule.getRuleExpression(), context)) {
+                    log.info("注入规则 [{}] 匹配成功", rule.getName());
+                    return true;
                 }
             }
             return false;
         } catch (Exception e) {
-            log.error("规则引擎评估异常，降级到正则: {}", e.getMessage());
-            return evaluateWithRegex(userInput);
+            log.warn("注入规则引擎评估异常，已忽略该规则: {}", e.getMessage());
+            return false;
         }
     }
 
@@ -121,10 +118,10 @@ public class PromptInjectionGuard {
         public static InjectionRule createDefaultRule() {
             InjectionRule rule = new InjectionRule();
             rule.id = "DEFAULT_INJECTION_RULE";
-            rule.name = "默认注入检测规则";
-            rule.description = "检测常见的提示注入攻击";
-            rule.ruleExpression = "(USER_INPUT CONTAINS 'IGNORE PREVIOUS INSTRUCTIONS') OR (USER_INPUT CONTAINS 'DISREGARD SAFETY') OR (USER_INPUT CONTAINS 'PRETEND YOU ARE') OR (USER_INPUT CONTAINS 'EXECUTE THIS:') OR (USER_INPUT CONTAINS 'SYSTEM PROMPT') OR (USER_INPUT CONTAINS 'ROLE PLAY') OR (USER_INPUT CONTAINS 'BYPASS SECURITY') OR (USER_INPUT CONTAINS 'OVERRIDE INSTRUCTIONS') OR (USER_INPUT CONTAINS 'RESET PROMPT') OR (USER_INPUT CONTAINS 'IGNORE GUIDELINES')";
-            rule.enabled = true;
+            rule.name = "默认注入检测规则（扩展 DSL，默认关闭）";
+            rule.description = "内置正则已覆盖常见注入；启用本规则前请确认 DSL 支持 CONTAINS 等语法";
+            rule.ruleExpression = "(USER_INPUT CONTAINS 'IGNORE PREVIOUS INSTRUCTIONS') OR (USER_INPUT CONTAINS 'DISREGARD SAFETY')";
+            rule.enabled = false;
             return rule;
         }
 

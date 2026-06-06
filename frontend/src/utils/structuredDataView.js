@@ -48,6 +48,8 @@ const FIELD_LABELS = {
   usePercent: '使用率',
   used: '已用',
   size: '容量',
+  available: '可用空间',
+  filesystem: '盘符',
   pid: 'PID',
   cpu: 'CPU%',
   mem: '内存%',
@@ -62,7 +64,7 @@ const FIELD_LABELS = {
   resultSummary: '结果摘要',
   riskDimensions: '风险维度',
   riskExplanation: '风险说明',
-  data: '数据',
+  data: '磁盘分区',
   preview: '预览',
   protectedSamples: '受保护样例',
   hops: '路由跳',
@@ -85,10 +87,57 @@ const FIELD_LABELS = {
   maxDepth: '深度',
   overview: '概览',
   hotspotsRank: '热点目录',
-  hint: '提示'
+  hint: '提示',
+  integrationStatus: '集成状态',
+  filters: '过滤条件',
+  sinceHours: '时间范围(小时)',
+  keywordContains: '关键词',
+  drainTemplateSignal: 'Drain 模板信号',
+  novelTemplateKindsLastHour: '近1小时新模板种类',
+  distinctTemplatesTracked: '已跟踪模板数',
+  novelTemplateCountThisRun: '本轮新模板数',
+  distinctTemplateIds: '模板种类数',
+  templateSummary: '模板汇总',
+  templateId: '模板 ID',
+  lineCount: '行数',
+  anomalyLineCount: '异常行数',
+  maxAnomalyScore: '最高异常分',
+  sampleLine: '样例行',
+  dominantSeverity: '主要级别',
+  lineTimeStats: '时间解析统计',
+  unparsedTimeRatio: '未解析时间占比',
+  linesWithParsedTime: '已解析时间行数',
+  linesTotal: '总行数',
+  severityHistogram: '严重级别分布',
+  anomalySamples: '异常样例',
+  anomalyScore: '异常分',
+  reasons: '异常原因',
+  line: '日志行',
+  logTime: '日志时间',
+  summary: '摘要',
+  minEpochMs: '最早时间',
+  maxEpochMs: '最晚时间'
+}
+
+const ENUM_VALUE_LABELS = {
+  INTEGRATED: '已集成',
+  HEALTHY: '健康',
+  ISSUES_DETECTED: '存在异常',
+  EMPTY: '无数据',
+  none: '未设置',
+  UNKNOWN: '未知',
+  UNKNOWN_LEVEL: '未知级别',
+  ERROR: '错误',
+  WARN: '警告',
+  WARNING: '警告',
+  INFO: '信息',
+  DEBUG: '调试',
+  FATAL: '致命',
+  CRITICAL: '严重'
 }
 
 const METRIC_KEY_RE = /percent|usage|ratio|score|progress|level|risk/i
+const BYTE_FIELD_KEYS = new Set(['available', 'size', 'used', 'free', 'total', 'capacity'])
 const TABLE_ARRAY_KEYS = new Set([
   'preview',
   'entries',
@@ -98,12 +147,21 @@ const TABLE_ARRAY_KEYS = new Set([
   'rows',
   'items',
   'list',
-  'records'
+  'records',
+  'templateSummary',
+  'anomalySamples'
 ])
 
 export function fieldLabel(key) {
   if (key == null) return ''
-  return FIELD_LABELS[key] || String(key)
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key]
+  if (ENUM_VALUE_LABELS[key]) return ENUM_VALUE_LABELS[key]
+  return String(key)
+}
+
+function translateEnumValue(val) {
+  if (val == null || val === '') return null
+  return ENUM_VALUE_LABELS[String(val)] ?? null
 }
 
 export function looksLikeJsonString(s) {
@@ -164,12 +222,69 @@ function metricStatus(percent, key) {
   return 'success'
 }
 
+function formatBytesCompact(value) {
+  if (value == null || value === '') return '—'
+  if (typeof value === 'string' && /[a-zA-Z%]/.test(value)) return value
+  const n = Number(value)
+  if (!Number.isFinite(n)) return String(value)
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = Math.max(0, n)
+  let idx = 0
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024
+    idx += 1
+  }
+  const digits = size >= 100 || idx === 0 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[idx]}`
+}
+
+function formatKbCompact(kb) {
+  const n = Number(kb)
+  if (!Number.isFinite(n)) return kb == null ? '—' : String(kb)
+  return formatBytesCompact(n * 1024)
+}
+
 function formatScalar(val) {
   if (val == null) return '—'
   if (typeof val === 'boolean') return val ? '是' : '否'
   if (typeof val === 'number') return Number.isInteger(val) ? String(val) : val.toFixed(2)
+  if (typeof val === 'string') {
+    const translated = translateEnumValue(val)
+    const s = translated ?? val
+    return s.length > 500 ? s.slice(0, 500) + '…' : s
+  }
   const s = String(val)
   return s.length > 500 ? s.slice(0, 500) + '…' : s
+}
+
+const ENUM_CELL_PROPS = new Set([
+  'status',
+  'integrationStatus',
+  'dominantSeverity',
+  'severity',
+  'securityOutcome'
+])
+
+/** 表格单元格：字节字段自动换算为 GB 等可读单位 */
+export function formatTableCell(prop, val) {
+  if (val == null || val === '') return '—'
+  if (typeof val === 'boolean') return val ? '是' : '否'
+  if (typeof val === 'object') return fieldLabel('value')
+  if (prop === 'kb') return formatKbCompact(val)
+  if (BYTE_FIELD_KEYS.has(prop)) return formatBytesCompact(val)
+  if (ENUM_CELL_PROPS.has(prop)) {
+    const translated = translateEnumValue(val)
+    if (translated) return translated
+  }
+  if (prop === 'unparsedTimeRatio' && typeof val === 'number') {
+    return `${(val * 100).toFixed(1)}%`
+  }
+  if ((prop === 'minEpochMs' || prop === 'maxEpochMs') && typeof val === 'number') {
+    const d = new Date(val)
+    return Number.isNaN(d.getTime()) ? String(val) : d.toLocaleString('zh-CN', { hour12: false })
+  }
+  const s = formatScalar(val)
+  return s.length > 120 ? s.slice(0, 120) + '…' : s
 }
 
 function tagTypeForField(key, val) {
@@ -191,7 +306,30 @@ function inferTableColumns(rows) {
     Object.keys(row).forEach((k) => keys.add(k))
   }
   const ordered = [...keys]
-  const priority = ['path', 'kb', 'mountedOn', 'usePercent', 'pid', 'cpu', 'mem', 'command', 'severity', 'logTime']
+  const priority = [
+    'templateId',
+    'lineCount',
+    'anomalyLineCount',
+    'maxAnomalyScore',
+    'dominantSeverity',
+    'sampleLine',
+    'severity',
+    'anomalyScore',
+    'logTime',
+    'line',
+    'path',
+    'kb',
+    'mountedOn',
+    'usePercent',
+    'used',
+    'size',
+    'available',
+    'filesystem',
+    'pid',
+    'cpu',
+    'mem',
+    'command'
+  ]
   ordered.sort((a, b) => {
     const ia = priority.indexOf(a)
     const ib = priority.indexOf(b)
@@ -284,6 +422,16 @@ export function buildStructuredViewModel(raw, depth = 0) {
 
     if (Array.isArray(v) && (TABLE_ARRAY_KEYS.has(key) || v.every(isPlainObject))) {
       const sec = buildTableSection(key, v, depth)
+      if (sec) sections.push(sec)
+      continue
+    }
+
+    if (key === 'severityHistogram' && isPlainObject(v)) {
+      const rows = Object.entries(v).map(([level, count]) => ({
+        severity: level,
+        lineCount: count
+      }))
+      const sec = buildTableSection('severityHistogram', rows, depth)
       if (sec) sections.push(sec)
       continue
     }

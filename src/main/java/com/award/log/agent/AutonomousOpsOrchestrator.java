@@ -1,11 +1,12 @@
 package com.award.log.agent;
 
-import com.award.log.config.AgentOpsProperties;
+import com.award.log.agent.awm.OpsWorkflow;
+import com.award.log.agent.awm.WorkflowInductionService;
+import com.award.log.agent.awm.WorkflowRetriever;
+import com.award.log.config.SystemConfigRuntimeState;
+import com.award.log.governance.OpsRemediationGate;
 import com.award.log.mcp.tools.*;
-import com.award.log.security.AgenticRiskScoreEngine;
 import com.award.log.security.McpToolSurface;
-import com.award.log.security.OpsTrustPolicy;
-import com.award.log.security.OpsTrustTier;
 import com.award.log.security.RiskLevel;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -43,16 +44,17 @@ public class AutonomousOpsOrchestrator {
     private final CleanTempTool cleanTempTool;
     private final LogCleanupTool logCleanupTool;
     private final ServiceRestartTool serviceRestartTool;
-    private final OpsTrustPolicy opsTrustPolicy;
-    private final AgenticRiskScoreEngine agenticRiskScoreEngine;
+    private final OpsRemediationGate opsRemediationGate;
+    private final ServiceRestartCandidateResolver serviceRestartCandidateResolver;
     private final AssistantAuditRecorder auditRecorder;
     private final ObjectMapper objectMapper;
-    private final AgentOpsProperties agentOpsProperties;
     private final ExecutorService perceiveExecutor;
     private final OpsIntentRouter opsIntentRouter;
 
     private final OpsPerceptionCache opsPerceptionCache;
     private final RemediationEffectEvaluator remediationEffectEvaluator;
+    private final WorkflowRetriever workflowRetriever;
+    private final WorkflowInductionService workflowInductionService;
 
     @Value("${agent.autonomous.enabled:true}")
     private boolean enabled;
@@ -75,11 +77,9 @@ public class AutonomousOpsOrchestrator {
     @Value("${agent.autonomous.health-check-host:127.0.0.1}")
     private String healthCheckHost;
 
-    @Value("${agent.autonomous.health-check-ports:8080,80,443}")
     private String healthCheckPortsRaw;
 
-    @Value("${agent.autonomous.ping-target:8.8.8.8}")
-    private String pingTarget;
+    private String pingTarget = SystemConfigRuntimeState.DEFAULT_PING_TARGET;
 
     public AutonomousOpsOrchestrator(
             SystemLoadTool systemLoadTool,
@@ -97,14 +97,16 @@ public class AutonomousOpsOrchestrator {
             CleanTempTool cleanTempTool,
             LogCleanupTool logCleanupTool,
             ServiceRestartTool serviceRestartTool,
-            OpsTrustPolicy opsTrustPolicy,
-            AgenticRiskScoreEngine agenticRiskScoreEngine,
+            OpsRemediationGate opsRemediationGate,
+            ServiceRestartCandidateResolver serviceRestartCandidateResolver,
             AssistantAuditRecorder auditRecorder,
             ObjectMapper objectMapper,
-            AgentOpsProperties agentOpsProperties,
             OpsIntentRouter opsIntentRouter,
             OpsPerceptionCache opsPerceptionCache,
-            RemediationEffectEvaluator remediationEffectEvaluator) {
+            RemediationEffectEvaluator remediationEffectEvaluator,
+            WorkflowRetriever workflowRetriever,
+            WorkflowInductionService workflowInductionService,
+            SystemConfigRuntimeState systemConfigRuntimeState) {
         this.systemLoadTool = systemLoadTool;
         this.diskTool = diskTool;
         this.diskAnalyzeTool = diskAnalyzeTool;
@@ -120,14 +122,17 @@ public class AutonomousOpsOrchestrator {
         this.cleanTempTool = cleanTempTool;
         this.logCleanupTool = logCleanupTool;
         this.serviceRestartTool = serviceRestartTool;
-        this.opsTrustPolicy = opsTrustPolicy;
-        this.agenticRiskScoreEngine = agenticRiskScoreEngine;
+        this.opsRemediationGate = opsRemediationGate;
+        this.serviceRestartCandidateResolver = serviceRestartCandidateResolver;
         this.auditRecorder = auditRecorder;
         this.objectMapper = objectMapper;
-        this.agentOpsProperties = agentOpsProperties;
         this.opsIntentRouter = opsIntentRouter;
         this.opsPerceptionCache = opsPerceptionCache;
         this.remediationEffectEvaluator = remediationEffectEvaluator;
+        this.workflowRetriever = workflowRetriever;
+        this.workflowInductionService = workflowInductionService;
+        this.healthCheckPortsRaw = systemConfigRuntimeState.healthCheckPortsCsv();
+        this.pingTarget = systemConfigRuntimeState.getPingTarget();
         this.perceiveExecutor = Executors.newFixedThreadPool(
                 Math.min(12, Runtime.getRuntime().availableProcessors() + 2),
                 r -> {
@@ -144,6 +149,15 @@ public class AutonomousOpsOrchestrator {
             return false;
         }
         return opsIntentRouter.resolve(userMessage) == OpsIntentRouter.Playbook.FULL_AUTONOMOUS;
+    }
+
+    public void applyHotConfig(String healthCheckPortsRaw, String pingTarget) {
+        if (healthCheckPortsRaw != null && !healthCheckPortsRaw.isBlank()) {
+            this.healthCheckPortsRaw = healthCheckPortsRaw;
+        }
+        if (pingTarget != null && !pingTarget.isBlank()) {
+            this.pingTarget = pingTarget;
+        }
     }
 
     /**
@@ -226,14 +240,16 @@ public class AutonomousOpsOrchestrator {
                 md.append("\n");
             }
 
+            appendAwmGuidance(md, steps, findings, userMessage);
+
             boolean anyRemediated = false;
             Map<String, Object> metricsBeforeRemediation = null;
             RemediationSummary remediationSummary = null;
             if (!findings.isEmpty() && surface != McpToolSurface.READ_ONLY) {
                 metricsBeforeRemediation = remediationEffectEvaluator.captureMetrics();
-                auditRecorder.addCot(steps, 4, "安全校验", "按 OpsTrustPolicy 评估写操作风险分档");
+                auditRecorder.addCot(steps, 4, "安全校验", "治理准入 + OpsTrustPolicy 风险分档");
                 auditRecorder.addCot(steps, 5, "执行", "按策略执行预览或自动修复");
-                remediationSummary = remediate(findings, forceRemediate, steps);
+                remediationSummary = remediate(findings, forceRemediate, steps, perception);
                 report.put("remediation", remediationSummary.toMap());
                 anyRemediated = remediationSummary.executedCount() > 0;
                 if (anyRemediated) {
@@ -283,6 +299,15 @@ public class AutonomousOpsOrchestrator {
             auditRecorder.record(traceId, userMessage, intentRisk.name(), status,
                     "AutonomousOpsOrchestrator", true,
                     md.substring(0, Math.min(500, md.length())), steps, System.currentTimeMillis() - t0);
+            AwmContext awmCtx = resolveAwmContext(findings);
+            workflowInductionService.afterSuccessfulRun(
+                    traceId,
+                    userMessage,
+                    status,
+                    true,
+                    steps,
+                    awmCtx.domain(),
+                    awmCtx.kinds());
             return new RunResult(md.toString(), traceId, report);
 
         } catch (Exception e) {
@@ -383,7 +408,8 @@ public class AutonomousOpsOrchestrator {
     }
 
     private RemediationSummary remediate(List<Finding> findings, boolean forceRemediate,
-                                       List<Map<String, Object>> steps) throws Exception {
+                                       List<Map<String, Object>> steps,
+                                       PerceptionSnapshot perception) throws Exception {
         List<String> actions = new ArrayList<>();
         int executed = 0;
         int previewed = 0;
@@ -407,7 +433,7 @@ public class AutonomousOpsOrchestrator {
         }
 
         if (kinds.contains("CPU_HIGH")) {
-            String svc = pickRestartCandidate();
+            String svc = serviceRestartCandidateResolver.pickDefaultFromAllowlist();
             if (svc != null) {
                 RemediationOutcome restart = remediateServiceRestart(svc, forceRemediate, steps);
                 actions.add(restart.message());
@@ -415,14 +441,23 @@ public class AutonomousOpsOrchestrator {
                 previewed += restart.previewed() ? 1 : 0;
                 skipped += restart.skipped() ? 1 : 0;
             } else {
-                actions.add("- CPU 偏高：未配置可重启服务白名单，建议人工排查高占用进程。");
+                actions.add("- CPU 偏高：无治理允许的白名单服务可重启，建议人工排查高占用进程。");
                 skipped++;
             }
         }
 
         if (kinds.contains("FAILED_SERVICE")) {
-            actions.add("- 存在失败服务单元：请结合 systemd 输出人工确认是否重启（未自动批量重启以免误伤）。");
-            skipped++;
+            String svc = serviceRestartCandidateResolver.pickFromFailedUnits(perception.failedUnitNames());
+            if (svc != null) {
+                RemediationOutcome restart = remediateServiceRestart(svc, forceRemediate, steps);
+                actions.add(restart.message());
+                executed += restart.executed() ? 1 : 0;
+                previewed += restart.previewed() ? 1 : 0;
+                skipped += restart.skipped() ? 1 : 0;
+            } else {
+                actions.add("- 失败 unit：未命中可重启白名单或治理禁止，请结合 SystemdTool 输出人工确认。");
+                skipped++;
+            }
         }
 
         if (actions.isEmpty()) {
@@ -433,20 +468,19 @@ public class AutonomousOpsOrchestrator {
 
     private RemediationOutcome remediateTempClean(boolean force, List<Map<String, Object>> steps) throws Exception {
         String path = OsRuntime.isWindows() ? "C:\\Windows\\Temp" : "/tmp";
-        Map<String, Object> params = Map.of("path", path, "days", tempCleanDays, "dryRun", true);
         String instruction = "AutonomousOps CleanTempTool path=" + path;
-        OpsTrustTier tier = opsTrustPolicy.tierForTool("CleanTempTool", params, instruction);
+        OpsRemediationGate.RemediationDecision decision =
+                opsRemediationGate.decideTempCleanup(path, tempCleanDays, force, instruction);
         String preview = cleanTempTool.cleanTempFiles(path, tempCleanDays, true, false);
         int found = countFromTool(preview, "filesFound");
         if (found == 0) {
             return RemediationOutcome.skipped("- 临时目录：无可清理文件。");
         }
-        if (tier == OpsTrustTier.BLOCK) {
-            return RemediationOutcome.skipped("- 临时目录：风险分过高，已拒绝。");
+        if (decision.forbidden()) {
+            return RemediationOutcome.skipped("- 临时目录：" + decision.reason());
         }
-        boolean run = force || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
-        if (!run) {
-            return RemediationOutcome.previewed("- 临时目录：预览 **" + found + "** 个文件，待确认。");
+        if (decision.mayPreview()) {
+            return RemediationOutcome.previewed("- 临时目录：预览 **" + found + "** 个文件，待确认。（" + decision.reason() + "）");
         }
         String exec = cleanTempTool.cleanTempFiles(path, tempCleanDays, false, true);
         int deleted = countFromTool(exec, "filesDeleted");
@@ -456,20 +490,19 @@ public class AutonomousOpsOrchestrator {
 
     private RemediationOutcome remediateLogClean(boolean force, List<Map<String, Object>> steps) throws Exception {
         String path = defaultLogRoot();
-        Map<String, Object> params = Map.of("path", path, "days", logCleanDays, "dryRun", true);
         String instruction = "AutonomousOps LogCleanupTool path=" + path;
-        OpsTrustTier tier = opsTrustPolicy.tierForTool("LogCleanupTool", params, instruction);
+        OpsRemediationGate.RemediationDecision decision =
+                opsRemediationGate.decideLogCleanup(path, logCleanDays, force, instruction);
         String preview = logCleanupTool.cleanupOldLogs(path, logCleanDays, true, false);
         int found = countFromTool(preview, "deletableCount", "filesFound");
         if (found == 0) {
             return RemediationOutcome.skipped("- 日志目录：无符合策略的陈旧文件。");
         }
-        if (tier == OpsTrustTier.BLOCK) {
-            return RemediationOutcome.skipped("- 日志目录：风险分过高，已拒绝。");
+        if (decision.forbidden()) {
+            return RemediationOutcome.skipped("- 日志目录：" + decision.reason());
         }
-        boolean run = force || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
-        if (!run) {
-            return RemediationOutcome.previewed("- 日志目录：预览 **" + found + "** 个可删文件，待确认。");
+        if (decision.mayPreview()) {
+            return RemediationOutcome.previewed("- 日志目录：预览 **" + found + "** 个可删文件，待确认。（" + decision.reason() + "）");
         }
         String exec = logCleanupTool.cleanupOldLogs(path, logCleanDays, false, true);
         int deleted = countFromTool(exec, "filesDeleted");
@@ -479,28 +512,19 @@ public class AutonomousOpsOrchestrator {
 
     private RemediationOutcome remediateServiceRestart(String serviceName, boolean force,
                                                        List<Map<String, Object>> steps) throws Exception {
-        Map<String, Object> params = Map.of("serviceName", serviceName, "dryRun", true);
         String instruction = "AutonomousOps ServiceRestartTool " + serviceName;
-        OpsTrustTier tier = opsTrustPolicy.tierForTool("ServiceRestartTool", params, instruction);
-        if (tier == OpsTrustTier.BLOCK) {
-            return RemediationOutcome.skipped("- 服务 **" + serviceName + "**：风险分过高，已拒绝重启。");
+        OpsRemediationGate.RemediationDecision decision =
+                opsRemediationGate.decideServiceRestart(serviceName, force, instruction);
+        if (decision.forbidden()) {
+            return RemediationOutcome.skipped("- 服务 **" + serviceName + "**：" + decision.reason());
         }
-        boolean run = force || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
-        if (!run) {
+        if (decision.mayPreview()) {
             serviceRestartTool.restartService(serviceName, true, false);
-            return RemediationOutcome.previewed("- 服务 **" + serviceName + "**：已预览，待确认后重启。");
+            return RemediationOutcome.previewed("- 服务 **" + serviceName + "**：已预览，待确认后重启。（" + decision.reason() + "）");
         }
         serviceRestartTool.restartService(serviceName, false, true);
         auditRecorder.addStep(steps, "execute", "ServiceRestart " + serviceName);
         return RemediationOutcome.executed("- 服务 **" + serviceName + "**：已执行重启。");
-    }
-
-    private String pickRestartCandidate() {
-        List<String> list = agentOpsProperties.getServiceRestart().getAllowlist();
-        if (list == null || list.isEmpty()) {
-            return null;
-        }
-        return list.get(0).trim().toLowerCase(Locale.ROOT);
     }
 
     private List<Integer> parseHealthPorts() {
@@ -621,6 +645,44 @@ public class AutonomousOpsOrchestrator {
         return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
+    private record AwmContext(String domain, List<String> kinds) {
+    }
+
+    private AwmContext resolveAwmContext(List<Finding> findings) {
+        if (findings == null || findings.isEmpty()) {
+            return new AwmContext("disk", List.of("DISK_PRESSURE"));
+        }
+        Set<String> kinds = findings.stream().map(Finding::kind).collect(Collectors.toSet());
+        if (kinds.contains("FAILED_SERVICE")) {
+            return new AwmContext("service", List.of("FAILED_SERVICE"));
+        }
+        if (kinds.contains("DISK_PRESSURE") || kinds.contains("LOG_ANOMALY")) {
+            return new AwmContext("disk", List.of("DISK_PRESSURE"));
+        }
+        if (kinds.contains("CPU_HIGH")) {
+            return new AwmContext("cpu", List.of("CPU_HIGH"));
+        }
+        return new AwmContext("disk", List.of("DISK_PRESSURE"));
+    }
+
+    private void appendAwmGuidance(StringBuilder md, List<Map<String, Object>> steps,
+                                   List<Finding> findings, String userMessage) {
+        if (findings == null || findings.isEmpty()) {
+            return;
+        }
+        AwmContext ctx = resolveAwmContext(findings);
+        List<OpsWorkflow> workflows = workflowRetriever.retrieve(ctx.domain(), ctx.kinds(), userMessage, 2);
+        if (workflows.isEmpty()) {
+            return;
+        }
+        md.append("### 处置套路（AWM）\n\n");
+        for (OpsWorkflow wf : workflows) {
+            auditRecorder.addStep(steps, "workflow", "命中 AWM workflow=" + wf.workflowId());
+            md.append(wf.toMarkdownBrief()).append("\n\n");
+        }
+        md.append("> 环境不一致时应偏离上述套路；写操作仍受治理准入与 OpsTrustPolicy 约束。\n\n");
+    }
+
     private record Finding(String severity, String title, String detail, String kind) {
         Map<String, Object> toMap() {
             return Map.of("severity", severity, "title", title, "detail", detail, "kind", kind);
@@ -657,6 +719,7 @@ public class AutonomousOpsOrchestrator {
         private final double cpuUsagePercent;
         private final double memUsagePercent;
         private final boolean hasFailedUnits;
+        private final List<String> failedUnitNames;
         private final List<Integer> unreachablePorts;
         private final double networkPacketLossPercent;
         private final boolean logAnomalyHint;
@@ -665,13 +728,15 @@ public class AutonomousOpsOrchestrator {
         private final Map<String, String> raw;
 
         private PerceptionSnapshot(double maxDiskUsePercent, double cpuUsagePercent, double memUsagePercent,
-                                   boolean hasFailedUnits, List<Integer> unreachablePorts,
+                                   boolean hasFailedUnits, List<String> failedUnitNames,
+                                   List<Integer> unreachablePorts,
                                    double networkPacketLossPercent, boolean logAnomalyHint,
                                    boolean dockerIssueHint, boolean zombieProcessHint, Map<String, String> raw) {
             this.maxDiskUsePercent = maxDiskUsePercent;
             this.cpuUsagePercent = cpuUsagePercent;
             this.memUsagePercent = memUsagePercent;
             this.hasFailedUnits = hasFailedUnits;
+            this.failedUnitNames = failedUnitNames != null ? List.copyOf(failedUnitNames) : List.of();
             this.unreachablePorts = unreachablePorts;
             this.networkPacketLossPercent = networkPacketLossPercent;
             this.logAnomalyHint = logAnomalyHint;
@@ -685,6 +750,7 @@ public class AutonomousOpsOrchestrator {
             double cpu = 0;
             double mem = 0;
             boolean failedUnits = false;
+            List<String> failedUnitNames = List.of();
             List<Integer> badPorts = new ArrayList<>();
             double packetLoss = 0;
             boolean logHint = false;
@@ -713,8 +779,10 @@ public class AutonomousOpsOrchestrator {
                     mem = data.path("memUsagePercent").asDouble(0);
                 }
                 if (raw.containsKey("systemdFailed")) {
-                    String out = raw.get("systemdFailed").toLowerCase(Locale.ROOT);
-                    failedUnits = out.contains("failed") || out.contains("stopped")
+                    String systemdJson = raw.get("systemdFailed");
+                    failedUnitNames = ServiceRestartCandidateResolver.parseFailedUnitsFromToolJson(systemdJson, mapper);
+                    String out = systemdJson.toLowerCase(Locale.ROOT);
+                    failedUnits = !failedUnitNames.isEmpty() || out.contains("failed") || out.contains("stopped")
                             || (out.contains("success") && out.contains("\"output\"") && !out.contains("0 failed"));
                 }
                 if (raw.containsKey("network")) {
@@ -751,7 +819,7 @@ public class AutonomousOpsOrchestrator {
                 log.debug("解析感知快照失败: {}", e.getMessage());
             }
 
-            return new PerceptionSnapshot(maxDisk, cpu, mem, failedUnits, badPorts, packetLoss, logHint, dockerHint,
+            return new PerceptionSnapshot(maxDisk, cpu, mem, failedUnits, failedUnitNames, badPorts, packetLoss, logHint, dockerHint,
                     zombieHint, raw);
         }
 
@@ -787,6 +855,10 @@ public class AutonomousOpsOrchestrator {
             return hasFailedUnits;
         }
 
+        List<String> failedUnitNames() {
+            return failedUnitNames;
+        }
+
         List<Integer> unreachablePorts() {
             return unreachablePorts;
         }
@@ -813,6 +885,7 @@ public class AutonomousOpsOrchestrator {
             m.put("cpuUsagePercent", cpuUsagePercent);
             m.put("memUsagePercent", memUsagePercent);
             m.put("hasFailedUnits", hasFailedUnits);
+            m.put("failedUnitNames", failedUnitNames);
             m.put("unreachablePorts", unreachablePorts);
             m.put("networkPacketLossPercent", networkPacketLossPercent);
             m.put("logAnomalyHint", logAnomalyHint);
@@ -828,7 +901,9 @@ public class AutonomousOpsOrchestrator {
             sb.append("| 负载 | CPU ").append(String.format(Locale.ROOT, "%.1f", cpuUsagePercent))
                     .append("% / 内存 ").append(String.format(Locale.ROOT, "%.1f", memUsagePercent)).append("% |\n");
             sb.append("| 磁盘 | 最高使用率约 ").append(String.format(Locale.ROOT, "%.0f", maxDiskUsePercent)).append("% |\n");
-            sb.append("| 服务 | ").append(hasFailedUnits ? "存在失败/停止单元" : "未发现 failed 单元").append(" |\n");
+            sb.append("| 服务 | ").append(hasFailedUnits
+                    ? "存在失败/停止单元" + (failedUnitNames.isEmpty() ? "" : "：" + String.join(", ", failedUnitNames))
+                    : "未发现 failed 单元").append(" |\n");
             sb.append("| 网络 | ping 丢包约 ").append(String.format(Locale.ROOT, "%.0f", networkPacketLossPercent)).append("% |\n");
             sb.append("| 端口 | ").append(unreachablePorts.isEmpty() ? "监测端口均可达"
                     : "不可达: " + unreachablePorts).append(" |\n");

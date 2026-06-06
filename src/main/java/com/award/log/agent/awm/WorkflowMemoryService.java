@@ -1,0 +1,289 @@
+package com.award.log.agent.awm;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
+
+/**
+ * Workflow Memory 持久化与内存缓存（AWM M + W）。
+ */
+@Slf4j
+@Service
+public class WorkflowMemoryService {
+
+    private final JdbcTemplate jdbcTemplate;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final CopyOnWriteArrayList<OpsWorkflow> cache = new CopyOnWriteArrayList<>();
+
+    @Value("${agent.awm.enabled:true}")
+    private boolean enabled;
+
+    @Value("${agent.awm.seed-on-startup:true}")
+    private boolean seedOnStartup;
+
+    @Value("${agent.awm.max-workflows-per-domain:12}")
+    private int maxWorkflowsPerDomain;
+
+    public WorkflowMemoryService(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    @PostConstruct
+    void init() {
+        ensureTable();
+        reloadCache();
+        if (seedOnStartup && enabled) {
+            seedIfEmpty();
+            seedMissingDomains();
+        }
+    }
+
+    private void seedMissingDomains() {
+        try {
+            if (countByDomain("cpu") == 0) {
+                for (OpsWorkflow wf : WorkflowSeedData.cpuWorkflows()) {
+                    upsert(wf, false);
+                }
+                reloadCache();
+                log.info("AWM 补种 CPU workflow {} 条", WorkflowSeedData.cpuWorkflows().size());
+            }
+            if (countByDomain("service") == 0) {
+                for (OpsWorkflow wf : WorkflowSeedData.serviceWorkflows()) {
+                    upsert(wf, false);
+                }
+                reloadCache();
+                log.info("AWM 补种 service workflow {} 条", WorkflowSeedData.serviceWorkflows().size());
+            }
+        } catch (Exception e) {
+            log.debug("AWM 补种跳过: {}", e.getMessage());
+        }
+    }
+
+    void ensureTable() {
+        try {
+            jdbcTemplate.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ops_workflow_memory (
+                      id BIGINT NOT NULL AUTO_INCREMENT,
+                      workflow_id VARCHAR(64) NOT NULL,
+                      domain_tag VARCHAR(32) NOT NULL,
+                      finding_kinds VARCHAR(256) DEFAULT NULL,
+                      title VARCHAR(255) NOT NULL,
+                      description TEXT,
+                      steps_json LONGTEXT NOT NULL,
+                      source_type VARCHAR(16) NOT NULL DEFAULT 'seed',
+                      source_trace_id VARCHAR(64) DEFAULT NULL,
+                      utility_count INT NOT NULL DEFAULT 0,
+                      success_count INT NOT NULL DEFAULT 0,
+                      enabled TINYINT(1) NOT NULL DEFAULT 1,
+                      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                      PRIMARY KEY (id),
+                      UNIQUE KEY uk_workflow_id (workflow_id),
+                      KEY idx_domain_tag (domain_tag),
+                      KEY idx_enabled (enabled)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent Workflow Memory'
+                    """);
+        } catch (Exception e) {
+            log.warn("创建 ops_workflow_memory 表失败（可能无库权限）: {}", e.getMessage());
+        }
+    }
+
+    public void reloadCache() {
+        cache.clear();
+        if (!enabled) {
+            return;
+        }
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT workflow_id, domain_tag, finding_kinds, title, description, steps_json, "
+                            + "source_type, source_trace_id, utility_count, enabled "
+                            + "FROM ops_workflow_memory WHERE enabled = 1 ORDER BY utility_count DESC, id ASC");
+            for (Map<String, Object> row : rows) {
+                OpsWorkflow wf = fromRow(row);
+                if (wf != null) {
+                    cache.add(wf);
+                }
+            }
+            log.info("AWM 已加载 workflow {} 条", cache.size());
+        } catch (Exception e) {
+            log.warn("加载 workflow memory 失败: {}", e.getMessage());
+        }
+    }
+
+    private void seedIfEmpty() {
+        try {
+            Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM ops_workflow_memory", Integer.class);
+            if (count != null && count > 0) {
+                return;
+            }
+            for (OpsWorkflow wf : WorkflowSeedData.allSeeds()) {
+                upsert(wf, false);
+            }
+            reloadCache();
+            log.info("AWM seed 写入 workflow {} 条", WorkflowSeedData.allSeeds().size());
+        } catch (Exception e) {
+            log.warn("AWM seed 失败: {}", e.getMessage());
+        }
+    }
+
+    public List<OpsWorkflow> listEnabled() {
+        return Collections.unmodifiableList(new ArrayList<>(cache));
+    }
+
+    public List<OpsWorkflow> listByDomain(String domainTag) {
+        if (domainTag == null) {
+            return listEnabled();
+        }
+        String d = domainTag.toLowerCase(Locale.ROOT);
+        return cache.stream()
+                .filter(w -> d.equals(w.domainTag()))
+                .collect(Collectors.toList());
+    }
+
+    public void upsert(OpsWorkflow workflow, boolean incrementUtility) {
+        if (workflow == null || workflow.workflowId() == null) {
+            return;
+        }
+        try {
+            String stepsJson = objectMapper.writeValueAsString(
+                    workflow.steps().stream().map(OpsWorkflowStep::toMap).toList());
+            String kinds = workflow.findingKinds() == null ? "" :
+                    String.join(",", workflow.findingKinds());
+            int utility = workflow.utilityCount() + (incrementUtility ? 1 : 0);
+
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO ops_workflow_memory
+                      (workflow_id, domain_tag, finding_kinds, title, description, steps_json,
+                       source_type, source_trace_id, utility_count, enabled)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    ON DUPLICATE KEY UPDATE
+                      domain_tag = VALUES(domain_tag),
+                      finding_kinds = VALUES(finding_kinds),
+                      title = VALUES(title),
+                      description = VALUES(description),
+                      steps_json = VALUES(steps_json),
+                      source_type = IF(VALUES(source_type) = 'seed', source_type, VALUES(source_type)),
+                      source_trace_id = COALESCE(VALUES(source_trace_id), source_trace_id),
+                      utility_count = utility_count + ?,
+                      enabled = VALUES(enabled)
+                    """,
+                    workflow.workflowId(),
+                    workflow.domainTag(),
+                    kinds,
+                    workflow.title(),
+                    workflow.description(),
+                    stepsJson,
+                    workflow.sourceType() != null ? workflow.sourceType() : "online",
+                    workflow.sourceTraceId(),
+                    utility,
+                    workflow.enabled() ? 1 : 0,
+                    incrementUtility ? 1 : 0
+            );
+            reloadCache();
+        } catch (Exception e) {
+            log.warn("upsert workflow 失败 id={}: {}", workflow.workflowId(), e.getMessage());
+        }
+    }
+
+    public void recordUtility(String workflowId) {
+        if (workflowId == null || workflowId.isBlank()) {
+            return;
+        }
+        try {
+            jdbcTemplate.update(
+                    "UPDATE ops_workflow_memory SET utility_count = utility_count + 1 WHERE workflow_id = ?",
+                    workflowId);
+            reloadCache();
+        } catch (Exception e) {
+            log.debug("recordUtility 失败: {}", e.getMessage());
+        }
+    }
+
+    public boolean existsWithToolSequence(String domainTag, List<String> toolSequence) {
+        if (toolSequence == null || toolSequence.size() < 2) {
+            return false;
+        }
+        return cache.stream()
+                .filter(w -> domainTag == null || domainTag.equals(w.domainTag()))
+                .anyMatch(w -> w.toolSequence().equals(toolSequence));
+    }
+
+    @SuppressWarnings("unchecked")
+    OpsWorkflow fromRow(Map<String, Object> row) {
+        try {
+            List<Map<String, Object>> stepMaps = objectMapper.readValue(
+                    String.valueOf(row.get("steps_json")), new TypeReference<>() {});
+            List<OpsWorkflowStep> steps = new ArrayList<>();
+            for (Map<String, Object> sm : stepMaps) {
+                Map<String, String> args = new LinkedHashMap<>();
+                Object rawArgs = sm.get("argsTemplate");
+                if (rawArgs instanceof Map<?, ?> am) {
+                    am.forEach((k, v) -> args.put(String.valueOf(k), v == null ? "" : String.valueOf(v)));
+                }
+                steps.add(new OpsWorkflowStep(
+                        str(sm.get("envDesc")),
+                        str(sm.get("reason")),
+                        str(sm.get("toolName")),
+                        args));
+            }
+            String kindsRaw = str(row.get("finding_kinds"));
+            List<String> kinds = kindsRaw == null || kindsRaw.isBlank()
+                    ? List.of()
+                    : Arrays.stream(kindsRaw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+            int utility = row.get("utility_count") instanceof Number n ? n.intValue() : 0;
+            boolean en = row.get("enabled") instanceof Number n ? n.intValue() == 1 : true;
+            return new OpsWorkflow(
+                    str(row.get("workflow_id")),
+                    str(row.get("domain_tag")),
+                    kinds,
+                    str(row.get("title")),
+                    str(row.get("description")),
+                    steps,
+                    str(row.get("source_type")),
+                    str(row.get("source_trace_id")),
+                    utility,
+                    en
+            );
+        } catch (Exception e) {
+            log.debug("解析 workflow 行失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    public int countEnabled() {
+        return cache.size();
+    }
+
+    public int countByDomain(String domain) {
+        return (int) cache.stream().filter(w -> domain.equals(w.domainTag())).count();
+    }
+
+    public boolean isDomainFull(String domainTag) {
+        return countByDomain(domainTag) >= maxWorkflowsPerDomain;
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : String.valueOf(o);
+    }
+}

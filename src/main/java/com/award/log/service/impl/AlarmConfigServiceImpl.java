@@ -103,11 +103,8 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
 
     private Map<String, Object> buildDefaultMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("pushChannels", Arrays.asList("WECHAT", "EMAIL"));
         m.put("alarmLevel", "ERROR");
         m.put("errorThreshold", 5);
-        m.put("wechatUserId", "");
-        m.put("emailAddress", "");
         m.put("enabled", true);
         m.put("cooldownMs", 300000L);
         return m;
@@ -115,11 +112,8 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
 
     private Map<String, Object> normalizeRaw(Map<String, Object> raw) {
         Map<String, Object> n = new LinkedHashMap<>();
-        n.put("pushChannels", normalizeChannels(raw.get("pushChannels")));
         n.put("alarmLevel", normalizeLevel(asString(raw.get("alarmLevel"), "ERROR")));
         n.put("errorThreshold", asInt(raw.get("errorThreshold"), 5));
-        n.put("wechatUserId", asString(raw.get("wechatUserId"), ""));
-        n.put("emailAddress", asString(raw.get("emailAddress"), asString(raw.get("email"), "")));
         n.put("enabled", asBoolean(raw.get("enabled"), true));
         n.put("cooldownMs", asLong(raw.get("cooldownMs"), 300000L));
         n.put("updatedAt", LocalDateTime.now().toString());
@@ -149,11 +143,8 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
     private TaskAlarmConfig mapToConfig(String taskId, Map<String, Object> map) {
         TaskAlarmConfig config = new TaskAlarmConfig();
         config.setTaskId(taskId);
-        config.setPushChannels(normalizeChannels(map.get("pushChannels")));
         config.setAlarmLevel(normalizeLevel(asString(map.get("alarmLevel"), "ERROR")));
         config.setErrorThreshold(asInt(map.get("errorThreshold"), 5));
-        config.setWechatUserId(asString(map.get("wechatUserId"), ""));
-        config.setEmailAddress(asString(map.get("emailAddress"), ""));
         config.setEnabled(asBoolean(map.get("enabled"), true));
         config.setCooldownMs(asLong(map.get("cooldownMs"), 300000L));
         String updatedAt = asString(map.get("updatedAt"), null);
@@ -164,29 +155,6 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
             }
         }
         return config;
-    }
-
-    private List<String> normalizeChannels(Object channelsObj) {
-        List<String> channels = new ArrayList<>();
-        if (channelsObj instanceof List<?> list) {
-            for (Object o : list) {
-                String ch = asString(o, "").trim();
-                if (ch.isEmpty()) {
-                    continue;
-                }
-                if ("wechat".equalsIgnoreCase(ch)) {
-                    channels.add("WECHAT");
-                } else if ("email".equalsIgnoreCase(ch)) {
-                    channels.add("EMAIL");
-                } else {
-                    channels.add(ch.toUpperCase(Locale.ROOT));
-                }
-            }
-        }
-        if (channels.isEmpty()) {
-            channels.add("EMAIL");
-        }
-        return channels;
     }
 
     private String normalizeLevel(String level) {

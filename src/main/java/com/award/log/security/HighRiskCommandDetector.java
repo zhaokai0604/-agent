@@ -35,18 +35,16 @@ public class HighRiskCommandDetector {
             return false;
         }
 
-        log.info("检测高危命令: {}", command);
-
-        if (ruleExpressionEvaluator != null) {
-            boolean result = evaluateWithRuleEngine(command);
-            log.info("规则引擎评估结果: {}", result);
-            return result;
-        } else {
-            log.warn("规则引擎不可用，使用内置正则评估");
-            boolean result = evaluateWithRegex(command);
-            log.info("内置正则评估结果: {}", result);
-            return result;
+        if (evaluateWithRegex(command)) {
+            log.info("内置正则命中高危命令特征");
+            return true;
         }
+
+        if (ruleExpressionEvaluator != null && evaluateWithRuleEngine(command)) {
+            log.info("扩展高危命令规则引擎命中");
+            return true;
+        }
+        return false;
     }
 
     private boolean evaluateWithRuleEngine(String command) {
@@ -55,20 +53,19 @@ public class HighRiskCommandDetector {
                 "COMMAND", command.toUpperCase()
             );
 
-            // 评估所有启用的规则
             for (HighRiskCommandRule rule : ruleCache.values()) {
-                if (rule.isEnabled()) {
-                    boolean matched = ruleExpressionEvaluator.evaluate(rule.getRuleExpression(), context);
-                    if (matched) {
-                        log.info("规则 [{}] 匹配成功", rule.getName());
-                        return true;
-                    }
+                if (!rule.isEnabled()) {
+                    continue;
+                }
+                if (ruleExpressionEvaluator.evaluate(rule.getRuleExpression(), context)) {
+                    log.info("规则 [{}] 匹配成功", rule.getName());
+                    return true;
                 }
             }
             return false;
         } catch (Exception e) {
-            log.error("规则引擎评估异常，降级到正则: {}", e.getMessage());
-            return evaluateWithRegex(command);
+            log.warn("高危命令规则引擎评估异常，已忽略该规则: {}", e.getMessage());
+            return false;
         }
     }
 

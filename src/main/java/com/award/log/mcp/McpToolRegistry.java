@@ -4,7 +4,10 @@ import com.award.log.mcp.tools.*;
 import com.award.log.security.McpToolSurface;
 import com.award.log.security.ReadOnlySurfaceDenylist;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.stereotype.Component;
+import org.springframework.util.ClassUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -91,7 +94,22 @@ public class McpToolRegistry {
             return getToolBeans();
         }
         return toolBeans.stream()
-                .filter(bean -> !denylist.denies(bean.getClass().getSimpleName()))
+                .filter(bean -> !denylist.denies(ClassUtils.getUserClass(bean).getSimpleName()))
                 .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    /**
+     * Spring AI 1.1：{@code ChatClient.tools(List)} 会把整个 List 当作单个对象导致扫描失败；
+     * 须通过 {@link MethodToolCallbackProvider} 注册 @Tool 方法。
+     */
+    public ToolCallback[] getToolCallbacksForSurface(McpToolSurface surface, ReadOnlySurfaceDenylist denylist) {
+        List<Object> beans = getToolBeansForSurface(surface, denylist);
+        if (beans.isEmpty()) {
+            return new ToolCallback[0];
+        }
+        return MethodToolCallbackProvider.builder()
+                .toolObjects(beans.toArray())
+                .build()
+                .getToolCallbacks();
     }
 }

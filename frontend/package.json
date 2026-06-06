@@ -2,6 +2,9 @@
   "name": "log-analysis-dashboard",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

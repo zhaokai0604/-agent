@@ -43,7 +43,6 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${DB_URL:jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
-    # 仓库不设默认密码：本地复制 application-local.example.yml 为 application-local.yml 并填写，或导出 DB_PASSWORD
     password: ${DB_PASSWORD:}
   
   # Redis Configuration
@@ -61,7 +60,7 @@ spring:
           max-idle: 8
           min-idle: 0
 
-   # Spring AI Configuration (Tongyi Qianwen via OpenAI Compatible Interface)
+   # Spring AI Configuration (DeepSeek via OpenAI Compatible Interface)
   ai:
     chat:
       memory:
@@ -69,15 +68,18 @@ spring:
           jdbc:
             initialize-schema: never
     openai:
-      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-      # 不设默认密钥：未配置时 Spring AI 相关 Bean 可能不完整，助手/诊断将不可用，直至设置 AI_API_KEY 或 application-local.yml
+      base-url: ${AI_BASE_URL:https://api.deepseek.com}
+      # 须通过环境变量 AI_API_KEY 或 application-local.yml 配置，勿在仓库内写默认值
       api-key: ${AI_API_KEY:}
       chat:
         options:
-          model: qwen-plus-latest
+          model: ${AI_CHAT_MODEL:deepseek-chat}
+          temperature: ${AI_CHAT_TEMPERATURE:0.1}
+          top-p: ${AI_CHAT_TOP_P:0.85}
       embedding:
         options:
-          model: text-embedding-v3
+          # DeepSeek 无独立 embedding 接口；当前项目主链路不依赖，保留占位避免 Spring AI 装配异常
+          model: ${AI_EMBEDDING_MODEL:deepseek-chat}
           dimensions: 1024
   
   # Prometheus Configuration
@@ -85,29 +87,6 @@ spring:
     export:
       prometheus:
         enabled: true
-  
-  # Email Configuration
-  mail:
-    host: ${MAIL_HOST:smtp.qq.com}
-    port: ${MAIL_PORT:465}
-    username: ${MAIL_USERNAME:}
-    password: ${MAIL_PASSWORD:}
-    protocol: ${MAIL_PROTOCOL:smtp}
-    properties:
-      mail:
-        smtp:
-          auth: true
-          ssl:
-            enable: true
-            required: true
-            trust: smtp.qq.com
-          connectiontimeout: 15000
-          timeout: 15000
-          writetimeout: 15000
-          # QQ 邮箱 465 为隐式 SSL，与 STARTTLS 同时开启易导致握手/发信失败；587 端口可改为 true
-          starttls:
-            enable: ${MAIL_STARTTLS_ENABLE:false}
-        debug: false
   
   # Elasticsearch Configuration
   elasticsearch:
@@ -142,22 +121,6 @@ spring:
       concurrency: 3
     template:
       default-topic: raw-logs
-
-# WeChat Enterprise Configuration
-wechat:
-  corp-id: ${WECHAT_CORP_ID:}
-  app-secret: ${WECHAT_APP_SECRET:}
-  agent-id: ${WECHAT_AGENT_ID:1000002}
-  
-# Email Alias
-email:
-  alias: ThreshCore
-  
-# Push Configuration
-push:
-  retry:
-    max-attempts: 3
-    interval-ms: 5000
 
 # Log Collector Configuration
 log:
@@ -214,9 +177,9 @@ log:
         # LoongArch64 上 ONNX 本地库常不可用，true 时跳过加载、全程启发式（赛题交付推荐）
         force-heuristic-on-loongarch: ${RF_FORCE_HEURISTIC_LOONGARCH:false}
 
-# Alarm Configuration（日志分析邮件/企微推送）
-# 注意：推送渠道、收件人、错误阈值、冷却等以控制台「告警配置」为准，持久化在运行目录 alarm-config.json；
-# 本段仅 alarm.aggregation.* 被 AiLogAlarmServiceImpl 读取（5 分钟同类告警聚合）；error.threshold / min.severity / push.interval 当前未接入推送策略。
+# Alarm Configuration（日志分析平台内告警）
+# 注意：启用开关、最低级别、错误阈值、冷却等以控制台「告警配置」为准，持久化在运行目录 alarm-config.json；
+# 本段仅 alarm.aggregation.* 被 AiLogAlarmServiceImpl 读取（5 分钟同类告警聚合）。
 alarm:
   aggregation:
     enabled: true
@@ -284,10 +247,14 @@ agent:
     max-instruction-length: ${AGENT_MAX_INSTRUCTION_LEN:16384}
     max-parameter-entries: ${AGENT_MAX_PARAM_ENTRIES:48}
     max-single-string-param-chars: ${AGENT_MAX_PARAM_STRING_CHARS:131072}
+    # true：McpToolDispatcher 可调度工具整体授权（修复 Catalog 扫描遗漏导致的 UNKNOWN_TOOL）
+    mcp-http-allow-all-registered: ${AGENT_MCP_HTTP_ALLOW_ALL:false}
     # Agentic 风险分：<autoMax 倾向自动执行；[autoMax, confirmMax] 需二次确认；>confirmMax 拒绝
-    risk-score-auto-max: ${AGENT_RISK_AUTO_MAX:3}
-    risk-score-confirm-max: ${AGENT_RISK_CONFIRM_MAX:7}
-    read-only-surface-utterance-min: ${AGENT_READ_ONLY_UTTERANCE_MIN:4.5}
+    risk-score-auto-max: ${AGENT_RISK_AUTO_MAX:5}
+    risk-score-confirm-max: ${AGENT_RISK_CONFIRM_MAX:9.5}
+    read-only-surface-utterance-min: ${AGENT_READ_ONLY_UTTERANCE_MIN:7.5}
+    # 语义种子 Jaccard 阈值（越高越不易误判 HIGH）
+    intent-semantic-jaccard-min: ${AGENT_INTENT_SEMANTIC_JACCARD:0.48}
     # true：MEDIUM 意图仍收缩为只读工具面（旧行为）；false：允许智能体在 MCP 策略下调用写类工具（默认）
     medium-intent-shrink-to-readonly: ${AGENT_MEDIUM_INTENT_READONLY:false}
     # true：仅 LOW 意图会因高分 utterance 收缩只读；false：任意非 HIGH 均可能因 utterance 只读（更保守）
@@ -320,7 +287,8 @@ agent:
     health-check-host: ${AGENT_AUTONOMOUS_HEALTH_HOST:127.0.0.1}
     health-check-ports: ${AGENT_AUTONOMOUS_HEALTH_PORTS:8080,80,443}
     ping-target: ${AGENT_AUTONOMOUS_PING_TARGET:8.8.8.8}
-    run-after-patrol: ${AGENT_AUTONOMOUS_AFTER_PATROL:true}
+    # 巡检后是否再跑全栈 AutonomousOpsOrchestrator；默认 false，与 ops.auto-remediation 二选一
+    run-after-patrol: ${AGENT_AUTONOMOUS_AFTER_PATROL:false}
   trust:
     notify-max: ${AGENT_TRUST_NOTIFY_MAX:6.0}
   log-safety:
@@ -342,6 +310,15 @@ agent:
   paths:
     # 默认清单见 com.award.log.config.AgentOpsProperties.Paths（麒麟/Linux 常见路径）
     policy-version: path-policy-v2-kylin
+  # Agent Workflow Memory（AWM）：从成功轨迹沉淀可复用处置套路
+  awm:
+    enabled: ${AGENT_AWM_ENABLED:true}
+    seed-on-startup: ${AGENT_AWM_SEED:true}
+    max-workflows-per-domain: ${AGENT_AWM_MAX_PER_DOMAIN:12}
+    failure-insight-enabled: ${AGENT_AWM_FAILURE_INSIGHT:true}
+    failure-insight-max: ${AGENT_AWM_FAILURE_INSIGHT_MAX:24}
+    # LLM 归纳（论文 §B）：需配置 AI_API_KEY；失败自动回退 rule-based
+    llm-induction-enabled: ${AGENT_AWM_LLM_INDUCTION:false}
 
 qdrant:
   url: ${QDRANT_URL:http://localhost:6333}
@@ -354,6 +331,12 @@ audit:
   cleanup-cron: ${AUDIT_CLEANUP_CRON:0 0 3 * * ?}
 
 ops:
+  governance:
+    enabled: ${OPS_GOVERNANCE_ENABLED:true}
+    delivery-profile: prod-kylin
+    default-path-tier: NON_CORE
+    default-service-tier: NON_CORE
+    # 服务/路径分级与动作准入矩阵见 OpsGovernanceProperties 默认值；可按环境覆盖
   dry-run:
     global: ${OPS_DRY_RUN_GLOBAL:false}
   websocket:

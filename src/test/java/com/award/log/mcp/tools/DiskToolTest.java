@@ -1,5 +1,6 @@
 package com.award.log.mcp.tools;
 
+import com.award.log.config.OpsDryRunProperties;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,7 +29,9 @@ class DiskToolTest {
     void setUp() {
         executorService = Executors.newSingleThreadExecutor();
         objectMapper = new ObjectMapper();
-        MinPrivilegeExecutor minPrivilegeExecutor = new MinPrivilegeExecutor("root", false, executorService);
+        OpsDryRunProperties dryRun = new OpsDryRunProperties();
+        dryRun.setGlobal(false);
+        MinPrivilegeExecutor minPrivilegeExecutor = new MinPrivilegeExecutor("root", false, dryRun, executorService);
         diskTool = new DiskTool(executorService, objectMapper, minPrivilegeExecutor, null);
         System.out.println("=== DiskTool Test Setup Complete ===");
     }

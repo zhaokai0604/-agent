@@ -1,9 +1,11 @@
 package com.award.log.controller;
 
+import com.award.log.config.SystemConfigRuntimeState;
 import com.award.log.decision.CollaborativeDecisionService;
 import com.award.log.mcp.McpToolRegistry;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.tools.*;
+import com.award.log.agent.awm.FailureInsightService;
 import com.award.log.security.HttpAuditSubject;
 import com.award.log.security.McpInvocationSecurityGate;
 import com.award.log.security.HighRiskCommandDetector;
@@ -12,6 +14,7 @@ import com.award.log.security.OpsPathPolicy;
 import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.OpsSecurityRejectedException;
 import com.award.log.security.PromptInjectionGuard;
+import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.security.RiskLevel;
 import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.trace.TraceService;
@@ -97,6 +100,15 @@ public class ChatController {
     @Autowired
     private ToolSurfaceResolver toolSurfaceResolver;
 
+    @Autowired
+    private ReadOnlySurfaceDenylist readOnlySurfaceDenylist;
+
+    @Autowired(required = false)
+    private FailureInsightService failureInsightService;
+
+    @Autowired
+    private SystemConfigRuntimeState systemConfigRuntimeState;
+
     @PostMapping("/chat")
     public Map<String, Object> chat(@RequestBody Map<String, Object> request) {
         Object messageObj = request != null ? request.get("message") : null;
@@ -125,6 +137,7 @@ public class ChatController {
                 log.warn("检测到注入攻击，已拦截: {}", userInput);
                 steps.add(TraceService.step("security", "REJECT_INJECTION"));
                 recordAudit(traceId, userInput, riskLevel, "REJECT_INJECTION", toolName, false, resultSummary, startTime, steps);
+                captureFailureInsight(userInput, "REJECT_INJECTION", toolName, resultSummary, traceId);
                 return buildResponse("检测到注入攻击，已拦截", traceId, riskLevel, false);
             }
 
@@ -136,6 +149,7 @@ public class ChatController {
                 log.warn("高风险意图，已拦截: {}", userInput);
                 steps.add(TraceService.step("security", "REJECT_HIGH_INTENT"));
                 recordAudit(traceId, userInput, riskLevel, "REJECT_HIGH_INTENT", toolName, false, resultSummary, startTime, steps);
+                captureFailureInsight(userInput, "REJECT_HIGH_INTENT", toolName, resultSummary, traceId);
                 return buildResponse("检测到高风险操作，需要人工确认", traceId, riskLevel, false);
             }
 
@@ -147,6 +161,7 @@ public class ChatController {
                 log.warn("高危命令，已拦截: {}", userInput);
                 steps.add(TraceService.step("security", "REJECT_HIGH_RISK_COMMAND"));
                 recordAudit(traceId, userInput, riskLevel, "REJECT_HIGH_RISK_COMMAND", toolName, false, resultSummary, startTime, steps);
+                captureFailureInsight(userInput, "REJECT_HIGH_RISK_COMMAND", toolName, resultSummary, traceId);
                 return buildResponse("检测到高危命令，已拦截", traceId, riskLevel, false);
             }
 
@@ -213,12 +228,15 @@ public class ChatController {
             OpsSecurityContext.open(traceId, userInput, false,
                     toolSurfaceResolver.resolve(userInput, surfaceRisk));
             try {
-                String response = chatClient.prompt()
+                org.springframework.ai.tool.ToolCallback[] toolCallbacks = mcpToolRegistry.getToolCallbacksForSurface(
+                        toolSurfaceResolver.resolve(userInput, surfaceRisk), readOnlySurfaceDenylist);
+                var promptSpec = chatClient.prompt()
                         .system(systemPrompt)
-                        .user(userInput)
-                        .tools(mcpToolRegistry.getToolBeans())
-                        .call()
-                        .content();
+                        .user(userInput);
+                if (toolCallbacks.length > 0) {
+                    promptSpec = promptSpec.toolCallbacks(toolCallbacks);
+                }
+                String response = promptSpec.call().content();
                 log.info("AI Agent 处理完成: {}", response);
                 return new ToolExecutionResult("AI_AGENT", response);
             } finally {
@@ -299,7 +317,9 @@ public class ChatController {
             if (lowerInput.contains("网络") || lowerInput.contains("ping")) {
                 log.info("调用 NetworkTool.diagnoseNetwork()");
                 String target = extractIp(lowerInput);
-                if (target == null) target = "8.8.8.8";
+                if (target == null || target.isBlank()) {
+                    target = systemConfigRuntimeState.getPingTarget();
+                }
                 String result = networkTool.diagnoseNetwork(target, "ping", 4);
                 String response = parseNetworkResult(result, target);
                 return new ToolExecutionResult("NetworkTool", response);
@@ -475,6 +495,18 @@ public class ChatController {
             return "/tmp";
         }
         return "/tmp";
+    }
+
+    private void captureFailureInsight(
+            String userInput,
+            String securityCode,
+            String toolName,
+            String detail,
+            String traceId
+    ) {
+        if (failureInsightService != null) {
+            failureInsightService.captureReject(userInput, securityCode, toolName, detail, traceId);
+        }
     }
 
     private void recordAudit(

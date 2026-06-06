@@ -93,7 +93,7 @@ public class McpInvocationSecurityGate {
             log.warn("非法工具名格式: {}", toolName);
             return GateDecision.block("TOOL_NAME_REJECTED", "工具名称格式不合法");
         }
-        if (!mcpToolCatalog.isHttpAllowed(toolName)) {
+        if (!mcpToolCatalog.isRegistered(toolName)) {
             return GateDecision.block("UNKNOWN_TOOL", "未知或未授权的工具: " + toolName);
         }
 
@@ -103,6 +103,9 @@ public class McpInvocationSecurityGate {
                     && readOnlySurfaceDenylist.denies(toolName)) {
                 return GateDecision.block("READ_ONLY_TOOL_SURFACE",
                         "当前会话处于只读工具面：禁止调用 " + toolName + "。请降低指令风险或使用 MCP 控制台在低风险上下文中执行。");
+            }
+            if (!mcpToolCatalog.isHttpAllowed(toolName)) {
+                return GateDecision.block("TOOL_NOT_HTTP_ALLOWED", "工具未开放 HTTP/Agent 调用: " + toolName);
             }
         }
 
@@ -153,14 +156,13 @@ public class McpInvocationSecurityGate {
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
 
-        boolean needByScore = profile == McpSecurityProfile.INITIAL_REQUEST
+        boolean needByScore = (profile == McpSecurityProfile.INITIAL_REQUEST
+                || profile == McpSecurityProfile.CHAT_AGENT_TOOL)
                 && scoreResult.total() >= autoMax
                 && scoreResult.total() <= confirmMax;
-        boolean needByIntent = profile == McpSecurityProfile.INITIAL_REQUEST
+        boolean needByIntent = (profile == McpSecurityProfile.INITIAL_REQUEST
+                || profile == McpSecurityProfile.CHAT_AGENT_TOOL)
                 && intentRisk == RiskLevel.MEDIUM;
-        if (profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
-            return GateDecision.allow(intentRisk, scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
-        }
         if (needByScore || needByIntent) {
             String extra = needByIntent && !needByScore ? "意图为中等风险；" : "";
             String msg = String.format(Locale.ROOT,
@@ -195,11 +197,16 @@ public class McpInvocationSecurityGate {
     }
 
     /**
-     * 工作台 ChatClient 多步 {@code @Tool}：与 HTTP 共用评分/注入/意图规则，但不触发 NEED_CONFIRM（由工具层 dry-run/confirm 参数约束）。
+     * 工作台 ChatClient 多步 {@code @Tool}：与 HTTP 共用评分/注入/意图规则；MEDIUM 意图或确认区间风险分须二次确认。
      */
     public GateDecision evaluateChatToolInvocation(String toolBeanName, String instruction) {
         String instr = instruction == null ? "" : instruction.trim();
-        return evaluate(toolBeanName, Map.of(), instr, null, McpSecurityProfile.CHAT_AGENT_TOOL);
+        String userMsg = null;
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        if (ctx != null) {
+            userMsg = ctx.getUserMessage();
+        }
+        return evaluate(toolBeanName, Map.of(), instr, userMsg, McpSecurityProfile.CHAT_AGENT_TOOL);
     }
 
     private static String mergeRiskUtterance(String userUtterance, String instruction) {
@@ -239,9 +246,6 @@ public class McpInvocationSecurityGate {
             return false;
         }
         String u = userUtterance.trim();
-        if (intentRiskFilter.evaluate(u) == RiskLevel.HIGH) {
-            return true;
-        }
         return DESTRUCTIVE_UTTERANCE_CN.matcher(u).find();
     }
 

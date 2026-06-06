@@ -26,7 +26,7 @@ public class IntentRiskFilter {
 
     private static final Pattern MEDIUM_RISK_PATTERN = Pattern.compile(
             "(修改配置|重启服务|systemctl\\s+restart|chmod\\s+[0-7]{3,4}|chown\\s+-R|kill\\s+-9|userdel|groupdel|"
-                    + "删除文件|删除临时|真实删除|彻底删除|不要预览|rm\\s+-f\\s+/|truncate\\s+-s\\s+0)",
+                    + "rm\\s+-f\\s+/|truncate\\s+-s\\s+0)",
             Pattern.CASE_INSENSITIVE
     );
 
@@ -39,16 +39,19 @@ public class IntentRiskFilter {
     private final CollaborativeDecisionService collaborativeDecisionService;
     private final PromptInjectionGuard promptInjectionGuard;
     private final boolean intentUseMl;
+    private final double semanticJaccardMin;
 
     @Autowired(required = false)
     public IntentRiskFilter(
             CollaborativeDecisionService collaborativeDecisionService,
             PromptInjectionGuard promptInjectionGuard,
-            @org.springframework.beans.factory.annotation.Value("${agent.security.intent-use-ml:false}") boolean intentUseMl
+            @org.springframework.beans.factory.annotation.Value("${agent.security.intent-use-ml:false}") boolean intentUseMl,
+            @org.springframework.beans.factory.annotation.Value("${agent.security.intent-semantic-jaccard-min:0.48}") double semanticJaccardMin
     ) {
         this.collaborativeDecisionService = collaborativeDecisionService;
         this.promptInjectionGuard = promptInjectionGuard;
         this.intentUseMl = intentUseMl;
+        this.semanticJaccardMin = Math.max(0.2, Math.min(0.9, semanticJaccardMin));
     }
 
     public RiskLevel evaluate(String userInstruction) {
@@ -138,7 +141,7 @@ public class IntentRiskFilter {
         }
         for (String seed : HIGH_RISK_SEED_PHRASES) {
             double jac = jaccard(doc, wordTokens(seed));
-            if (jac >= 0.34) {
+            if (jac >= semanticJaccardMin) {
                 return true;
             }
         }

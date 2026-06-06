@@ -2,6 +2,7 @@ package com.award.log.controller;
 
 import com.award.log.common.Result;
 import com.award.log.decision.RandomForestDecisionEngine;
+import com.award.log.governance.OpsGovernanceService;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.platform.KylinCommandProbe;
 import com.award.log.util.OsRuntime;
@@ -29,6 +30,7 @@ public class PlatformInfoController {
     private final Environment environment;
     private final RandomForestDecisionEngine randomForestDecisionEngine;
     private final MinPrivilegeExecutor minPrivilegeExecutor;
+    private final OpsGovernanceService opsGovernanceService;
 
     @Autowired(required = false)
     private KylinCommandProbe kylinCommandProbe;
@@ -36,31 +38,26 @@ public class PlatformInfoController {
     @Value("${platform.kylin.expected-arch:loongarch64}")
     private String expectedArch;
 
-    public PlatformInfoController(Environment environment, RandomForestDecisionEngine randomForestDecisionEngine) {
+    public PlatformInfoController(
+            Environment environment,
+            RandomForestDecisionEngine randomForestDecisionEngine,
+            MinPrivilegeExecutor minPrivilegeExecutor,
+            OpsGovernanceService opsGovernanceService) {
         this.environment = environment;
         this.randomForestDecisionEngine = randomForestDecisionEngine;
-        this.minPrivilegeExecutor = null;
+        this.minPrivilegeExecutor = minPrivilegeExecutor;
+        this.opsGovernanceService = opsGovernanceService;
     }
 
-    @Operation(summary = "平台与生产就绪快照（麒麟 V11 + LoongArch 验收）")
+    @Operation(summary = "平台与生产就绪快照（需登录；含治理与最小权限详情）")
     @GetMapping("/info")
     public Result<Map<String, Object>> info() {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("platform", OsRuntime.platformSummary());
+        Map<String, Object> body = buildAcceptanceBody();
 
         String[] active = environment.getActiveProfiles();
         body.put("activeProfiles", active.length == 0 ? new String[]{"default"} : active);
         body.put("prodProfileActive", Arrays.stream(active).anyMatch(p -> p.contains("prod")));
         body.put("kylinProfileActive", Arrays.stream(active).anyMatch(p -> "kylin".equals(p)));
-
-        Map<String, Object> acceptance = new LinkedHashMap<>();
-        acceptance.put("expectedArch", expectedArch);
-        acceptance.put("archMatch", OsRuntime.osArch().toLowerCase().contains(expectedArch.toLowerCase())
-                || (OsRuntime.isLoongArch() && expectedArch.toLowerCase().contains("loong")));
-        acceptance.put("kylinDetected", OsRuntime.isKylin());
-        acceptance.put("loongArchDetected", OsRuntime.isLoongArch());
-        acceptance.put("deliveryTargetMatch", OsRuntime.isKylin() && OsRuntime.isLoongArch());
-        body.put("acceptance", acceptance);
 
         body.put("randomForest", randomForestDecisionEngine.healthSnapshot());
 
@@ -76,6 +73,29 @@ public class PlatformInfoController {
         security.put("autonomousOpsEnabled", environment.getProperty("agent.autonomous.enabled"));
         body.put("security", security);
 
+        body.put("governance", opsGovernanceService.summaryForPlatform());
+
         return Result.success(body);
+    }
+
+    @Operation(summary = "麒麟 V11 + LoongArch 公开验收快照（无需登录，不含运行用户与自动化开关）")
+    @GetMapping("/acceptance")
+    public Result<Map<String, Object>> acceptance() {
+        return Result.success(buildAcceptanceBody());
+    }
+
+    private Map<String, Object> buildAcceptanceBody() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("platform", OsRuntime.platformSummary());
+
+        Map<String, Object> acceptance = new LinkedHashMap<>();
+        acceptance.put("expectedArch", expectedArch);
+        acceptance.put("archMatch", OsRuntime.osArch().toLowerCase().contains(expectedArch.toLowerCase())
+                || (OsRuntime.isLoongArch() && expectedArch.toLowerCase().contains("loong")));
+        acceptance.put("kylinDetected", OsRuntime.isKylin());
+        acceptance.put("loongArchDetected", OsRuntime.isLoongArch());
+        acceptance.put("deliveryTargetMatch", OsRuntime.isKylin() && OsRuntime.isLoongArch());
+        body.put("acceptance", acceptance);
+        return body;
     }
 }

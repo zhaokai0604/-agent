@@ -1,5 +1,6 @@
 package com.award.log.controller;
 
+import com.award.log.agent.awm.FailureInsightService;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.mcp.dispatch.McpToolParamReader;
 import com.award.log.security.McpInvocationSecurityGate.GateDecision;
@@ -25,6 +26,7 @@ public class McpExecuteController {
     private final McpSecurityService mcpSecurityService;
     private final McpExecutionService mcpExecutionService;
     private final McpAuditService mcpAuditService;
+    private final FailureInsightService failureInsightService;
 
     @GetMapping("/tools")
     public Map<String, Object> getMcpTools() {
@@ -51,6 +53,7 @@ public class McpExecuteController {
         if (decision.getType() == GateDecision.Type.BLOCK) {
             log.warn("MCP 安全门拦截: tool={} code={}", toolName, decision.getCode());
             mcpAuditService.persistGateReject(traceId, userInstruction, toolName, decision, startTime);
+            failureInsightService.captureReject(userMessage, decision.getCode(), toolName, decision.getMessage(), traceId);
             return mcpSecurityService.buildBlockResponse(traceId, startTime, decision);
         }
         if (decision.getType() == GateDecision.Type.NEED_CONFIRM) {
@@ -101,6 +104,7 @@ public class McpExecuteController {
         if (decision.getType() == GateDecision.Type.BLOCK) {
             log.warn("确认执行路径仍被安全门拦截: tool={} code={}", toolName, decision.getCode());
             mcpAuditService.persistGateReject(traceId, userInstruction, toolName, decision, startTime);
+            failureInsightService.captureReject(userMessage, decision.getCode(), toolName, decision.getMessage(), traceId);
             Map<String, Object> block = mcpSecurityService.buildBlockResponse(traceId, startTime, decision);
             return block;
         }

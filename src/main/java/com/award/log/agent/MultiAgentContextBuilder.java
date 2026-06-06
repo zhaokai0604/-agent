@@ -1,5 +1,9 @@
 package com.award.log.agent;
 
+import com.award.log.agent.awm.FailureInsightService;
+import com.award.log.agent.awm.OpsWorkflow;
+import com.award.log.agent.awm.WorkflowMemoryService;
+import com.award.log.agent.awm.WorkflowRetriever;
 import com.award.log.model.LogAlarm;
 import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.service.AiLogAlarmService;
@@ -41,6 +45,15 @@ public class MultiAgentContextBuilder {
     @Autowired(required = false)
     private ReadOnlySurfaceDenylist readOnlySurfaceDenylist;
 
+    @Autowired(required = false)
+    private WorkflowRetriever workflowRetriever;
+
+    @Autowired(required = false)
+    private WorkflowMemoryService workflowMemoryService;
+
+    @Autowired(required = false)
+    private FailureInsightService failureInsightService;
+
     public MultiAgentContextBuilder(
             StatisticsService statisticsService,
             AiLogAlarmService aiLogAlarmService,
@@ -51,11 +64,17 @@ public class MultiAgentContextBuilder {
     }
 
     public Map<String, Object> build() {
+        return buildForUser(null);
+    }
+
+    public Map<String, Object> buildForUser(String userMessage) {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("perceptionAgent", buildPerception());
         root.put("cleanupAgentPolicy", buildCleanupPolicy());
         root.put("diagnosisAgent", buildDiagnosis());
         root.put("orchestratorAgent", buildOrchestratorHints());
+        root.put("workflowMemory", buildWorkflowMemory(userMessage));
+        root.put("failureInsightMemory", buildFailureInsight(userMessage));
         root.put("correlationDigest", buildCorrelationDigest());
         if (opsOpenIncidentService != null) {
             root.put("openIncident", opsOpenIncidentService.buildOpenIncidentContext());
@@ -202,6 +221,93 @@ public class MultiAgentContextBuilder {
                 "HIGH", "禁止执行写与提权；只读诊断与上报"
         ));
         return m;
+    }
+
+    private Map<String, Object> buildWorkflowMemory(String userMessage) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (workflowMemoryService == null || !workflowMemoryService.isEnabled()) {
+            m.put("enabled", false);
+            return m;
+        }
+        m.put("enabled", true);
+        m.put("storedCount", workflowMemoryService.countEnabled());
+
+        double cpuPct = 0;
+        double diskPct = 0;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> perf = (Map<String, Object>) statisticsService.getSystemPerformance(null);
+            cpuPct = toDouble(perf.get("cpuUsage"));
+            diskPct = toDouble(perf.get("diskUsage"));
+        } catch (Exception ignored) {
+            // ignore
+        }
+
+        List<OpsWorkflow> workflows = new ArrayList<>();
+        if (workflowRetriever != null) {
+            if (cpuPct >= 75 || mentionsCpu(userMessage)) {
+                workflows.addAll(workflowRetriever.retrieve("cpu", List.of("CPU_HIGH"), userMessage, 2));
+            }
+            if (mentionsService(userMessage)) {
+                workflows.addAll(workflowRetriever.retrieve("service", List.of("FAILED_SERVICE"), userMessage, 2));
+            }
+            if (diskPct >= 75 || mentionsDisk(userMessage) || workflows.isEmpty()) {
+                workflows.addAll(workflowRetriever.retrieve("disk", List.of("DISK_PRESSURE"), userMessage, 2));
+            }
+        }
+        workflows = dedupeWorkflows(workflows);
+        m.put("workflows", workflows.stream().map(OpsWorkflow::toContextMap).toList());
+        m.put("divergenceRule", "若当前感知与 workflow [envDesc] 不一致，应偏离套路并说明理由；写操作仍受 OpsTrustPolicy 约束");
+        return m;
+    }
+
+    private Map<String, Object> buildFailureInsight(String userMessage) {
+        if (failureInsightService == null || !failureInsightService.isEnabled()) {
+            return Map.of("enabled", false);
+        }
+        return failureInsightService.buildContextMap(userMessage);
+    }
+
+    private static List<OpsWorkflow> dedupeWorkflows(List<OpsWorkflow> in) {
+        List<OpsWorkflow> out = new ArrayList<>();
+        for (OpsWorkflow wf : in) {
+            if (wf == null) {
+                continue;
+            }
+            boolean exists = out.stream().anyMatch(o -> o.workflowId().equals(wf.workflowId()));
+            if (!exists) {
+                out.add(wf);
+            }
+        }
+        return out;
+    }
+
+    private static boolean mentionsCpu(String msg) {
+        if (msg == null) {
+            return false;
+        }
+        String m = msg.toLowerCase();
+        return m.contains("cpu") || m.contains("负载") || m.contains("进程");
+    }
+
+    private static boolean mentionsDisk(String msg) {
+        if (msg == null) {
+            return false;
+        }
+        String m = msg.toLowerCase();
+        return m.contains("磁盘") || m.contains("空间") || m.contains("disk") || m.contains("清理");
+    }
+
+    private static boolean mentionsService(String msg) {
+        if (msg == null) {
+            return false;
+        }
+        String m = msg.toLowerCase();
+        return m.contains("服务") || m.contains("systemd") || m.contains("unit") || m.contains("failed");
+    }
+
+    private static double toDouble(Object o) {
+        return o instanceof Number n ? n.doubleValue() : 0.0;
     }
 
     private Map<String, Object> buildCorrelationDigest() {

@@ -28,9 +28,9 @@
               size="small"
               :type="tagTypeForField(col.prop, row[col.prop])"
             >
-              {{ formatCell(row[col.prop]) }}
+              {{ formatTableCell(col.prop, row[col.prop]) }}
             </el-tag>
-            <span v-else>{{ formatCell(row[col.prop]) }}</span>
+            <span v-else>{{ formatTableCell(col.prop, row[col.prop]) }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -93,7 +93,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { buildStructuredViewModel, fieldLabel } from '../utils/structuredDataView'
+import { buildStructuredViewModel, formatTableCell } from '../utils/structuredDataView'
 
 const props = defineProps({
   data: { type: null, default: null },
@@ -105,14 +105,6 @@ const props = defineProps({
 const model = computed(() => props.viewModel || buildStructuredViewModel(props.data, props.depth))
 
 const descriptionColumn = computed(() => (props.depth > 0 ? 1 : 2))
-
-function formatCell(val) {
-  if (val == null || val === '') return '—'
-  if (typeof val === 'boolean') return val ? '是' : '否'
-  if (typeof val === 'object') return fieldLabel('value')
-  const s = String(val)
-  return s.length > 120 ? s.slice(0, 120) + '…' : s
-}
 
 function tagTypeForField(key, val) {
   const k = String(key).toLowerCase()

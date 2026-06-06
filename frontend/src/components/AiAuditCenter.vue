@@ -7,13 +7,12 @@
         <div class="header-actions">
           <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
           <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
-          <el-button size="small" type="info" plain :disabled="!rows.length" @click="onExportPng">导出 PNG</el-button>
-          <el-button size="small" type="info" plain :disabled="!rows.length" @click="onExportPdf">导出 PDF</el-button>
+          <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">导出 CSV</el-button>
         </div>
       </div>
     </template>
 
-    <div ref="exportWrapRef" class="audit-export-wrap">
+    <div class="audit-export-wrap">
     <el-table :data="rows" border stripe height="560">
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="user_id" label="用户ID" width="100" />
@@ -36,16 +35,24 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAiAuditRecent } from '../api'
 import { formatLocalDateKey } from '../utils/formatDate.js'
-import {
-  exportTableAsPng,
-  exportTableAsPdf,
-  buildTableSummaryLine
-} from '../utils/tableExport.js'
+import { exportRowsAsCsv } from '../utils/tableExport.js'
+
+const AUDIT_CSV_COLUMNS = [
+  { key: 'id', label: 'ID' },
+  { key: 'user_id', label: '用户ID' },
+  { key: 'user_role', label: '角色' },
+  { key: 'remote_ip', label: 'IP' },
+  { key: 'method', label: '方法' },
+  { key: 'path', label: '路径' },
+  { key: 'status', label: '状态码' },
+  { key: 'duration_ms', label: '耗时(ms)' },
+  { key: 'request_bytes', label: '请求字节' },
+  { key: 'created_at', label: '时间' }
+]
 
 const rows = ref([])
 const loading = ref(false)
 const limit = ref(100)
-const exportWrapRef = ref(null)
 const exporting = ref(false)
 
 const loadData = async () => {
@@ -59,41 +66,21 @@ const loadData = async () => {
   }
 }
 
-const onExportPng = async () => {
-  if (!exportWrapRef.value || !rows.value.length) {
+const onExportCsv = () => {
+  if (!rows.value.length) {
     ElMessage.warning('暂无数据可导出')
     return
   }
   exporting.value = true
   try {
-    await exportTableAsPng(
-      exportWrapRef.value,
-      `ai-audit-${formatLocalDateKey(new Date())}.png`
-    )
-    ElMessage.success('已导出 PNG')
-  } catch (e) {
-    ElMessage.error(e?.message || 'PNG 导出失败')
-  } finally {
-    exporting.value = false
-  }
-}
-
-const onExportPdf = async () => {
-  if (!exportWrapRef.value || !rows.value.length) {
-    ElMessage.warning('暂无数据可导出')
-    return
-  }
-  exporting.value = true
-  try {
-    await exportTableAsPdf({
-      element: exportWrapRef.value,
-      title: 'AI 审计中心',
-      summaryLine: buildTableSummaryLine(rows.value.length, `最近 ${limit.value} 条`),
-      filename: `ai-audit-${formatLocalDateKey(new Date())}.pdf`
+    exportRowsAsCsv({
+      rows: rows.value,
+      columns: AUDIT_CSV_COLUMNS,
+      filename: `ai-audit-${formatLocalDateKey(new Date())}.csv`
     })
-    ElMessage.success('已导出 PDF')
+    ElMessage.success('已导出 CSV')
   } catch (e) {
-    ElMessage.error(e?.message || 'PDF 导出失败')
+    ElMessage.error(e?.message || 'CSV 导出失败')
   } finally {
     exporting.value = false
   }

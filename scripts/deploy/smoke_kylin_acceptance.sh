@@ -9,8 +9,8 @@ echo "== 1. Actuator health =="
 curl -sf "$BASE/actuator/health" | head -c 500
 echo ""
 
-echo "== 2. Platform info (验收) =="
-INFO=$(curl -sf "$BASE/api/platform/info")
+echo "== 2. Platform acceptance (公开验收) =="
+INFO=$(curl -sf "$BASE/api/platform/acceptance")
 echo "$INFO" | head -c 2000
 echo ""
 

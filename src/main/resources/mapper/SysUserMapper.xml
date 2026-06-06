@@ -46,8 +46,26 @@
             <if test="email != null">
                 email = #{email},
             </if>
+            <if test="wechat_userid != null">
+                wechat_userid = #{wechat_userid},
+            </if>
             update_time = NOW()
         </set>
+        WHERE user_id = #{userId}
+    </update>
+
+    <update id="updateProfileFields">
+        UPDATE sys_user
+        SET email = #{email},
+            wechat_userid = #{wechatUserid},
+            update_time = NOW()
+        WHERE user_id = #{userId}
+    </update>
+
+    <update id="updatePasswordById">
+        UPDATE sys_user
+        SET password = #{password},
+            update_time = NOW()
         WHERE user_id = #{userId}
     </update>
 

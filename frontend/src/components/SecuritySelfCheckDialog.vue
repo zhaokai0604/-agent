@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="安全健康检查"
+    title="一键安全自检"
     width="720px"
     class="sec-self-check-dialog"
     destroy-on-close
@@ -15,6 +15,14 @@
           </el-tag>
           <span class="sec-check-summary">{{ summaryHeadline }}</span>
           <span v-if="report.checkedAt" class="sec-check-time">检测时间 {{ formatTime(report.checkedAt) }}</span>
+        </div>
+        <p v-if="report.subtitle" class="sec-intro">{{ report.subtitle }}</p>
+
+        <div v-if="judgeCategories.length" class="sec-judge-cats">
+          <div v-for="c in judgeCategories" :key="c.id" class="sec-judge-cat">
+            <el-tag size="small" type="info" effect="plain">{{ c.title }}</el-tag>
+            <span class="sec-judge-desc">{{ c.description }}</span>
+          </div>
         </div>
 
         <div v-if="configRows.length" class="sec-config-grid">
@@ -98,6 +106,10 @@ const loading = ref(false)
 const report = ref(null)
 
 const summaryHeadline = computed(() => report.value?.summary?.headline || '')
+const judgeCategories = computed(() => {
+  const c = report.value?.judgeCategories
+  return Array.isArray(c) ? c : []
+})
 
 const configRows = computed(() => {
   const c = report.value?.config
@@ -198,6 +210,37 @@ watch(visible, (v) => {
   font-size: 11px;
   color: #94a3b8;
   width: 100%;
+}
+.sec-intro {
+  font-size: 12px;
+  color: #475569;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.sec-judge-cats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+@media (max-width: 560px) {
+  .sec-judge-cats {
+    grid-template-columns: 1fr;
+  }
+}
+.sec-judge-cat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: #f1f5f9;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+.sec-judge-desc {
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.4;
 }
 .sec-config-grid {
   display: grid;

@@ -10,8 +10,6 @@ import com.award.log.service.AlarmConfigService;
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
-import com.award.log.util.EmailPushUtil;
-import com.award.log.util.WeChatPushUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * AI日志告警服务实现类
- * 负责AI识别异常日志、生成结构化告警信息、多渠道推送
+ * 负责AI识别异常日志、生成结构化告警信息、平台内告警记录
  */
 @Slf4j
 @Service
@@ -35,12 +33,6 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
 
     @Autowired
     private ChatClient chatClient;
-
-    @Autowired
-    private WeChatPushUtil weChatPushUtil;
-
-    @Autowired
-    private EmailPushUtil emailPushUtil;
 
     @Qualifier("logAnalysisExecutor")
     @Autowired
@@ -221,100 +213,16 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
             return false;
         }
         
-        log.info("【告警推送】开始推送告警，告警ID: [{}], 级别: [{}]", alarm.getAlarmId(), alarm.getLevel());
+        log.info("【告警】平台内记录告警，告警ID: [{}], 级别: [{}]（已停用邮箱/企业微信外发）",
+                alarm.getAlarmId(), alarm.getLevel());
 
-        List<String> channels = taskConfig.getPushChannels() == null ? Collections.emptyList() : taskConfig.getPushChannels();
-        String wechatUserId = taskConfig.getWechatUserId();
-        String emailAddress = taskConfig.getEmailAddress();
-        boolean canWechat = channels.contains("WECHAT") && wechatUserId != null && !wechatUserId.isBlank();
-        boolean canEmail = channels.contains("EMAIL") && emailAddress != null && !emailAddress.isBlank();
-        if (!canWechat && !canEmail) {
-            log.warn("【告警推送】未配置可用推送渠道（请在告警配置中启用 EMAIL 或 WECHAT 并填写收件人），告警ID: [{}]", alarm.getAlarmId());
-            alarm.setPushStatus("SKIPPED:NO_CHANNELS");
-            alarm.setUpdateTime(LocalDateTime.now());
-            updateAlarm(alarm);
-            return false;
-        }
-
-        boolean pushSuccess = false;
-        int retryCount = 0;
-        final int maxRetry = 3;
-        final int retryInterval = 5000; // 5秒
-        
-        // 标记是否已经发送过邮件，确保每种渠道只发送一次
-        boolean emailSent = false;
-        boolean wechatSent = false;
-        
-        // 重试逻辑
-        while (retryCount < maxRetry && !pushSuccess) {
-            try {
-                // 优先使用企业微信推送（如果配置了企业微信用户ID且未发送过）
-                if (!wechatSent && canWechat) {
-                    log.info("【告警推送】尝试企业微信推送，用户ID: [{}]", wechatUserId);
-                    pushSuccess = weChatPushUtil.sendAlarm(alarm, wechatUserId);
-                    wechatSent = true;
-                    log.info("【告警推送】企业微信推送结果: [{}]", pushSuccess);
-                }
-                
-                // 如果企业微信推送失败或未配置，尝试邮箱推送（如果配置了邮箱且未发送过）
-                if (!pushSuccess && !emailSent && canEmail) {
-                    log.info("【告警推送】尝试邮箱推送，地址: [{}]", emailAddress);
-                    pushSuccess = emailPushUtil.sendAlarm(alarm, emailAddress);
-                    emailSent = true;
-                    log.info("【告警推送】邮箱推送结果: [{}]", pushSuccess);
-                }
-                
-                // 如果推送成功，更新状态
-                if (pushSuccess) {
-                    alarm.setPushStatus("SUCCESS");
-                    log.info("【告警推送】告警推送成功，告警ID: [{}]", alarm.getAlarmId());
-                    fingerprintCooldownMap.put(decision.fingerprint(), System.currentTimeMillis());
-                    break; // 推送成功，跳出重试循环
-                } else {
-                    retryCount++;
-                    alarm.setPushStatus("RETRYING");
-                    log.warn("【告警推送】告警推送失败，正在重试，告警ID: [{}], 重试次数: [{}]/[{}]", 
-                            alarm.getAlarmId(), retryCount, maxRetry);
-                    
-                    // 等待重试间隔，达到最大重试次数则不再等待
-                    if (retryCount < maxRetry) {
-                        log.info("【告警推送】等待重试，间隔: [{}]秒", retryInterval / 1000);
-                        Thread.sleep(retryInterval);
-                    }
-                }
-            } catch (Exception e) {
-                retryCount++;
-                log.error("【告警推送】告警推送异常，告警ID: [{}], 重试次数: [{}]/[{}], 异常信息: [{}]", 
-                        alarm.getAlarmId(), retryCount, maxRetry, e.getMessage(), e);
-                
-                try {
-                    if (retryCount < maxRetry) {
-                        log.info("【告警推送】等待重试，间隔: [{}]秒", retryInterval / 1000);
-                        Thread.sleep(retryInterval);
-                    }
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    log.warn("【告警推送】线程被中断，停止推送", ie);
-                    break; // 线程被中断，立即停止推送
-                }
-            }
-        }
-        
-        // 如果最终推送失败，更新状态为FAILED并停止推送
-        if (!pushSuccess) {
-            alarm.setPushStatus("FAILED");
-            log.error("【告警推送】告警推送达到最大重试次数，已停止推送，告警ID: [{}]", alarm.getAlarmId());
-        }
-        
-        // 更新告警时间
+        alarm.setPushStatus("RECORDED");
         alarm.setUpdateTime(LocalDateTime.now());
-        
+        fingerprintCooldownMap.put(decision.fingerprint(), System.currentTimeMillis());
         updateAlarm(alarm);
-        
-        log.info("【告警推送】推送完成，告警ID: [{}], 结果: [{}], 状态: [{}]", 
-                alarm.getAlarmId(), pushSuccess, alarm.getPushStatus());
-        
-        return pushSuccess;
+
+        log.info("【告警】落库完成，告警ID: [{}], 状态: [{}]", alarm.getAlarmId(), alarm.getPushStatus());
+        return true;
     }
     
     @Override
@@ -391,7 +299,8 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
 
         // 已有告警时执行推送补偿
         for (LogAlarm alarm : alarms) {
-            if (!"SUCCESS".equals(alarm.getPushStatus())) {
+            String status = alarm.getPushStatus();
+            if (!"SUCCESS".equals(status) && !"RECORDED".equals(status)) {
                 pushAlarm(alarm);
             }
         }

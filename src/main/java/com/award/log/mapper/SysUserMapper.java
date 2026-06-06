@@ -64,6 +64,13 @@ public interface SysUserMapper {
      */
     int updateById(SysUser user);
 
+    int updateProfileFields(@Param("userId") Integer userId,
+                            @Param("email") String email,
+                            @Param("wechatUserid") String wechatUserid);
+
+    int updatePasswordById(@Param("userId") Integer userId,
+                           @Param("password") String password);
+
     /**
      * 删除用户
      * @param userId 用户ID

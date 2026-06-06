@@ -203,6 +203,7 @@ public class DiskTool extends AbstractCommandExecutor {
             m.put("raw", result.output());
             rows.add(m);
         }
+        rows.sort((a, b) -> Integer.compare(parseUsePercent(b.get("usePercent")), parseUsePercent(a.get("usePercent"))));
         String dataJson = toJson(rows);
         long duration = System.currentTimeMillis() - startTime;
         return buildSuccessResponse(dataJson, duration, false);
@@ -277,6 +278,17 @@ public class DiskTool extends AbstractCommandExecutor {
             }
         }
         return diskInfoList;
+    }
+
+    private static int parseUsePercent(String usePercent) {
+        if (usePercent == null || usePercent.isBlank()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(usePercent.replace("%", "").trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private String toJson(List<Map<String, String>> list) throws JsonProcessingException {

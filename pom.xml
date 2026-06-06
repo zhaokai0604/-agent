@@ -163,12 +163,6 @@
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
         
-        <!-- Spring Mail（用于邮件推送） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-mail</artifactId>
-        </dependency>
-
         <!-- Elasticsearch -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

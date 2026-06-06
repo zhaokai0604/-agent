@@ -84,6 +84,12 @@ public interface SysUserService {
      * @return 是否成功
      */
     boolean resetPassword(String username, String newPassword);
+
+    boolean matchesPassword(Integer userId, String rawPassword);
+
+    boolean changeOwnPassword(Integer userId, String oldPassword, String newPassword);
+
+    boolean updateOwnProfile(Integer userId, String email, String wechatUserid);
     
     /**
      * 根据用户名检查用户是否存在

@@ -1,11 +1,15 @@
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { fileURLToPath } from 'node:url'
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
+  const env = loadEnv(mode, rootDir, '')
   const proxyTarget = env.VITE_DEV_PROXY_TARGET || 'http://localhost:8088'
 
   return {
+    root: rootDir,
     plugins: [vue()],
     build: {
     sourcemap: false,

@@ -7,6 +7,7 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.util.ClassUtils;
 
 import java.util.Arrays;
 import java.util.stream.Collectors;
@@ -30,14 +31,16 @@ public class McpToolSecurityAspect {
             return pjp.proceed();
         }
 
-        String toolBeanName = pjp.getTarget().getClass().getSimpleName();
+        String toolBeanName = ClassUtils.getUserClass(pjp.getTarget()).getSimpleName();
         String instruction = buildInstruction(pjp, toolBeanName);
 
         McpInvocationSecurityGate.GateDecision decision =
                 mcpInvocationSecurityGate.evaluateChatToolInvocation(toolBeanName, instruction);
 
-        if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.BLOCK) {
-            log.warn("Tool 调用被统一安全门拦截: {} code={} msg={}", toolBeanName, decision.getCode(), decision.getMessage());
+        if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.BLOCK
+                || decision.getType() == McpInvocationSecurityGate.GateDecision.Type.NEED_CONFIRM) {
+            log.warn("Tool 调用被统一安全门拦截: {} code={} type={} msg={}",
+                    toolBeanName, decision.getCode(), decision.getType(), decision.getMessage());
             throw new OpsSecurityRejectedException(
                     decision.getMessage() != null ? decision.getMessage() : "安全拦截（工具层）");
         }

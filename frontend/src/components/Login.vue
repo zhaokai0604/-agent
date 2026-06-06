@@ -23,7 +23,7 @@
           </div>
         </div>
         <p class="tc-hero-lead">
-          账号密码登录；可在个人中心绑定邮箱，用于告警与推送。
+          账号密码登录；任务告警在平台内记录与查看。
         </p>
         <ul class="tc-hero-list">
           <li>本地与受控节点协同</li>

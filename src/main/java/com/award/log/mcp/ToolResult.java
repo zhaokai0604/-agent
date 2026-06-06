@@ -27,6 +27,11 @@ public class ToolResult<T> {
     }
 
     public static <T> ToolResult<T> error(String errorMsg, long durationMs) {
-        return new ToolResult<>(false, null, errorMsg, durationMs, false);
+        return new ToolResult<>(false, null, errorMsg, McpDurationSupport.normalize(durationMs), false);
+    }
+
+    /** 从 startTime 计算真实耗时（推荐用于 catch / 早退错误路径）。 */
+    public static <T> ToolResult<T> errorSince(long startTimeMillis, String errorMsg) {
+        return error(errorMsg, McpDurationSupport.elapsedSince(startTimeMillis));
     }
 }

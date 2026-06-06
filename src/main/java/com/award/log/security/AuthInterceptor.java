@@ -15,20 +15,27 @@ public class AuthInterceptor implements HandlerInterceptor {
     public static final String SESSION_USER_ID = "LOGIN_USER_ID";
     public static final String SESSION_USER_ROLE = "LOGIN_USER_ROLE";
 
+    private final RequestUserResolver requestUserResolver;
+
+    public AuthInterceptor(RequestUserResolver requestUserResolver) {
+        this.requestUserResolver = requestUserResolver;
+    }
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        // 跨域预检请求直接放行，否则会导致前端出现 Network Error
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
             return true;
         }
 
         String uri = request.getRequestURI();
-
-        // 放行认证相关接口
         if (uri.contains("/admin/user/login")
                 || uri.contains("/admin/user/register")
                 || uri.contains("/admin/user/check-user")
                 || uri.contains("/admin/user/reset-password")) {
+            return true;
+        }
+
+        if (requestUserResolver.currentUserId(request) != null) {
             return true;
         }
 
@@ -37,7 +44,6 @@ public class AuthInterceptor implements HandlerInterceptor {
             writeJson(response, 401, "{\"code\":401,\"message\":\"未登录或登录已过期\"}");
             return false;
         }
-
         return true;
     }
 

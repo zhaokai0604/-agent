@@ -1,18 +1,19 @@
 package com.award.log.agent;
 
-import com.award.log.config.AgentOpsProperties;
+import com.award.log.agent.awm.OpsWorkflow;
+import com.award.log.agent.awm.WorkflowInductionService;
+import com.award.log.agent.awm.WorkflowRetriever;
+import com.award.log.governance.OpsRemediationGate;
 import com.award.log.mcp.tools.CleanTempTool;
 import com.award.log.mcp.tools.DiskAnalyzeTool;
 import com.award.log.mcp.tools.DiskTool;
 import com.award.log.mcp.tools.LogCleanupTool;
+import com.award.log.mcp.tools.ProcessTool;
 import com.award.log.mcp.tools.ServiceRestartTool;
 import com.award.log.mcp.tools.SystemLoadTool;
-import com.award.log.security.AgenticRiskScoreEngine;
-import com.award.log.service.OpsAutoRemediationService;
 import com.award.log.security.McpToolSurface;
-import com.award.log.security.OpsTrustPolicy;
-import com.award.log.security.OpsTrustTier;
 import com.award.log.security.RiskLevel;
+import com.award.log.service.OpsAutoRemediationService;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,12 +44,14 @@ public class AssistantOrchestrator {
     private final LogCleanupTool logCleanupTool;
     private final CleanTempTool cleanTempTool;
     private final SystemLoadTool systemLoadTool;
+    private final ProcessTool processTool;
     private final ServiceRestartTool serviceRestartTool;
-    private final OpsTrustPolicy opsTrustPolicy;
-    private final AgenticRiskScoreEngine agenticRiskScoreEngine;
+    private final OpsRemediationGate opsRemediationGate;
+    private final ServiceRestartCandidateResolver serviceRestartCandidateResolver;
     private final AssistantAuditRecorder auditRecorder;
     private final ObjectMapper objectMapper;
-    private final AgentOpsProperties agentOpsProperties;
+    private final WorkflowRetriever workflowRetriever;
+    private final WorkflowInductionService workflowInductionService;
 
     @Autowired(required = false)
     private OpsAutoRemediationService opsAutoRemediationService;
@@ -59,25 +62,29 @@ public class AssistantOrchestrator {
             LogCleanupTool logCleanupTool,
             CleanTempTool cleanTempTool,
             SystemLoadTool systemLoadTool,
+            ProcessTool processTool,
             ServiceRestartTool serviceRestartTool,
-            OpsTrustPolicy opsTrustPolicy,
-            AgenticRiskScoreEngine agenticRiskScoreEngine,
+            OpsRemediationGate opsRemediationGate,
+            ServiceRestartCandidateResolver serviceRestartCandidateResolver,
             AssistantAuditRecorder auditRecorder,
             ObjectMapper objectMapper,
-            AgentOpsProperties agentOpsProperties,
-            OpsIntentRouter opsIntentRouter) {
+            OpsIntentRouter opsIntentRouter,
+            WorkflowRetriever workflowRetriever,
+            WorkflowInductionService workflowInductionService) {
         this.opsIntentRouter = opsIntentRouter;
         this.diskTool = diskTool;
         this.diskAnalyzeTool = diskAnalyzeTool;
         this.logCleanupTool = logCleanupTool;
         this.cleanTempTool = cleanTempTool;
         this.systemLoadTool = systemLoadTool;
+        this.processTool = processTool;
         this.serviceRestartTool = serviceRestartTool;
-        this.opsTrustPolicy = opsTrustPolicy;
-        this.agenticRiskScoreEngine = agenticRiskScoreEngine;
+        this.opsRemediationGate = opsRemediationGate;
+        this.serviceRestartCandidateResolver = serviceRestartCandidateResolver;
         this.auditRecorder = auditRecorder;
         this.objectMapper = objectMapper;
-        this.agentOpsProperties = agentOpsProperties;
+        this.workflowRetriever = workflowRetriever;
+        this.workflowInductionService = workflowInductionService;
     }
 
     @Value("${agent.assistant.orchestrator.log-clean-days:30}")
@@ -126,6 +133,16 @@ public class AssistantOrchestrator {
         md.append("> **traceId:** `").append(traceId).append("`\n\n");
         md.append("## 运维闭环报告\n\n");
 
+        OpsWorkflow workflowHit = workflowRetriever.bestMatch(
+                "disk", List.of("DISK_PRESSURE"), userMessage);
+        if (workflowHit != null) {
+            auditRecorder.addStep(steps, "workflow",
+                    "命中 AWM workflow=" + workflowHit.workflowId());
+            md.append("### 处置套路（AWM）\n\n");
+            md.append(workflowHit.toMarkdownBrief()).append("\n\n");
+            md.append("> 环境不一致时应偏离上述套路；写操作仍受治理准入与 OpsTrustPolicy 约束。\n\n");
+        }
+
         try {
             auditRecorder.addCot(steps, 2, "感知", "采集磁盘与热点目录");
             String diskOverview = diskTool.checkDiskUsage();
@@ -172,6 +189,14 @@ public class AssistantOrchestrator {
             auditRecorder.record(traceId, userMessage, intentRisk.name(), anyExecuted ? "EXECUTED" : "PREVIEW",
                     "AssistantOrchestrator", true, md.substring(0, Math.min(500, md.length())), steps,
                     System.currentTimeMillis() - t0);
+            workflowInductionService.afterSuccessfulRun(
+                    traceId,
+                    userMessage,
+                    anyExecuted ? "EXECUTED" : "PREVIEW",
+                    true,
+                    steps,
+                    "disk",
+                    List.of("DISK_PRESSURE"));
             return new RunResult(md.toString(), traceId);
 
         } catch (Exception e) {
@@ -187,36 +212,31 @@ public class AssistantOrchestrator {
     private boolean appendLogCleanupSection(StringBuilder md, List<Map<String, Object>> steps, boolean forceExecute)
             throws Exception {
         String path = defaultLogRoot();
-        Map<String, Object> params = Map.of(
-                "path", path,
-                "days", logCleanDays,
-                "dryRun", true
-        );
         String instruction = "执行 LogCleanupTool 参数: path=" + path + " days=" + logCleanDays + " dryRun=true";
-        OpsTrustTier tier = opsTrustPolicy.tierForTool("LogCleanupTool", params, instruction);
+        OpsRemediationGate.RemediationDecision decision =
+                opsRemediationGate.decideLogCleanup(path, logCleanDays, forceExecute, instruction);
 
         String preview = logCleanupTool.cleanupOldLogs(path, logCleanDays, true, false);
         JsonNode data = parseToolData(preview);
         int found = deletableCount(data);
         int protectedSkip = data != null && data.has("protectedSkipped") ? data.get("protectedSkipped").asInt(0) : 0;
 
-        auditRecorder.addCot(steps, 3, "推理", "日志清理预览 filesFound=" + found + " tier=" + tier);
+        auditRecorder.addCot(steps, 3, "推理", "日志清理预览 filesFound=" + found + " decision=" + decision.decision());
         md.append("### 2. 日志清理（").append(path).append("）\n\n");
         md.append("- 预览候选：**").append(found).append("** 个；保护规则跳过：**").append(protectedSkip).append("**\n");
-        md.append("- ").append(opsTrustPolicy.tierExplanation(tier, riskScore("LogCleanupTool", params, instruction))).append("\n");
+        md.append("- ").append(decision.reason()).append("\n");
 
         if (found == 0) {
             md.append("- 无符合条件且允许删除的陈旧日志。\n\n");
             return false;
         }
 
-        if (tier == OpsTrustTier.BLOCK) {
-            md.append("- **已拒绝执行**（风险分过高）。\n\n");
+        if (decision.forbidden()) {
+            md.append("- **已拒绝执行**。\n\n");
             return false;
         }
 
-        boolean shouldRun = forceExecute || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
-        if (!shouldRun) {
+        if (decision.mayPreview()) {
             md.append("- 已生成预览，等待您确认后再删。\n\n");
             return false;
         }
@@ -232,12 +252,9 @@ public class AssistantOrchestrator {
     private boolean appendTempCleanupSection(StringBuilder md, List<Map<String, Object>> steps, boolean forceExecute)
             throws Exception {
         String path = OsRuntime.isWindows() ? "C:\\Windows\\Temp" : "/tmp";
-        Map<String, Object> params = new LinkedHashMap<>();
-        params.put("path", path);
-        params.put("days", tempCleanDays);
-        params.put("dryRun", true);
         String instruction = "执行 CleanTempTool path=" + path + " days=" + tempCleanDays;
-        OpsTrustTier tier = opsTrustPolicy.tierForTool("CleanTempTool", params, instruction);
+        OpsRemediationGate.RemediationDecision decision =
+                opsRemediationGate.decideTempCleanup(path, tempCleanDays, forceExecute, instruction);
 
         String preview = cleanTempTool.cleanTempFiles(path, tempCleanDays, true, false);
         JsonNode data = parseToolData(preview);
@@ -245,20 +262,19 @@ public class AssistantOrchestrator {
 
         md.append("### 临时目录清理（").append(path).append("）\n\n");
         md.append("- 预览：**").append(found).append("** 个文件\n");
-        md.append("- ").append(opsTrustPolicy.tierExplanation(tier, riskScore("CleanTempTool", params, instruction))).append("\n");
+        md.append("- ").append(decision.reason()).append("\n");
 
-        if (found == 0 || tier == OpsTrustTier.BLOCK) {
-            if (tier == OpsTrustTier.BLOCK) {
+        if (found == 0 || decision.forbidden()) {
+            if (decision.forbidden()) {
                 md.append("- **已拒绝执行**。\n\n");
             } else {
-                md.append("- 无需清理。\n\n");
+                md.append("- 无可清理文件。\n\n");
             }
             return false;
         }
 
-        boolean shouldRun = forceExecute || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
-        if (!shouldRun) {
-            md.append("- 等待确认。\n\n");
+        if (decision.mayPreview()) {
+            md.append("- 已生成预览，等待您确认。\n\n");
             return false;
         }
 
@@ -266,12 +282,8 @@ public class AssistantOrchestrator {
         JsonNode execData = parseToolData(exec);
         int deleted = execData != null && execData.has("filesDeleted") ? execData.get("filesDeleted").asInt(0) : 0;
         auditRecorder.addStep(steps, "execute", "CleanTemp deleted=" + deleted);
-        md.append("- **已执行删除：** ").append(deleted).append(" 个临时文件。\n\n");
+        md.append("- **已执行删除：** ").append(deleted).append(" 个文件。\n\n");
         return deleted > 0;
-    }
-
-    private double riskScore(String toolName, Map<String, Object> params, String instruction) {
-        return agenticRiskScoreEngine.score(toolName, params, instruction).total();
     }
 
     private RunResult runPatrolContinuation(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
@@ -337,19 +349,34 @@ public class AssistantOrchestrator {
         md.append("> **traceId:** `").append(traceId).append("`\n\n");
         md.append("## CPU / 负载闭环\n\n");
 
+        OpsWorkflow workflowHit = workflowRetriever.bestMatch(
+                "cpu", List.of("CPU_HIGH"), userMessage);
+        if (workflowHit != null) {
+            auditRecorder.addStep(steps, "workflow",
+                    "命中 AWM workflow=" + workflowHit.workflowId());
+            md.append("### 处置套路（AWM）\n\n");
+            md.append(workflowHit.toMarkdownBrief()).append("\n\n");
+            md.append("> 无白名单服务时不要自动 restart；写操作仍受治理准入与 OpsTrustPolicy 约束。\n\n");
+        }
+
         try {
             String loadJson = systemLoadTool.checkSystemLoad();
             auditRecorder.addStep(steps, "perceive", truncate(loadJson, 800));
             md.append("### 感知\n\n已采集系统负载（`SystemLoadTool`）。\n\n");
 
+            String processJson = processTool.listProcesses(5.0, 5.0);
+            auditRecorder.addStep(steps, "perceive", truncate(processJson, 800));
+            md.append("### 进程采样\n\n已通过 `ProcessTool` 列出高 CPU/内存进程（详见工具原始输出）。\n\n");
+
+            boolean forceExecute = opsIntentRouter.forceRemediate(userMessage);
             boolean wantRestart = userMessage.contains("重启") || userMessage.contains("restart");
             boolean anyExecuted = false;
             if (wantRestart) {
-                String svc = pickRestartCandidate();
+                String svc = serviceRestartCandidateResolver.pickDefaultFromAllowlist();
                 if (svc == null) {
-                    md.append("### 服务重启\n\n未配置可重启服务白名单。\n\n");
+                    md.append("### 服务重启\n\n未配置可重启服务白名单或治理禁止。\n\n");
                 } else {
-                    anyExecuted |= appendServiceRestartSection(md, steps, svc, true);
+                    anyExecuted |= appendServiceRestartSection(md, steps, svc, forceExecute);
                 }
             } else {
                 md.append("### 建议\n\n");
@@ -360,6 +387,14 @@ public class AssistantOrchestrator {
             auditRecorder.record(traceId, userMessage, intentRisk.name(), anyExecuted ? "EXECUTED" : "PREVIEW",
                     "CpuPressure", true, md.substring(0, Math.min(400, md.length())), steps,
                     System.currentTimeMillis() - t0);
+            workflowInductionService.afterSuccessfulRun(
+                    traceId,
+                    userMessage,
+                    anyExecuted ? "EXECUTED" : "PREVIEW",
+                    true,
+                    steps,
+                    "cpu",
+                    List.of("CPU_HIGH"));
             return new RunResult(md.toString(), traceId);
         } catch (Exception e) {
             log.error("CPU 闭环失败", e);
@@ -370,31 +405,22 @@ public class AssistantOrchestrator {
         }
     }
 
-    private String pickRestartCandidate() {
-        List<String> list = agentOpsProperties.getServiceRestart().getAllowlist();
-        if (list == null || list.isEmpty()) {
-            return null;
-        }
-        return list.get(0).trim().toLowerCase(Locale.ROOT);
-    }
-
     private boolean appendServiceRestartSection(
             StringBuilder md, List<Map<String, Object>> steps, String serviceName, boolean forceExecute)
             throws Exception {
-        Map<String, Object> params = Map.of("serviceName", serviceName, "dryRun", true);
         String instruction = "执行 ServiceRestartTool serviceName=" + serviceName;
-        OpsTrustTier tier = opsTrustPolicy.tierForTool("ServiceRestartTool", params, instruction);
+        OpsRemediationGate.RemediationDecision decision =
+                opsRemediationGate.decideServiceRestart(serviceName, forceExecute, instruction);
 
-        String preview = serviceRestartTool.restartService(serviceName, true, false);
+        serviceRestartTool.restartService(serviceName, true, false);
         md.append("### 服务重启（").append(serviceName).append("）\n\n");
-        md.append("- ").append(opsTrustPolicy.tierExplanation(tier, riskScore("ServiceRestartTool", params, instruction))).append("\n");
+        md.append("- ").append(decision.reason()).append("\n");
 
-        if (tier == OpsTrustTier.BLOCK) {
+        if (decision.forbidden()) {
             md.append("- **已拒绝**。\n\n");
             return false;
         }
-        boolean shouldRun = forceExecute || tier == OpsTrustTier.AUTO || tier == OpsTrustTier.NOTIFY;
-        if (!shouldRun) {
+        if (decision.mayPreview()) {
             md.append("- 已预览，回复「执行清理」或明确「重启 ").append(serviceName).append("」后执行。\n\n");
             return false;
         }

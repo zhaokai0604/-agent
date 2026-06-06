@@ -69,7 +69,7 @@ public class ProcessTool extends AbstractCommandExecutor {
                 return errorJson;
             }
 
-            List<Map<String, String>> processList = parseOutput(result.output(), cpuThreshold, memThreshold);
+            List<Map<String, String>> processList = sortProcessesByUsage(parseOutput(result.output(), cpuThreshold, memThreshold));
             String dataJson = toJson(processList);
             long duration = System.currentTimeMillis() - startTime;
 
@@ -106,6 +106,7 @@ public class ProcessTool extends AbstractCommandExecutor {
         if (processList.isEmpty()) {
             processList = listProcessesWindowsMemFallback(cpuThreshold, memThreshold);
         }
+        processList = sortProcessesByUsage(processList);
         String dataJson = toJson(processList);
         long duration = System.currentTimeMillis() - startTime;
         return buildSuccessResponse(dataJson, duration, false);
@@ -215,6 +216,37 @@ public class ProcessTool extends AbstractCommandExecutor {
     }
 
     private double parsePercent(String value) {
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+
+    private static List<Map<String, String>> sortProcessesByUsage(List<Map<String, String>> list) {
+        if (list == null || list.size() <= 1) {
+            return list;
+        }
+        List<Map<String, String>> sorted = new ArrayList<>(list);
+        sorted.sort((a, b) -> {
+            double cpuB = parseCpuSortKey(b.get("cpu"));
+            double cpuA = parseCpuSortKey(a.get("cpu"));
+            if (cpuB != cpuA) {
+                return Double.compare(cpuB, cpuA);
+            }
+            return Double.compare(parsePercentStatic(b.get("mem")), parsePercentStatic(a.get("mem")));
+        });
+        return sorted;
+    }
+
+    private static double parseCpuSortKey(String cpu) {
+        if (cpu == null || "n/a".equalsIgnoreCase(cpu.trim())) {
+            return -1.0;
+        }
+        return parsePercentStatic(cpu);
+    }
+
+    private static double parsePercentStatic(String value) {
         try {
             return Double.parseDouble(value);
         } catch (NumberFormatException e) {

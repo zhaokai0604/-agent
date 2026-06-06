@@ -1,5 +1,7 @@
 package com.award.log.service;
 
+import com.award.log.governance.GovernanceAdmissionVerdict;
+import com.award.log.governance.OpsGovernanceService;
 import com.award.log.handler.PerformanceWebSocketHandler;
 import com.award.log.mcp.tools.CleanTempTool;
 import com.award.log.mcp.tools.LogCleanupTool;
@@ -57,6 +59,7 @@ public class OpsAutoRemediationService {
     private final ObjectMapper objectMapper;
     private final AgenticRiskScoreEngine agenticRiskScoreEngine;
     private final McpInvocationSecurityGate mcpInvocationSecurityGate;
+    private final OpsGovernanceService opsGovernanceService;
 
     @Autowired(required = false)
     private PerformanceWebSocketHandler performanceWebSocketHandler;
@@ -143,7 +146,8 @@ public class OpsAutoRemediationService {
             OpsPathPolicy opsPathPolicy,
             ObjectMapper objectMapper,
             AgenticRiskScoreEngine agenticRiskScoreEngine,
-            McpInvocationSecurityGate mcpInvocationSecurityGate) {
+            McpInvocationSecurityGate mcpInvocationSecurityGate,
+            OpsGovernanceService opsGovernanceService) {
         this.cleanTempTool = cleanTempTool;
         this.logCleanupTool = logCleanupTool;
         this.serviceRestartTool = serviceRestartTool;
@@ -151,6 +155,19 @@ public class OpsAutoRemediationService {
         this.objectMapper = objectMapper;
         this.agenticRiskScoreEngine = agenticRiskScoreEngine;
         this.mcpInvocationSecurityGate = mcpInvocationSecurityGate;
+        this.opsGovernanceService = opsGovernanceService;
+    }
+
+    public void applyHotConfig(boolean enabled,
+                               String runMode,
+                               double riskPatrolAutoMax,
+                               double proposeTempCleanDiskMin,
+                               double proposeLogCleanDiskMin) {
+        this.enabled = enabled;
+        this.runMode = runMode;
+        this.riskPatrolAutoMax = riskPatrolAutoMax;
+        this.proposeTempCleanDiskMin = proposeTempCleanDiskMin;
+        this.proposeLogCleanDiskMin = proposeLogCleanDiskMin;
     }
 
     public Map<String, Object> getLastSummary() {
@@ -387,7 +404,10 @@ public class OpsAutoRemediationService {
             tagged.put("riskScore", total);
             tagged.put("riskDimensions", sr.dimensions());
             tagged.put("riskExplanation", sr.explanation());
-            if (total < autoTh) {
+            GovernanceAdmissionVerdict governanceVerdict = readGovernanceVerdict(raw);
+            if (governanceVerdict == GovernanceAdmissionVerdict.CONFIRM_ONLY) {
+                high.add(tagged);
+            } else if (total < autoTh) {
                 low.add(tagged);
             } else {
                 high.add(tagged);
@@ -497,7 +517,34 @@ public class OpsAutoRemediationService {
             }
         }
 
-        return dedupeSteps(steps);
+        return opsGovernanceService.filterPlanSteps(dedupeSteps(steps));
+    }
+
+    private static GovernanceAdmissionVerdict readGovernanceVerdict(Map<String, Object> step) {
+        Object raw = step.get("governanceVerdict");
+        if (raw == null) {
+            return GovernanceAdmissionVerdict.ALLOW_AUTO;
+        }
+        try {
+            return GovernanceAdmissionVerdict.valueOf(String.valueOf(raw).trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            return GovernanceAdmissionVerdict.ALLOW_AUTO;
+        }
+    }
+
+    private static boolean isGovernanceAutoAllowed(Map<String, Object> step) {
+        return readGovernanceVerdict(step) == GovernanceAdmissionVerdict.ALLOW_AUTO;
+    }
+
+    private static boolean isAutoExecutionSource(String source) {
+        return "HYBRID_AUTO".equals(source) || "IMMEDIATE".equals(source);
+    }
+
+    private static String targetOfStep(Map<String, Object> step) {
+        if ("RESTART_SERVICE".equals(String.valueOf(step.get("kind")))) {
+            return String.valueOf(step.get("serviceName"));
+        }
+        return String.valueOf(step.get("path"));
     }
 
     private List<Map<String, Object>> filterStepsForImmediate(
@@ -507,6 +554,9 @@ public class OpsAutoRemediationService {
 
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> s : plan) {
+            if (!isGovernanceAutoAllowed(s)) {
+                continue;
+            }
             String k = String.valueOf(s.getOrDefault("kind", ""));
             switch (k) {
                 case "CLEAN_TEMP" -> {
@@ -577,6 +627,23 @@ public class OpsAutoRemediationService {
             String source) {
         List<Map<String, Object>> actions = new ArrayList<>();
         for (Map<String, Object> step : steps) {
+            if (opsGovernanceService.isEnabled()) {
+                GovernanceAdmissionVerdict gv = readGovernanceVerdict(step);
+                if (gv == GovernanceAdmissionVerdict.FORBIDDEN) {
+                    log.warn("[自动修复] 治理禁止步骤 kind={} : {}", step.get("kind"), step.get("governanceReason"));
+                    actions.add(actionRow(String.valueOf(step.get("kind")),
+                            targetOfStep(step), false,
+                            "治理策略禁止：" + step.get("governanceReason")));
+                    continue;
+                }
+                if (isAutoExecutionSource(source) && gv != GovernanceAdmissionVerdict.ALLOW_AUTO) {
+                    log.warn("[自动修复] 治理拦截自动步骤 kind={} verdict={}", step.get("kind"), gv);
+                    actions.add(actionRow(String.valueOf(step.get("kind")),
+                            targetOfStep(step), false,
+                            "治理策略不允许自动执行：" + step.get("governanceReason")));
+                    continue;
+                }
+            }
             String kind = String.valueOf(step.getOrDefault("kind", ""));
             try {
                 switch (kind) {

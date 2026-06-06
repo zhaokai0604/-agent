@@ -1,8 +1,10 @@
 package com.award.log.service;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 
 import java.util.List;
 import java.util.Map;
@@ -10,11 +12,23 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@SpringBootTest
+/**
+ * 全栈自检（需 MySQL：设置环境变量 {@code DB_PASSWORD} 后运行）。
+ * 日常 CI 以 {@link com.award.log.security.McpInvocationSecurityGateProbeTest} 为准。
+ */
+@SpringBootTest(properties = {
+        "spring.ai.openai.api-key=test-key-security-self-check-only",
+        "spring.datasource.password=${DB_PASSWORD:}"
+})
+@EnabledIfEnvironmentVariable(named = "DB_PASSWORD", matches = ".+")
 class SecuritySelfCheckServiceTest {
 
     @Autowired
     private SecuritySelfCheckService securitySelfCheckService;
+
+    /** 避免 @PostConstruct 建表探针在无 DB 密码/无 MySQL 时拖垮整包 SpringBootTest */
+    @MockBean
+    private OpsAuditTraceService opsAuditTraceService;
 
     @Test
     void allProbesShouldPass() {

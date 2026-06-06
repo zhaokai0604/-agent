@@ -122,6 +122,20 @@ public class OpsPatrolService {
         this.opsPathPolicy = opsPathPolicy;
     }
 
+    public void applyHotConfig(List<String> inspectRoots,
+                               double diskWarnPercent,
+                               double cpuWarnPercent,
+                               double anomalySpikeFactor,
+                               int errorAlarmMin) {
+        if (inspectRoots != null && !inspectRoots.isEmpty()) {
+            this.inspectRootsRaw = String.join(",", inspectRoots);
+        }
+        this.diskWarnPercent = diskWarnPercent;
+        this.cpuWarnPercent = cpuWarnPercent;
+        this.anomalySpikeFactor = anomalySpikeFactor;
+        this.errorAlarmMin = errorAlarmMin;
+    }
+
     public List<Map<String, Object>> getRecentAlerts(int limit) {
         List<Map<String, Object>> out = new ArrayList<>();
         int i = 0;
@@ -292,7 +306,7 @@ public class OpsPatrolService {
         if (autonomousRunAfterPatrol && autonomousOpsOrchestrator != null && !findings.isEmpty()) {
             try {
                 autonomousOpsOrchestrator.runScheduled(McpToolSurface.FULL, false);
-                log.info("[运维巡检] 已触发全栈自主运维编排（agent.autonomous.run-after-patrol=true）");
+                log.info("[运维巡检] 已触发全栈自主编排（agent.autonomous.run-after-patrol=true；与 ops.auto-remediation 并行，生产建议仅开其一）");
             } catch (Exception e) {
                 log.warn("[运维巡检] 自主运维编排异常: {}", e.getMessage());
             }

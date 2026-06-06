@@ -1,11 +1,11 @@
-import axios from 'axios'
+﻿import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { formatApiError } from '../utils/apiError.js'
 
 const runtimeHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
 const runtimeProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
 
-/** 生产/同源部署：构建或 .env 中设置 VITE_AWARD_LOG_BASE_URL（须含 /award-log 后缀，无末尾斜杠） */
+/** 鐢熶骇/鍚屾簮閮ㄧ讲锛氭瀯寤烘垨 .env 涓缃?VITE_AWARD_LOG_BASE_URL锛堥』鍚?/award-log 鍚庣紑锛屾棤鏈熬鏂滄潬锛?*/
 const viteAwardBase =
   typeof import.meta !== 'undefined' && import.meta.env?.VITE_AWARD_LOG_BASE_URL
     ? String(import.meta.env.VITE_AWARD_LOG_BASE_URL).trim().replace(/\/$/, '')
@@ -27,41 +27,46 @@ const request = axios.create({
   withCredentials: true
 })
 
+function buildApiError(message, data) {
+  const wrapped = new Error(message || '璇锋眰澶辫触')
+  wrapped.securityCode = data?.securityCode
+  wrapped.raw = data
+  return wrapped
+}
+
 request.interceptors.response.use(
   res => {
     if (res.config?.responseType === 'blob') {
       return res.data
     }
     const reqUrl = String(res.config?.url || '')
-    // MCP 工具接口返回 Spring Map JSON（success / needConfirm / error），无统一 { code, data }
+    // MCP 宸ュ叿鎺ュ彛杩斿洖 Spring Map JSON锛坰uccess / needConfirm / error锛夛紝鏃犵粺涓€ { code, data }
     if (reqUrl.includes('/mcp/')) {
       return res.data
     }
     const { code, data, message } = res.data
     if (code === 200) return data
-    if (code === 401 || code === 403) {
+    const errMsg = formatApiError({ response: { data: res.data } }) || message || '请求失败'
+    if (code === 401) {
       localStorage.removeItem('user')
-      ElMessage.error(message || '无权限访问')
+      ElMessage.error(errMsg)
       setTimeout(() => window.location.reload(), 300)
-      return Promise.reject(new Error(message || 'Unauthorized'))
+      return Promise.reject(buildApiError(errMsg, res.data))
     }
-  const errMsg = formatApiError({ response: { data: res.data } }) || message || '请求失败'
     ElMessage.error(errMsg)
-    return Promise.reject(new Error(errMsg))
+    return Promise.reject(buildApiError(errMsg, res.data))
   },
   error => {
-    if (error.response?.status === 401 || error.response?.status === 403) {
-      localStorage.removeItem('user')
-      ElMessage.error('登录已过期或权限不足，请重新登录')
-      setTimeout(() => window.location.reload(), 300)
-      return Promise.reject(error)
-    }
+    const status = error.response?.status
     const errMsg = formatApiError(error)
+    if (status === 401) {
+      localStorage.removeItem('user')
+      ElMessage.error('登录已过期，请重新登录')
+      setTimeout(() => window.location.reload(), 300)
+      return Promise.reject(buildApiError(errMsg, error.response?.data))
+    }
     ElMessage.error(errMsg)
-    const wrapped = new Error(errMsg)
-    wrapped.securityCode = error.response?.data?.securityCode
-    wrapped.raw = error.response?.data
-    return Promise.reject(wrapped)
+    return Promise.reject(buildApiError(errMsg, error.response?.data))
   }
 )
 
@@ -90,7 +95,7 @@ export const deleteTask = (taskId) => request.delete(`/log/delete/${taskId}`)
 export const downloadReport = (taskId, type) =>
   request.get(`/log/download/${encodeURIComponent(taskId)}/${encodeURIComponent(type)}`, { responseType: 'blob' })
 
-// 用户管理相关接口
+// 鐢ㄦ埛绠＄悊鐩稿叧鎺ュ彛
 export const login = (user) => request.post('/admin/user/login', user)
 export const logout = () => request.post('/admin/user/logout')
 export const register = (user) => request.post('/admin/user/register', user)
@@ -100,37 +105,37 @@ export const deleteUser = (userId) => request.delete(`/admin/user/${userId}`)
 export const getUsers = () => request.get('/admin/user/list')
 export const getUsersPage = (pageNum = 1, pageSize = 10) => 
   request.get('/admin/user/page', { params: { pageNum, pageSize } })
-// 忘记密码相关接口
+// 蹇樿瀵嗙爜鐩稿叧鎺ュ彛
 export const checkUserExists = (userInfo) => request.post('/admin/user/check-user', userInfo)
 export const resetPassword = (passwordInfo) => request.post('/admin/user/reset-password', passwordInfo)
 
-// 数据统计相关接口
+// 鏁版嵁缁熻鐩稿叧鎺ュ彛
 export const getLogSummary = (days = 7) => 
   request.get('/admin/statistics/log-summary', { params: { days } })
 export const getPerformance = (networkInterface = '') => {
-  console.log('调用getPerformance API...')
+  console.log('璋冪敤getPerformance API...')
   return request.get('/admin/statistics/performance', { params: { networkInterface } }).then(response => {
-    console.log('getPerformance API返回数据:', response)
+    console.log('getPerformance API杩斿洖鏁版嵁:', response)
     return response
   }).catch(error => {
-    console.error('getPerformance API调用失败:', error)
+    console.error('getPerformance API璋冪敤澶辫触:', error)
     throw error
   })
 }
 export const getAnomalyStatistics = (days = 7) => 
   request.get('/admin/statistics/anomaly-statistics', { params: { days } })
 export const getTaskStatusStatistics = () => {
-  console.log('调用getTaskStatusStatistics API...')
+  console.log('璋冪敤getTaskStatusStatistics API...')
   return request.get('/admin/statistics/task-status').then(response => {
-    console.log('getTaskStatusStatistics API返回数据:', response)
+    console.log('getTaskStatusStatistics API杩斿洖鏁版嵁:', response)
     return response
   }).catch(error => {
-    console.error('getTaskStatusStatistics API调用失败:', error)
+    console.error('getTaskStatusStatistics API璋冪敤澶辫触:', error)
     throw error
   })
 }
 
-// 性能分析相关API
+// 鎬ц兘鍒嗘瀽鐩稿叧API
 export const getPerformanceData = () => request.get('/admin/statistics/performance')
 export const getPatrolAlertsRecent = (limit = 12) =>
   request.get('/api/ops/patrol/alerts/recent', { params: { limit } })
@@ -141,7 +146,7 @@ export const getPatrolCorrelationLatest = () =>
 export const getPatrolRemediationPending = () =>
   request.get('/api/ops/patrol/remediation/pending')
 
-export const confirmPatrolRemediation = (proposalId, confirmCode = '确认执行') =>
+export const confirmPatrolRemediation = (proposalId, confirmCode = '纭鎵ц') =>
   request.post('/api/ops/patrol/remediation/confirm', { proposalId, confirmCode })
 
 export const getPatrolRemediationCoverage = () =>
@@ -161,8 +166,8 @@ export const getPerformanceMultiDimension = (startTime, endTime, interval = 10) 
 
 export const getAssistantContext = () => request.get('/api/assistant/context')
 
-/** 统一运维助手：流式自然语言对话（含可选多轮 history） */
-/** 延时执行本地工具任务（与 /api/mcp 同源；服务重启后任务丢失） */
+/** 缁熶竴杩愮淮鍔╂墜锛氭祦寮忚嚜鐒惰瑷€瀵硅瘽锛堝惈鍙€夊杞?history锛?*/
+/** 寤舵椂鎵ц鏈湴宸ュ叿浠诲姟锛堜笌 /api/mcp 鍚屾簮锛涙湇鍔￠噸鍚悗浠诲姟涓㈠け锛?*/
 export const scheduleDeferredOpsTask = (payload) =>
   request.post('/api/ops-schedule/tasks', payload)
 
@@ -191,18 +196,18 @@ export const getPerformanceBaseline = (dataType, days = 7) =>
 
 
 
-// 告警配置相关API（支持默认配置与任务级配置）
+// 鍛婅閰嶇疆鐩稿叧API锛堟敮鎸侀粯璁ら厤缃笌浠诲姟绾ч厤缃級
 export const getAlarmConfig = (taskId = '') =>
   taskId ? request.get(`/api/alarm/config/${taskId}`) : request.get('/api/alarm/config')
 
 export const saveAlarmConfig = (config, taskId = '') =>
   taskId ? request.post(`/api/alarm/config/${taskId}`, config) : request.post('/api/alarm/config', config)
 
-/** MCP 路径/服务白名单（控制台「路径白名单」弹窗） */
+/** MCP 璺緞/鏈嶅姟鐧藉悕鍗曪紙鎺у埗鍙般€岃矾寰勭櫧鍚嶅崟銆嶅脊绐楋級 */
 export const getAgentPathPolicy = () => request.get('/api/agent/path-policy')
 export const saveAgentPathPolicy = (body) => request.put('/api/agent/path-policy', body)
 
-// 角色管理相关接口
+// 瑙掕壊绠＄悊鐩稿叧鎺ュ彛
 export const getRoleById = (roleId) => request.get(`/admin/role/${roleId}`)
 export const getRoleByRoleName = (roleName) => request.get(`/admin/role/name/${roleName}`)
 export const getRoles = () => request.get('/admin/role/list')
@@ -212,7 +217,7 @@ export const addRole = (role) => request.post('/admin/role', role)
 export const updateRole = (role) => request.put('/admin/role', role)
 export const deleteRole = (roleId) => request.delete(`/admin/role/${roleId}`)
 
-// 权限管理相关接口
+// 鏉冮檺绠＄悊鐩稿叧鎺ュ彛
 export const getPermissionById = (permissionId) => request.get(`/admin/permission/${permissionId}`)
 export const getPermissionByPermissionCode = (permissionCode) => request.get(`/admin/permission/code/${permissionCode}`)
 export const getPermissions = () => request.get('/admin/permission/list')
@@ -224,19 +229,27 @@ export const updatePermission = (permission) => request.put('/admin/permission',
 export const deletePermission = (permissionId) => request.delete(`/admin/permission/${permissionId}`)
 export const saveRolePermissions = (roleId, permissionIds) => request.post(`/admin/role/${roleId}/permissions`, permissionIds)
 
-// 个人中心相关接口
+// 涓汉涓績鐩稿叧鎺ュ彛
 export const getUserInfo = () => request.get('/api/profile/user-info')
 export const updateUserInfo = (user) => request.put('/api/profile/user-info', user)
 export const changeUserPassword = (passwordInfo) => request.post('/api/profile/change-password', passwordInfo)
-export const getLoginHistory = () => request.get('/api/profile/login-history')
+export const getAccessTrail = (page = 1, pageSize = 10) =>
+  request.get('/api/profile/access-trail', { params: { page, pageSize } })
+export const getLoginHistory = (page = 1, pageSize = 10) =>
+  request.get('/api/profile/login-history', { params: { page, pageSize } })
 export const generateApiKey = () => request.post('/api/profile/generate-api-key')
-export const getNotificationSettings = () => request.get('/api/profile/notification-settings')
-export const updateNotificationSettings = (settings) => request.put('/api/profile/notification-settings', settings)
 export const getUserStats = () => request.get('/api/profile/user-stats')
+export const getUserApiKeys = () => request.get('/api/profile/api-keys')
+export const createUserApiKey = (payload) => request.post('/api/profile/api-keys', payload)
+export const rotateUserApiKey = (id) => request.post(`/api/profile/api-keys/${id}/rotate`)
+export const revokeUserApiKey = (id) => request.post(`/api/profile/api-keys/${id}/revoke`)
+export const getSystemConfigEffective = () => request.get('/api/system-config/effective')
+export const saveSystemConfigEffective = (payload) => request.put('/api/system-config/effective', payload)
+export const getPlatformInfo = () => request.get('/api/platform/info')
 
 
 
-// 告警历史相关接口
+// 鍛婅鍘嗗彶鐩稿叧鎺ュ彛
 export const getAlarmHistory = (pageNum = 1, pageSize = 10, level = '', taskId = '') => 
   request.get('/api/alarm/history/list', { params: { pageNum, pageSize, level, taskId } })
 
@@ -264,7 +277,7 @@ export const processAlarmsByTaskId = (taskId) =>
 
 
 
-// 告警规则管理相关接口
+// 鍛婅瑙勫垯绠＄悊鐩稿叧鎺ュ彛
 export const addAlarmRule = (rule) => request.post('/api/alarm-rule/add', rule)
 export const updateAlarmRule = (rule) => request.post('/api/alarm-rule/update', rule)
 export const deleteAlarmRule = (id) => request.delete(`/api/alarm-rule/delete/${id}`)
@@ -274,12 +287,12 @@ export const getEnabledAlarmRules = () => request.get('/api/alarm-rule/enabled')
 export const enableAlarmRule = (id, enabled) => request.post('/api/alarm-rule/enable', null, { params: { id, enabled } })
 export const testAlarmRule = (ruleId, testContent) => request.post('/api/alarm-rule/test', null, { params: { ruleId, testContent } })
 
-// 日志清洗相关API
+// 鏃ュ織娓呮礂鐩稿叧API
 export const getCleanRules = () => request.get('/api/log/clean/rules')
 export const saveCleanRules = (rules) => request.post('/api/log/clean/rules', rules)
 export const cleanLog = (logContent, rules) => request.post('/api/log/clean', { logContent, rules })
 
-// Elasticsearch相关API
+// Elasticsearch鐩稿叧API
 export const getESLogs = (pageNum = 1, pageSize = 10) => 
   request.get('/api/elasticsearch/logs', { params: { pageNum, pageSize } })
 
@@ -299,12 +312,12 @@ export const searchESLogs = (
 
 export const getESLogById = (id) => request.get(`/api/elasticsearch/get/${id}`)
 
-// 运维状态相关 API
+// 杩愮淮鐘舵€佺浉鍏?API
 export const getModelRfHealth = () => request.get('/api/v1/model/health')
 export const getCollectorStatus = () => request.get('/api/collector/status')
 export const getKafkaStatus = () => request.get('/api/kafka/status')
 
-// 聊天式分析相关API
+// 鑱婂ぉ寮忓垎鏋愮浉鍏矨PI
 export const chatAnalyze = (message) => request.post('/api/chat/analyze', { message })
 
 export const chatAnalyzeStream = (message) => {
@@ -333,15 +346,15 @@ export const getChatHistory = () => request.get('/api/chat/history')
 
 export const clearChatHistory = () => request.delete('/api/chat/history')
 
-// AI审计与Runbook审批
+// AI瀹¤涓嶳unbook瀹℃壒
 export const getAiAuditRecent = (limit = 100) =>
   request.get('/admin/audit/ai/recent', { params: { limit } })
 
-/** 运维侧全链路审计（ops_audit_trace） */
+/** 杩愮淮渚у叏閾捐矾瀹¤锛坥ps_audit_trace锛?*/
 export const getOpsTraceRecent = (limit = 100) =>
   request.get('/api/ops-trace/recent', { params: { limit } })
 
-/** 单条审计含 steps_json（思维链） */
+/** 鍗曟潯瀹¤鍚?steps_json锛堟€濈淮閾撅級 */
 export const getOpsTraceDetail = (traceId) =>
   request.get('/api/ops-trace/detail', { params: { traceId } })
 
@@ -351,7 +364,7 @@ export const approveRunbook = (id) => request.post(`/api/runbook/${id}/approve`)
 export const rejectRunbook = (id, reason = '') => request.post(`/api/runbook/${id}/reject`, { reason })
 export const executeRunbook = (id) => request.post(`/api/runbook/${id}/execute`)
 
-// 决策反馈相关API
+// 鍐崇瓥鍙嶉鐩稿叧API
 export const submitDecisionFeedback = (feedback) => request.post('/decision-feedback/submit', feedback)
 export const submitDecisionFeedbackBatch = (feedbacks) => request.post('/decision-feedback/submit/batch', feedbacks)
 export const getUntrainedSamples = (pageNum = 1, pageSize = 20) => 
@@ -360,7 +373,7 @@ export const getUntrainedCount = () => request.get('/decision-feedback/untrained
 export const triggerManualTraining = () => request.post('/decision-feedback/train/manual')
 export const markAsTrained = (ids) => request.post('/decision-feedback/mark-trained', ids)
 
-// MCP工具相关API
+// MCP宸ュ叿鐩稿叧API
 export const executeMcpTool = (toolName, parameters, userMessage = '') => {
   const body = { toolName, parameters }
   const um = typeof userMessage === 'string' ? userMessage.trim() : ''
@@ -368,8 +381,8 @@ export const executeMcpTool = (toolName, parameters, userMessage = '') => {
   return request.post('/api/mcp/execute', body)
 }
 
-/** 中等风险二次确认后执行（confirmCode 须与后端一致：确认执行） */
-export const confirmMcpExecute = (toolName, parameters, confirmCode = '确认执行', userMessage = '') => {
+/** 涓瓑椋庨櫓浜屾纭鍚庢墽琛岋紙confirmCode 椤讳笌鍚庣涓€鑷达細纭鎵ц锛?*/
+export const confirmMcpExecute = (toolName, parameters, confirmCode = '纭鎵ц', userMessage = '') => {
   const body = { toolName, parameters, confirmCode }
   const um = typeof userMessage === 'string' ? userMessage.trim() : ''
   if (um) body.userMessage = um
@@ -378,7 +391,7 @@ export const confirmMcpExecute = (toolName, parameters, confirmCode = '确认执
 
 export const getMcpTools = () => request.get('/api/mcp/tools')
 
-/** 一键安全自检（探针走真实安全门，不执行系统命令） */
+/** 涓€閿畨鍏ㄨ嚜妫€锛堟帰閽堣蛋鐪熷疄瀹夊叏闂紝涓嶆墽琛岀郴缁熷懡浠わ級 */
 export const getSecuritySelfCheck = () => request.get('/api/security/self-check')
 
 export const getPatrolHistory = (days = 7, limit = 50) =>
@@ -387,12 +400,29 @@ export const getPatrolHistory = (days = 7, limit = 50) =>
 export const getPatrolHistoryTrend = (days = 7) =>
   request.get('/api/ops/patrol/history/trend', { params: { days } })
 
-/** 运维效果评分仪表板 */
+/** 杩愮淮鏁堟灉璇勫垎浠〃鏉?*/
 export const getOpsEffectDashboard = (days = 7) =>
   request.get('/api/ops/effect/dashboard', { params: { days } })
 
-/** 全工具融合自主运维（不经过 LLM） */
+/** AWM 宸叉矇娣€ workflow 濂楄矾 */
+export const getOpsWorkflowMemory = (domain = 'all', q = '') =>
+  request.get('/api/ops/workflow/memory', {
+    params: { domain, ...(q ? { q } : {}) }
+  })
+
+/** Reflexion 瀹夊叏鏁欒 */
+export const getOpsFailureInsights = (q = '', limit = 12) =>
+  request.get('/api/ops/workflow/failure-insights', {
+    params: { limit, ...(q ? { q } : {}) }
+  })
+
+/** 浠庤繎鏈熷璁¤建杩圭绾胯瀵?workflow */
+export const induceOpsWorkflowFromAudit = (limit = 20) =>
+  request.post('/api/ops/workflow/induce-from-audit', null, { params: { limit } })
+
+/** 鍏ㄥ伐鍏疯瀺鍚堣嚜涓昏繍缁达紙涓嶇粡杩?LLM锛?*/
 export const runAutonomousOps = (forceRemediate = false, readOnly = false) =>
   request.post('/api/ops/autonomous/run', null, {
     params: { forceRemediate, readOnly }
   })
+

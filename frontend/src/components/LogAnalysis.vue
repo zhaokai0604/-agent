@@ -231,56 +231,14 @@
       </template>
     </el-dialog>
     
-    <!-- 告警配置弹窗 -->
-    <el-dialog v-model="alarmConfigVisible" title="告警配置" width="600px">
-      <el-form :model="alarmConfig" :rules="alarmConfigRules" ref="alarmConfigRef">
-        <el-form-item label="启用告警">
-          <el-switch v-model="alarmConfig.enabled" active-text="启用" inactive-text="禁用" />
-        </el-form-item>
-        
-        <el-form-item label="推送渠道" required>
-          <el-checkbox-group v-model="alarmConfig.pushChannels">
-            <el-checkbox label="wechat" border>企业微信</el-checkbox>
-            <el-checkbox label="email" border>邮箱</el-checkbox>
-          </el-checkbox-group>
-        </el-form-item>
-        
-        <el-form-item label="告警级别" required>
-          <el-select v-model="alarmConfig.minSeverity" placeholder="请选择最低告警级别" style="width: 100%;">
-            <el-option label="INFO" value="INFO_LEVEL" />
-            <el-option label="WARNING" value="WARNING_LEVEL" />
-            <el-option label="ERROR" value="ERROR_LEVEL" />
-            <el-option label="FATAL" value="FATAL_LEVEL" />
-          </el-select>
-        </el-form-item>
-        
-        <el-form-item label="错误数量阈值" required>
-          <el-input-number v-model="alarmConfig.errorThreshold" :min="1" :max="1000" placeholder="同一任务中错误数量超过此值才推送" />
-        </el-form-item>
-        
-        <el-form-item label="企业微信用户ID">
-          <el-input v-model="alarmConfig.wechatUserId" placeholder="企业微信用户ID" clearable />
-        </el-form-item>
-        
-        <el-form-item label="邮箱地址">
-          <el-input v-model="alarmConfig.email" type="email" placeholder="邮箱地址" clearable />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="alarmConfigVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveAlarmConfig">保存配置</el-button>
-        </span>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, defineExpose } from 'vue'
-import { UploadFilled, WarningFilled, Warning, CircleCheck, Refresh, Download, Cpu, Timer, CircleCheckFilled, ArrowDown, CircleClose, Setting, Service } from '@element-plus/icons-vue'
+import { UploadFilled, WarningFilled, Warning, CircleCheck, Refresh, Download, Cpu, Timer, CircleCheckFilled, ArrowDown, CircleClose, Service } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
-import { uploadLog, uploadLogs, getTaskStatus, getReport, performDiagnosis, cancelTask, getAlarmConfig as getAlarmConfigApi, saveAlarmConfig as saveAlarmConfigApi, downloadReport, getApiBaseUrl } from '../api'
+import { uploadLog, uploadLogs, getTaskStatus, getReport, performDiagnosis, cancelTask, downloadReport, getApiBaseUrl } from '../api'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
 import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
@@ -328,34 +286,6 @@ const renderedAiDiagnosis = computed(() => {
   return md.render(aiResultText.value)
 })
 
-// 告警配置弹窗状态
-const alarmConfigVisible = ref(false)
-const alarmConfigRef = ref()
-
-// 告警配置表单数据
-const alarmConfig = reactive({
-  enabled: true, // 是否启用告警
-  pushChannels: ['wechat', 'email'], // 默认推送渠道
-  minSeverity: 'ERROR_LEVEL', // 默认最低告警级别
-  errorThreshold: 5, // 默认错误数量阈值
-  wechatUserId: '', // 企业微信用户ID
-  email: '' // 邮箱地址
-})
-
-// 告警配置表单验证规则
-const alarmConfigRules = {
-  pushChannels: [
-    { required: true, message: '请至少选择一个推送渠道', trigger: 'change' }
-  ],
-  minSeverity: [
-    { required: true, message: '请选择最低告警级别', trigger: 'change' }
-  ],
-  errorThreshold: [
-    { required: true, message: '请输入错误数量阈值', trigger: 'blur' },
-    { type: 'number', min: 1, max: 1000, message: '错误数量阈值在1到1000之间', trigger: 'blur' }
-  ]
-}
-
 const taskStatus = reactive({
   status: 'IDLE', // IDLE, PROCESSING, COMPLETED, FAILED
   progress: 0,
@@ -373,9 +303,6 @@ onMounted(() => {
         taskStatus.status = 'COMPLETED'
         fetchReport()
     }
-    
-    // 初始化告警配置
-    initAlarmConfig()
 })
 
 // Expose a method to load specific task
@@ -812,64 +739,6 @@ const handleCancelTask = async () => {
   }
 }
 
-// 显示告警配置弹窗
-const showAlarmConfig = () => {
-  initAlarmConfig()
-  alarmConfigVisible.value = true
-}
-
-/** 接口返回 WECHAT/EMAIL，复选框 label 为 wechat/email */
-function normalizePushChannelsForUi(channels) {
-  if (!Array.isArray(channels)) return ['email']
-  const mapped = channels
-    .map((c) => {
-      const u = String(c).trim().toUpperCase()
-      if (u === 'WECHAT') return 'wechat'
-      if (u === 'EMAIL') return 'email'
-      return String(c).toLowerCase()
-    })
-    .filter((c) => c === 'wechat' || c === 'email')
-  return mapped.length ? mapped : ['email']
-}
-
-// 保存告警配置
-const saveAlarmConfig = async () => {
-  if (!alarmConfigRef.value) return
-  
-  try {
-    await alarmConfigRef.value.validate()
-
-    const channels = alarmConfig.pushChannels || []
-    if (channels.includes('email') && !(alarmConfig.email || '').trim()) {
-      ElMessage.warning('已勾选邮箱推送，请填写邮箱地址')
-      return
-    }
-    if (channels.includes('wechat') && !(alarmConfig.wechatUserId || '').trim()) {
-      ElMessage.warning('已勾选企业微信，请填写企业微信用户 ID')
-      return
-    }
-    
-    const payload = {
-      enabled: alarmConfig.enabled,
-      pushChannels: (alarmConfig.pushChannels || []).map((item) => String(item).toUpperCase()),
-      alarmLevel: String(alarmConfig.minSeverity || 'ERROR_LEVEL').replace('_LEVEL', ''),
-      errorThreshold: alarmConfig.errorThreshold,
-      wechatUserId: alarmConfig.wechatUserId || '',
-      emailAddress: alarmConfig.email || '',
-      cooldownMs: 300000
-    }
-    await saveAlarmConfigApi(payload, taskId.value || '')
-    
-    // 关闭弹窗
-    alarmConfigVisible.value = false
-    
-    ElMessage.success('告警配置保存成功')
-  } catch (error) {
-    console.error('保存告警配置失败:', error)
-    ElMessage.error('保存告警配置失败')
-  }
-}
-
 const handleDownload = async (type) => {
   try {
     if (!taskId.value) {
@@ -893,26 +762,9 @@ const handleDownload = async (type) => {
   }
 }
 
-// 初始化告警配置（优先任务级，否则默认配置）
-const initAlarmConfig = async () => {
-  try {
-    const data = await getAlarmConfigApi(taskId.value || '')
-    if (!data) return
-    alarmConfig.enabled = data.enabled ?? true
-    alarmConfig.pushChannels = normalizePushChannelsForUi(data.pushChannels)
-    alarmConfig.minSeverity = `${(data.alarmLevel || 'ERROR').toUpperCase()}_LEVEL`
-    alarmConfig.errorThreshold = data.errorThreshold ?? 5
-    alarmConfig.wechatUserId = data.wechatUserId || ''
-    alarmConfig.email = data.emailAddress || ''
-  } catch (error) {
-    console.error('加载告警配置失败:', error)
-  }
-}
-
 // 暴露所有需要给父组件访问的方法
 defineExpose({
-  loadTask,
-  showAlarmConfig
+  loadTask
 })
 </script>
 

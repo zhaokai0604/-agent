@@ -29,17 +29,9 @@ public abstract class AbstractCommandExecutor {
         return 10_000L;
     }
 
-    /**
-     * 兼容部分工具误把 startTime 传给 duration 字段的历史写法。
-     */
+    /** @see McpDurationSupport#normalize(long) */
     protected long normalizeDurationMs(long durationOrStartTime) {
-        long value = Math.max(0L, durationOrStartTime);
-        long now = System.currentTimeMillis();
-        long earliestEpochMs = 946684800000L; // 2000-01-01
-        if (value >= earliestEpochMs && value <= now + 60_000L) {
-            return Math.max(0L, now - value);
-        }
-        return value;
+        return McpDurationSupport.normalize(durationOrStartTime);
     }
 
     protected CompletableFuture<CommandResult> executeCommandAsync(List<String> command) {

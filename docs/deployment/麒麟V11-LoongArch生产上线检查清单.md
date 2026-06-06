@@ -2,7 +2,7 @@
 
 **系统**：ThreshCore（award-log）  
 **交付 Profile**：`prod-kylin`（= `prod` + `kylin`）  
-**验收接口**：`GET /award-log/api/platform/info`（无需登录）
+**验收接口**：`GET /award-log/api/platform/acceptance`（无需登录；完整 `/api/platform/info` 需登录）
 
 ---
 
@@ -96,7 +96,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 - [ ] Actuator 仅内网  
 - [ ] `agent.service-restart.allowlist` 无 sshd/mysqld 等关键服务  
 - [ ] `agent.paths` 白名单与现场目录一致  
-- [ ] `agent.autonomous.run-after-patrol=false`（首轮建议）
+- [ ] `agent.autonomous.run-after-patrol=false`（默认已是 false；与 `ops.auto-remediation` 勿同时全开）
 
 ---
 

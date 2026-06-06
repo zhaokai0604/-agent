@@ -68,6 +68,21 @@ public class AiAuditLogService {
                 size);
     }
 
+    public List<Map<String, Object>> listRecentByUserId(String userId, int page, int pageSize) {
+        if (userId == null || userId.isBlank()) {
+            return List.of();
+        }
+        int safePage = Math.max(1, page);
+        int safePageSize = Math.max(1, Math.min(pageSize, 100));
+        int offset = (safePage - 1) * safePageSize;
+        return jdbcTemplate.queryForList(
+                "SELECT id, method, path, status, duration_ms, remote_ip, created_at FROM ai_audit_log "
+                        + "WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                userId,
+                safePageSize,
+                offset);
+    }
+
     public long countByUserId(String userId) {
         if (userId == null || userId.isBlank()) {
             return 0L;

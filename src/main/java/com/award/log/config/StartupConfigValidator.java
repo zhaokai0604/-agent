@@ -38,10 +38,6 @@ public class StartupConfigValidator {
             require("spring.kafka.bootstrap-servers", missing);
         }
 
-        if (StringUtils.hasText(environment.getProperty("spring.mail.username"))) {
-            require("spring.mail.password", missing);
-        }
-
         if (prod) {
             require("spring.ai.openai.api-key", missing);
         }

@@ -180,6 +180,40 @@ public class SysUserServiceImpl implements SysUserService {
     }
 
     @Override
+    public boolean matchesPassword(Integer userId, String rawPassword) {
+        if (userId == null || rawPassword == null) {
+            return false;
+        }
+        SysUser user = sysUserMapper.selectById(userId);
+        return user != null
+                && user.getPassword() != null
+                && passwordEncoder.matches(rawPassword, user.getPassword());
+    }
+
+    @Override
+    public boolean changeOwnPassword(Integer userId, String oldPassword, String newPassword) {
+        if (userId == null) {
+            return false;
+        }
+        if (!matchesPassword(userId, oldPassword)) {
+            return false;
+        }
+        String encoded = passwordEncoder.encode(newPassword);
+        return sysUserMapper.updatePasswordById(userId, encoded) > 0;
+    }
+
+    @Override
+    public boolean updateOwnProfile(Integer userId, String email, String wechatUserid) {
+        if (userId == null) {
+            return false;
+        }
+        return sysUserMapper.updateProfileFields(
+                userId,
+                email == null ? null : email.trim(),
+                wechatUserid == null ? null : wechatUserid.trim()) > 0;
+    }
+
+    @Override
     public boolean userExists(String username) {
         SysUser user = sysUserMapper.selectByUsername(username);
         return user != null;
