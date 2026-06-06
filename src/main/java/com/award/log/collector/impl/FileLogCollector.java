@@ -28,6 +28,8 @@ public class FileLogCollector implements LogCollector {
     private final String name;
     private final Set<String> includeExtensions;
     private final Set<String> excludeDirectories;
+    private final int maxDepth;
+    private final int pollIntervalMs;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ExecutorService executorService;
     private final List<String> collectedLogs;
@@ -41,8 +43,15 @@ public class FileLogCollector implements LogCollector {
     }
 
     public FileLogCollector(String filePath, String name, String includeExtensions, String excludeDirectories) {
+        this(filePath, name, includeExtensions, excludeDirectories, 4, 5000);
+    }
+
+    public FileLogCollector(String filePath, String name, String includeExtensions, String excludeDirectories,
+                            int maxDepth, int pollIntervalMs) {
         this.filePath = filePath;
         this.name = name;
+        this.maxDepth = Math.max(1, maxDepth);
+        this.pollIntervalMs = Math.max(1000, pollIntervalMs);
         this.executorService = Executors.newSingleThreadExecutor();
         this.collectedLogs = new ArrayList<>();
         this.includeExtensions = parseCsvToLowercaseSet(includeExtensions);
@@ -97,12 +106,13 @@ public class FileLogCollector implements LogCollector {
         }
     }
 
-    private void watchDirectoryRecursively(Path root) {
+    private void watchDirectoryRecursively(Path scanRoot) {
+        this.root = scanRoot;
         try (WatchService watchService = FileSystems.getDefault().newWatchService()) {
-            collectFromDirectory(root);
-            registerAllDirectories(root, watchService);
+            collectFromDirectory(scanRoot, 0);
+            registerAllDirectories(scanRoot, watchService, 0);
             while (running.get()) {
-                WatchKey key = watchService.poll(1500, TimeUnit.MILLISECONDS);
+                WatchKey key = watchService.poll(pollIntervalMs, TimeUnit.MILLISECONDS);
                 if (key == null) {
                     continue;
                 }
@@ -110,15 +120,16 @@ public class FileLogCollector implements LogCollector {
             }
         } catch (Exception e) {
             log.error("[文件日志采集器] WatchService异常，回退轮询: {}", e.getMessage());
-            fallbackDirectoryPolling(root);
+            fallbackDirectoryPolling(scanRoot);
         }
     }
 
-    private void fallbackDirectoryPolling(Path root) {
+    private void fallbackDirectoryPolling(Path scanRoot) {
+        this.root = scanRoot;
         while (running.get()) {
             try {
-                collectFromDirectory(root);
-                Thread.sleep(2000);
+                collectFromDirectory(scanRoot, 0);
+                Thread.sleep(pollIntervalMs);
             } catch (Exception ex) {
                 log.warn("[文件日志采集器] 回退轮询异常: {}", ex.getMessage());
                 sleepQuietly(3000);
@@ -130,7 +141,7 @@ public class FileLogCollector implements LogCollector {
         while (running.get()) {
             try {
                 collectFromFile(file);
-                Thread.sleep(1000);
+                Thread.sleep(pollIntervalMs);
             } catch (Exception e) {
                 log.warn("[文件日志采集器] 文件轮询异常: {}", e.getMessage());
                 sleepQuietly(3000);
@@ -152,7 +163,7 @@ public class FileLogCollector implements LogCollector {
             Path changedRelativePath = (Path) event.context();
             Path changedPath = dir.resolve(changedRelativePath);
             if (Files.isDirectory(changedPath) && kind == StandardWatchEventKinds.ENTRY_CREATE) {
-                registerAllDirectories(changedPath, watchService);
+                registerAllDirectories(changedPath, watchService, depthOf(dir));
                 continue;
             }
             if (Files.isRegularFile(changedPath) && isLogFile(changedPath)) {
@@ -165,11 +176,39 @@ public class FileLogCollector implements LogCollector {
         }
     }
 
-    private void registerAllDirectories(Path root, WatchService watchService) throws IOException {
-        Files.walk(root)
-                .filter(Files::isDirectory)
-                .filter(this::isAllowedDirectory)
-                .forEach(path -> registerDirectory(path, watchService));
+    private int depthOf(Path directory) {
+        try {
+            return rootDepth(root, directory);
+        } catch (Exception e) {
+            return maxDepth;
+        }
+    }
+
+    private int rootDepth(Path root, Path dir) {
+        if (dir == null || dir.equals(root)) {
+            return 0;
+        }
+        Path parent = dir.getParent();
+        if (parent == null || parent.equals(dir)) {
+            return 1;
+        }
+        return 1 + rootDepth(root, parent);
+    }
+
+    private Path root;
+
+    private void registerAllDirectories(Path scanRoot, WatchService watchService, int depth) {
+        if (depth >= maxDepth) {
+            return;
+        }
+        try {
+            Files.walk(scanRoot, Math.max(1, maxDepth - depth))
+                    .filter(Files::isDirectory)
+                    .filter(this::isAllowedDirectory)
+                    .forEach(path -> registerDirectory(path, watchService));
+        } catch (Exception e) {
+            log.debug("[文件日志采集器] 注册监视目录失败: {}", scanRoot, e);
+        }
     }
 
     private void registerDirectory(Path directory, WatchService watchService) {
@@ -205,15 +244,15 @@ public class FileLogCollector implements LogCollector {
         }
     }
 
-    private void collectFromDirectory(Path directory) throws IOException {
-        if (!isAllowedDirectory(directory)) {
+    private void collectFromDirectory(Path directory, int depth) throws IOException {
+        if (!isAllowedDirectory(directory) || depth >= maxDepth) {
             return;
         }
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
             for (Path entry : stream) {
                 try {
                     if (Files.isDirectory(entry)) {
-                        collectFromDirectory(entry);
+                        collectFromDirectory(entry, depth + 1);
                     } else if (Files.isRegularFile(entry) && isLogFile(entry)) {
                         collectFromFile(entry);
                     }

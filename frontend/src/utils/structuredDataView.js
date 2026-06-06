@@ -2,6 +2,8 @@
  * 将 API / 工具返回的结构化数据转为卡片、表格、标签、进度条等视图模型（避免堆砌 JSON）。
  */
 
+import { normalizeMcpToolResponse } from './mcpToolResult'
+
 const FIELD_LABELS = {
   mode: '模式',
   path: '路径',
@@ -33,6 +35,12 @@ const FIELD_LABELS = {
   cancelled: '已取消',
   channel: '通道',
   phase: '阶段',
+  receive: '接收请求',
+  perceive: '环境感知',
+  reason: '推理决策',
+  security: '安全校验',
+  execute: '执行操作',
+  verify: '结果验证',
   title: '标题',
   detail: '详情',
   step: '步骤',
@@ -186,6 +194,33 @@ export function coerceStructuredInput(val) {
   return val
 }
 
+/** 将 MCP / 审计返回统一解包，避免 StructuredResultView 直接渲染整段 JSON */
+export function payloadForStructuredView(raw) {
+  if (raw == null) return null
+
+  let val = coerceStructuredInput(raw)
+
+  if (val != null && typeof val === 'object' && !Array.isArray(val)) {
+    if (val.success !== undefined && (val.data !== undefined || val.needConfirm !== undefined)) {
+      const n = normalizeMcpToolResponse(val)
+      if (n.data != null && n.data !== '') return coerceStructuredInput(n.data)
+      const { success, error, message, securityCode, riskScore, riskExplanation, traceId, duration } = n
+      return {
+        success,
+        error,
+        message,
+        securityCode,
+        riskScore,
+        riskExplanation,
+        traceId,
+        durationMs: duration
+      }
+    }
+  }
+
+  return val
+}
+
 function isPlainObject(v) {
   return v != null && typeof v === 'object' && !Array.isArray(v)
 }
@@ -247,6 +282,19 @@ function formatKbCompact(kb) {
 function formatScalar(val) {
   if (val == null) return '—'
   if (typeof val === 'boolean') return val ? '是' : '否'
+  if (key === 'mode' && typeof val === 'string') {
+    const u = val.toUpperCase()
+    if (u === 'DRY-RUN' || u === 'DRY_RUN') return '预览模式'
+    if (u === 'HEALTHY') return '健康'
+    if (u === 'UNHEALTHY' || u === 'WARNING') return '异常'
+  }
+  if (typeof val === 'string') {
+    const u = val.toUpperCase()
+    if (u === 'HEALTHY') return '健康'
+    if (u === 'ONLINE') return '在线'
+    if (u === 'OFFLINE') return '离线'
+  }
+  if (isByteField(key) && typeof val === 'number') return formatBytes(val)
   if (typeof val === 'number') return Number.isInteger(val) ? String(val) : val.toFixed(2)
   if (typeof val === 'string') {
     const translated = translateEnumValue(val)
@@ -341,14 +389,28 @@ function inferTableColumns(rows) {
   return ordered.map((prop) => ({ prop, label: fieldLabel(prop), minWidth: prop === 'path' ? 200 : 100 }))
 }
 
-function buildTableSection(key, arr, depth) {
+function formatRowForDisplay (row, columns) {
+  if (!isPlainObject(row)) return row
+  const out = { ...row }
+  for (const col of columns) {
+    const v = out[col.prop]
+    if (v == null || v === '') continue
+    if (isByteField(col.prop) && typeof v === 'number') {
+      out[col.prop] = formatBytes(v)
+    }
+  }
+  return out
+}
+
+function buildTableSection (key, arr, depth) {
   if (!arr.length) return null
   if (arr.every(isPlainObject)) {
+    const columns = inferTableColumns(arr)
     return {
       kind: 'table',
       title: fieldLabel(key),
-      columns: inferTableColumns(arr),
-      rows: arr.slice(0, 50)
+      columns,
+      rows: arr.slice(0, 50).map((row) => formatRowForDisplay(row, columns))
     }
   }
   if (arr.every((x) => typeof x !== 'object')) {
@@ -377,7 +439,7 @@ function buildTableSection(key, arr, depth) {
  * @returns {{ kind: string, text?: string, tags?: string[], metrics?: object[], fields?: object[], table?: object, sections?: object[] }}
  */
 export function buildStructuredViewModel(raw, depth = 0) {
-  const val = coerceStructuredInput(raw)
+  const val = payloadForStructuredView(coerceStructuredInput(raw))
 
   if (val == null || val === '') {
     return { kind: 'empty' }
@@ -452,7 +514,7 @@ export function buildStructuredViewModel(raw, depth = 0) {
     fields.push({
       key,
       label: fieldLabel(key),
-      value: formatScalar(v),
+      value: formatScalar(v, key),
       tagType: tagTypeForField(key, v)
     })
   }
@@ -466,7 +528,7 @@ export function buildStructuredViewModel(raw, depth = 0) {
 
 /** 历史列表 / 表格预览：单行摘要，不用 JSON */
 export function formatResultPreview(raw, maxLen = 140) {
-  const vm = buildStructuredViewModel(raw)
+  const vm = buildStructuredViewModel(payloadForStructuredView(raw))
   const parts = []
 
   const walk = (m) => {

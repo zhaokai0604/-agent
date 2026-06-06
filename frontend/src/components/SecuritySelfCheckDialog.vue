@@ -32,7 +32,7 @@
           </div>
         </div>
 
-        <el-divider content-position="left">分层护栏探针</el-divider>
+        <el-divider content-position="left">检查项</el-divider>
 
         <div v-for="layer in report.layers || []" :key="layer.id" class="sec-layer-block">
           <div class="sec-layer-title">
@@ -52,7 +52,7 @@
             :show-header="true"
           >
             <el-table-column prop="title" label="检查项" min-width="120" />
-            <el-table-column prop="scenario" label="探针场景" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="scenario" label="测试场景" min-width="160" show-overflow-tooltip />
             <el-table-column label="预期" width="88" align="center">
               <template #default="{ row }">
                 <el-tag size="small" type="info">{{ decisionLabel(row.expect) }}</el-tag>
@@ -72,7 +72,7 @@
           </el-table>
           <ul class="sec-hints">
             <li v-for="p in probesForLayer(layer.id)" :key="p.id + '-hint'">
-              <strong>{{ p.title }}：</strong>{{ p.judgeHint }}
+              <strong>{{ p.title }}：</strong>{{ p.description || p.judgeHint }}
             </li>
           </ul>
         </div>
@@ -131,7 +131,7 @@ function probesForLayer (layerId) {
 }
 
 function statusLabel (s) {
-  if (s === 'PASS') return '护栏生效'
+  if (s === 'PASS') return '检查通过'
   if (s === 'WARN') return '部分异常'
   return '待检查'
 }

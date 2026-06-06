@@ -189,7 +189,12 @@ public class AutonomousOpsOrchestrator {
     }
 
     public RunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
-        return runInternal(userMessage, surface, intentRisk, opsIntentRouter.forceRemediate(userMessage));
+        boolean force = opsIntentRouter.forceRemediate(userMessage);
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        if (ctx != null && ctx.isUserConfirmedWrite()) {
+            force = true;
+        }
+        return runInternal(userMessage, surface, intentRisk, force);
     }
 
     /** 供 REST / 巡检回调：无用户话术时也可触发全栈闭环 */
@@ -542,6 +547,42 @@ public class AutonomousOpsOrchestrator {
             }
         }
         return ports.isEmpty() ? List.of(8080) : ports;
+    }
+
+    private static boolean chatPreviewOnly() {
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        if (ctx != null && ctx.isUserConfirmedWrite()) {
+            return false;
+        }
+        return ctx != null && ctx.isChatAgentPath();
+    }
+
+    private String buildRemediationPlan(List<Finding> findings) {
+        StringBuilder sb = new StringBuilder();
+        int i = 1;
+        for (Finding f : findings) {
+            sb.append(i++).append(". **").append(f.title()).append("** — ").append(f.detail()).append("\n");
+            String action = planActionFor(f);
+            if (action != null) {
+                sb.append("   - 建议动作：").append(action).append("\n");
+            }
+        }
+        sb.append("\n> 以上为基于当前采集的处置建议。回复 **「确认执行」** 将在策略允许范围内自动落地；否则仅预览。\n");
+        return sb.toString();
+    }
+
+    private static String planActionFor(Finding f) {
+        if (f == null || f.kind() == null) {
+            return null;
+        }
+        return switch (f.kind()) {
+            case "DISK_PRESSURE" -> "扫描热点目录 → 预览清理临时/陈旧日志 → 验证磁盘使用率";
+            case "CPU_HIGH" -> "定位高 CPU 进程 → 评估是否重启白名单内服务";
+            case "LOG_ANOMALY" -> "分析异常日志 → 预览日志目录清理";
+            case "MEM_HIGH" -> "列出内存占用进程 → 建议限流或扩容";
+            case "FAILED_SERVICE" -> "检查失败单元 → 预览重启（白名单内）";
+            default -> "调用对应 MCP 工具验证后按策略处置";
+        };
     }
 
     private String safeCall(Callable<String> call, String label, List<Map<String, Object>> steps) {

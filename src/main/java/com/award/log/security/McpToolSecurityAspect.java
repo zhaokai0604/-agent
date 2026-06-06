@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
 
 import java.util.Arrays;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -33,9 +34,11 @@ public class McpToolSecurityAspect {
 
         String toolBeanName = ClassUtils.getUserClass(pjp.getTarget()).getSimpleName();
         String instruction = buildInstruction(pjp, toolBeanName);
+        String userUtterance = ctx.getUserMessage();
 
         McpInvocationSecurityGate.GateDecision decision =
-                mcpInvocationSecurityGate.evaluateChatToolInvocation(toolBeanName, instruction);
+                mcpInvocationSecurityGate.evaluateChatToolInvocation(
+                        toolBeanName, parameters, instruction, userUtterance);
 
         if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.BLOCK
                 || decision.getType() == McpInvocationSecurityGate.GateDecision.Type.NEED_CONFIRM) {

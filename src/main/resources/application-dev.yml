@@ -8,6 +8,7 @@ spring:
     password: ${DB_PASSWORD:}
 
 # 开发阶段：登录即可查看「执行审计」列表（无需管理员角色）
+# 数据库建表请手动执行 src/main/resources/schema.sql（spring.sql.init 已在 application.yml 设为 never）
 app:
   security:
     ai-audit-relaxed-read: true

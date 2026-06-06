@@ -1,6 +1,8 @@
 package com.award.log.controller;
 
+import com.award.log.collector.LogCollectorPathResolver;
 import com.award.log.common.Result;
+import com.award.log.config.OpsDryRunProperties;
 import com.award.log.decision.RandomForestDecisionEngine;
 import com.award.log.governance.OpsGovernanceService;
 import com.award.log.mcp.MinPrivilegeExecutor;
@@ -8,6 +10,7 @@ import com.award.log.platform.KylinCommandProbe;
 import com.award.log.util.OsRuntime;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
@@ -17,10 +20,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * 验收用：平台/OS/架构与生产 profile 快照（不含密钥明文）。
+ * 平台与运行环境快照（不含密钥明文）。
  */
 @Tag(name = "平台信息")
 @RestController
@@ -71,6 +75,8 @@ public class PlatformInfoController {
         security.put("aiAuditRelaxedRead", environment.getProperty("app.security.ai-audit-relaxed-read"));
         security.put("autoRemediationEnabled", environment.getProperty("ops.auto-remediation.enabled"));
         security.put("autonomousOpsEnabled", environment.getProperty("agent.autonomous.enabled"));
+        security.put("globalDryRun", opsDryRunProperties.isGlobalDryRun());
+        security.put("aiConfigured", chatClient != null && aiApiKey != null && !aiApiKey.isBlank());
         body.put("security", security);
 
         body.put("governance", opsGovernanceService.summaryForPlatform());

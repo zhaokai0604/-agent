@@ -1,6 +1,6 @@
 /**
  * MCP HTTP 返回：外层常有 success:true，真正工具结果是 data 里的 ToolResult JSON 字符串。
- * 统一解析后得到真实的 success / data / duration，供运维对话与 MCP 演示页展示。
+ * 统一解析后得到真实的 success / data / duration，供运维对话与工具箱展示。
  */
 
 function tryParseJsonDeep(s) {

@@ -3,6 +3,7 @@ package com.award.log.service.impl;
 import com.award.log.mapper.LogAnalysisDetailMapper;
 import com.award.log.mapper.LogAnalysisTaskMapper;
 import com.award.log.service.StatisticsService;
+import com.award.log.util.OsRuntime;
 import lombok.extern.slf4j.Slf4j;
 import oshi.SystemInfo;
 import oshi.hardware.CentralProcessor;
@@ -15,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
@@ -24,6 +26,8 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 数据统计Service实现
@@ -54,6 +58,27 @@ public class StatisticsServiceImpl implements StatisticsService {
     private static long lastBytesSent = 0;
     private static long lastNetworkTimestamp = 0;
     private static boolean networkInitialized = false;
+
+    /** OSHI 在龙架构/部分麒麟内核上常无法初始化 LinuxOperatingSystem，探测后缓存结果 */
+    private static volatile Boolean oshiAvailable;
+
+    private static boolean useOshiMetrics() {
+        if (oshiAvailable != null) {
+            return oshiAvailable;
+        }
+        if (OsRuntime.isLoongArch()) {
+            oshiAvailable = false;
+            return false;
+        }
+        try {
+            new SystemInfo();
+            oshiAvailable = true;
+        } catch (Throwable t) {
+            log.warn("OSHI 不可用，性能监控改用 MXBean/proc：{}", t.toString());
+            oshiAvailable = false;
+        }
+        return oshiAvailable;
+    }
 
     @Override
     public Map<String, Object> getRecentLogSummary(int days) {
@@ -126,14 +151,24 @@ public class StatisticsServiceImpl implements StatisticsService {
 
     @Override
     public Map<String, Object> getSystemPerformance(String preferredNetworkInterface) {
-        // 每次调用都重新计算性能数据，确保返回最新数据
         log.info("获取系统性能数据");
-        Map<String, Object> performance = new HashMap<>();
-        long now = System.currentTimeMillis();
-
+        if (!useOshiMetrics()) {
+            return collectPerformanceFallback(preferredNetworkInterface);
+        }
         try {
-            // 使用oshi库获取真实的系统性能数据
-            SystemInfo systemInfo = new SystemInfo();
+            return collectPerformanceViaOshi(preferredNetworkInterface);
+        } catch (Throwable t) {
+            log.warn("OSHI 采集失败，降级 MXBean/proc：{}", t.toString());
+            oshiAvailable = false;
+            return collectPerformanceFallback(preferredNetworkInterface);
+        }
+    }
+
+    private Map<String, Object> collectPerformanceViaOshi(String preferredNetworkInterface) {
+        Map<String, Object> performance = new HashMap<>();
+
+        // 使用oshi库获取真实的系统性能数据
+        SystemInfo systemInfo = new SystemInfo();
             HardwareAbstractionLayer hal = systemInfo.getHardware();
             OperatingSystem os = systemInfo.getOperatingSystem();
 
@@ -303,10 +338,69 @@ public class StatisticsServiceImpl implements StatisticsService {
 
             // 获取当前时间
             performance.put("timestamp", System.currentTimeMillis());
+            performance.put("metricsSource", "oshi");
 
+        return performance;
+    }
+
+    /** 龙架构 / OSHI 不可用时的降级采集（MXBean + /proc + FileStore） */
+    private Map<String, Object> collectPerformanceFallback(String preferredNetworkInterface) {
+        Map<String, Object> performance = new HashMap<>();
+        try {
+            double cpuUsage = 0.0;
+            OperatingSystemMXBean osMxBean = ManagementFactory.getOperatingSystemMXBean();
+            if (osMxBean instanceof com.sun.management.OperatingSystemMXBean sunOsMxBean) {
+                double cpuLoad = sunOsMxBean.getCpuLoad();
+                if (cpuLoad < 0) {
+                    cpuLoad = sunOsMxBean.getSystemCpuLoad();
+                }
+                if (cpuLoad >= 0) {
+                    cpuUsage = Math.max(0, Math.min(100, cpuLoad * 100.0));
+                }
+            }
+            performance.put("cpuUsage", cpuUsage);
+
+            long totalMemory = 0L;
+            long freeMemory = 0L;
+            if (osMxBean instanceof com.sun.management.OperatingSystemMXBean sunMem) {
+                totalMemory = sunMem.getTotalMemorySize();
+                freeMemory = sunMem.getFreeMemorySize();
+            }
+            if (totalMemory <= 0) {
+                long[] mem = readLinuxMemInfo();
+                totalMemory = mem[0];
+                freeMemory = mem[1];
+            }
+            long usedMemory = Math.max(0, totalMemory - freeMemory);
+            double memoryUsage = totalMemory > 0 ? (usedMemory * 100.0 / totalMemory) : 0.0;
+            performance.put("memoryUsage", Math.max(0, Math.min(100, memoryUsage)));
+            performance.put("usedMemory", usedMemory);
+            performance.put("totalMemory", totalMemory);
+            performance.put("freeMemory", freeMemory);
+
+            try {
+                FileStore fileStore = Files.getFileStore(Paths.get("."));
+                long totalDiskSize = fileStore.getTotalSpace();
+                long usableSpace = fileStore.getUsableSpace();
+                long usedSpace = totalDiskSize - usableSpace;
+                double diskUsage = totalDiskSize > 0 ? (usedSpace * 100.0 / totalDiskSize) : 0.0;
+                performance.put("diskUsage", Math.max(0, Math.min(100, diskUsage)));
+                performance.put("diskPath", fileStore.toString());
+                performance.put("diskTotal", totalDiskSize);
+                performance.put("diskUsed", usedSpace);
+                performance.put("diskFree", usableSpace);
+            } catch (Exception e) {
+                log.warn("获取磁盘使用情况失败: {}", e.getMessage());
+                performance.put("diskUsage", 0.0);
+                performance.put("diskPath", "");
+            }
+
+            applyNetworkFallbackMetrics(performance, preferredNetworkInterface);
+            performance.put("threadCount", Thread.activeCount());
+            performance.put("timestamp", System.currentTimeMillis());
+            performance.put("metricsSource", "mxbean-proc");
         } catch (Exception e) {
-            log.error("获取系统性能数据失败: {}", e.getMessage(), e);
-            // 保持真实口径：异常时返回0并标记错误，不再注入随机模拟值
+            log.error("降级采集系统性能失败: {}", e.getMessage(), e);
             performance.put("cpuUsage", 0.0);
             performance.put("memoryUsage", 0.0);
             performance.put("diskUsage", 0.0);
@@ -316,9 +410,91 @@ public class StatisticsServiceImpl implements StatisticsService {
             performance.put("threadCount", Thread.activeCount());
             performance.put("timestamp", System.currentTimeMillis());
             performance.put("error", "SYSTEM_METRICS_COLLECTION_FAILED");
+            performance.put("metricsSource", "fallback-error");
         }
-
         return performance;
+    }
+
+    private static final Pattern PROC_NET_DEV = Pattern.compile("^\\s*(\\S+):\\s*(\\d+)\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+\\s+(\\d+)");
+
+    private void applyNetworkFallbackMetrics(Map<String, Object> performance, String preferredNetworkInterface) {
+        Map<String, long[]> ifaceBytes = readProcNetDevBytes();
+        performance.put("networkInterfaces", new ArrayList<>(ifaceBytes.keySet()));
+        if (ifaceBytes.isEmpty()) {
+            performance.put("networkUsage", 0.0);
+            performance.put("networkInterface", "N/A");
+            return;
+        }
+        String iface = preferredNetworkInterface;
+        if (iface == null || iface.isBlank() || !ifaceBytes.containsKey(iface)) {
+            iface = ifaceBytes.keySet().stream()
+                    .filter(name -> !"lo".equals(name))
+                    .findFirst()
+                    .orElse(ifaceBytes.keySet().iterator().next());
+        }
+        long[] bytes = ifaceBytes.get(iface);
+        long bytesRecv = bytes[0];
+        long bytesSent = bytes[1];
+        long currentTimestamp = System.currentTimeMillis();
+        double networkUsage = 0.0;
+        if (lastNetworkTimestamp > 0) {
+            double timeDiff = (currentTimestamp - lastNetworkTimestamp) / 1000.0;
+            if (timeDiff > 0) {
+                long deltaTotalBytes = (bytesRecv - lastBytesRecv) + (bytesSent - lastBytesSent);
+                double bytesPerSecond = deltaTotalBytes / timeDiff;
+                long bandwidth = 100L * 1000000 / 8;
+                networkUsage = Math.max(0, Math.min(100, (bytesPerSecond / bandwidth) * 100.0));
+            }
+        } else {
+            networkInitialized = true;
+        }
+        lastBytesRecv = bytesRecv;
+        lastBytesSent = bytesSent;
+        lastNetworkTimestamp = currentTimestamp;
+        performance.put("networkUsage", networkUsage);
+        performance.put("networkInterface", iface);
+        performance.put("bytesRecv", bytesRecv);
+        performance.put("bytesSent", bytesSent);
+    }
+
+    private static long[] readLinuxMemInfo() {
+        long total = 0L;
+        long available = 0L;
+        try (BufferedReader reader = Files.newBufferedReader(Paths.get("/proc/meminfo"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith("MemTotal:")) {
+                    total = parseProcMemKb(line) * 1024L;
+                } else if (line.startsWith("MemAvailable:")) {
+                    available = parseProcMemKb(line) * 1024L;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        if (available <= 0 && total > 0) {
+            available = total / 4;
+        }
+        return new long[]{total, available};
+    }
+
+    private static long parseProcMemKb(String line) {
+        Matcher m = Pattern.compile("(\\d+)").matcher(line);
+        return m.find() ? Long.parseLong(m.group(1)) : 0L;
+    }
+
+    private static Map<String, long[]> readProcNetDevBytes() {
+        Map<String, long[]> out = new LinkedHashMap<>();
+        try (BufferedReader reader = Files.newBufferedReader(Paths.get("/proc/net/dev"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                Matcher m = PROC_NET_DEV.matcher(line);
+                if (m.find()) {
+                    out.put(m.group(1), new long[]{Long.parseLong(m.group(2)), Long.parseLong(m.group(3))});
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
     }
 
 

@@ -11,9 +11,23 @@ const viteAwardBase =
     ? String(import.meta.env.VITE_AWARD_LOG_BASE_URL).trim().replace(/\/$/, '')
     : ''
 
-const runtimeBaseUrl =
-  viteAwardBase ||
-  `${runtimeProtocol}//${runtimeHost}:8088/award-log`
+/** 解析 API 基址：dev(3000) 须带当前端口走 Vite proxy；8088 直连后端；生产同域 /award-log */
+function buildRuntimeBaseUrl() {
+  if (viteAwardBase) {
+    return viteAwardBase.replace(/\/$/, '')
+  }
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8088/award-log'
+  }
+  const { protocol, hostname, port } = window.location
+  if (port === '8088') {
+    return `${protocol}//${hostname}:8088/award-log`
+  }
+  const portPart = port ? `:${port}` : ''
+  return `${protocol}//${hostname}${portPart}/award-log`
+}
+
+const runtimeBaseUrl = buildRuntimeBaseUrl()
 
 const API_TIMEOUT_MS = (() => {
   const raw = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_API_TIMEOUT_MS : undefined
@@ -184,7 +198,8 @@ export const assistantChatStream = (message, history = [], options = {}) =>
     body: JSON.stringify({
       message,
       history: Array.isArray(history) ? history : [],
-      useToolAgent: options.useToolAgent !== false
+      useToolAgent: options.useToolAgent !== false,
+      confirmRemediation: options.confirmRemediation === true
     })
   })
 export const getApiBaseUrl = () => runtimeBaseUrl
@@ -393,6 +408,9 @@ export const getMcpTools = () => request.get('/api/mcp/tools')
 
 /** 涓€閿畨鍏ㄨ嚜妫€锛堟帰閽堣蛋鐪熷疄瀹夊叏闂紝涓嶆墽琛岀郴缁熷懡浠わ級 */
 export const getSecuritySelfCheck = () => request.get('/api/security/self-check')
+
+/** 平台与运行环境（本机 OS、profile、演练模式等） */
+export const getPlatformInfo = () => request.get('/api/platform/info')
 
 export const getPatrolHistory = (days = 7, limit = 50) =>
   request.get('/api/ops/patrol/history', { params: { days, limit } })

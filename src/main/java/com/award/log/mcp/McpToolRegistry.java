@@ -87,6 +87,36 @@ public class McpToolRegistry {
     }
 
     /**
+     * Spring AI 1.1：带 {@code @Cacheable} 等 AOP 代理的 Tool Bean 不能直接 {@code .tools(bean)}，
+     * 需经 MethodToolCallbackProvider 注册，否则会报 No @Tool annotated methods found。
+     */
+    public ToolCallback[] getToolCallbacks() {
+        return buildToolCallbacks(getToolBeans());
+    }
+
+    public ToolCallback[] getToolCallbacksForSurface(McpToolSurface surface, ReadOnlySurfaceDenylist denylist) {
+        return buildToolCallbacks(getToolBeansForSurface(surface, denylist));
+    }
+
+    /** 对话 ChatClient：排除实验性 FirstMcpTools，避免 echo 注入面。 */
+    public ToolCallback[] getToolCallbacksForChatAgent(McpToolSurface surface, ReadOnlySurfaceDenylist denylist) {
+        List<Object> beans = getToolBeansForSurface(surface, denylist).stream()
+                .filter(bean -> !(bean instanceof FirstMcpTools))
+                .collect(Collectors.toCollection(ArrayList::new));
+        return buildToolCallbacks(beans);
+    }
+
+    private static ToolCallback[] buildToolCallbacks(List<Object> beans) {
+        if (beans == null || beans.isEmpty()) {
+            return new ToolCallback[0];
+        }
+        return MethodToolCallbackProvider.builder()
+                .toolObjects(beans.toArray())
+                .build()
+                .getToolCallbacks();
+    }
+
+    /**
      * READ_ONLY 面下排除 {@link ReadOnlySurfaceDenylist} 中的写类工具 Bean，避免模型误绑可执行写操作。
      */
     public List<Object> getToolBeansForSurface(McpToolSurface surface, ReadOnlySurfaceDenylist denylist) {

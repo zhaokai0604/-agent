@@ -2,9 +2,6 @@
   <div class="login-container">
     <div class="tc-bg" aria-hidden="true">
       <div class="tc-bg-gradient" />
-      <div class="tc-bg-grid" />
-      <div class="tc-bg-orb tc-bg-orb-a" />
-      <div class="tc-bg-orb tc-bg-orb-b" />
     </div>
 
     <div class="tc-shell">
@@ -19,7 +16,7 @@
           </div>
           <div class="tc-hero-copy">
             <h1 class="tc-hero-title">ThreshCore</h1>
-            <p class="tc-hero-tag">统一运维与日志智能分析</p>
+            <p class="tc-hero-tag">智能运维与日志洞察</p>
           </div>
         </div>
         <p class="tc-hero-lead">
@@ -113,19 +110,18 @@
           
           <div class="form-footer">
             <div class="agreement">
-              <label class="checkbox-container" :class="{ 'checkbox-readonly': !protocolReadConfirmed }">
-                <input type="checkbox" v-model="loginForm.agree" :disabled="!protocolReadConfirmed">
+              <label class="checkbox-container">
+                <input type="checkbox" v-model="loginForm.agree">
                 <span class="checkmark"></span>
                 <span class="label-text">我已阅读并同意<a href="#" class="agreement-link" @click.prevent="agreementVisible = true">《用户服务协议》</a></span>
               </label>
-              <p v-if="!protocolReadConfirmed" class="agreement-prereq">请先点击协议链接，滑动阅读至文末并点击「我已阅读并同意」，再勾选此项。</p>
             </div>
             <div class="forgot-password">
               <a href="javascript:;" class="forgot-link" @click="showForgotPassword = true">忘记密码？</a>
             </div>
           </div>
           
-          <button class="btn login-btn" @click="handleLogin" :disabled="!loginForm.agree || !protocolReadConfirmed">
+          <button class="btn login-btn" @click="handleLogin" :disabled="!loginForm.agree">
             <span>登录</span>
             <el-icon class="btn-icon"><ArrowRight /></el-icon>
           </button>
@@ -622,11 +618,6 @@ const handleLogin = async () => {
     ElMessage.error('请输入密码')
     return
   }
-  if (!protocolReadConfirmed.value) {
-    ElMessage.warning('请先阅读《用户服务协议》全文并确认')
-    agreementVisible.value = true
-    return
-  }
   if (!loginForm.agree) {
     ElMessage.error('请勾选同意用户服务协议')
     return
@@ -808,8 +799,8 @@ const handleResetPassword = async () => {
 }
 
 .login-container {
-  --tc-accent: #22d3ee;
-  --tc-accent-dim: rgba(34, 211, 238, 0.14);
+  --tc-accent: #0d9488;
+  --tc-accent-dim: rgba(13, 148, 136, 0.14);
   --tc-surface: rgba(15, 23, 42, 0.78);
   --tc-border: rgba(148, 163, 184, 0.16);
   --tc-text: #e2e8f0;
@@ -836,8 +827,8 @@ const handleResetPassword = async () => {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 120% 80% at 15% 0%, rgba(34, 211, 238, 0.14), transparent 52%),
-    radial-gradient(ellipse 90% 55% at 100% 90%, rgba(129, 140, 248, 0.18), transparent 48%),
+    radial-gradient(ellipse 120% 80% at 15% 0%, rgba(13, 148, 136, 0.12), transparent 52%),
+    radial-gradient(ellipse 90% 55% at 100% 90%, rgba(45, 212, 191, 0.1), transparent 48%),
     linear-gradient(168deg, #0f172a 0%, #020617 52%, #0a0f1a 100%);
 }
 

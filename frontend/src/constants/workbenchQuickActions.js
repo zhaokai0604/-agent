@@ -1,7 +1,6 @@
 import {
   Coin,
   FolderOpened,
-  Folder,
   TrendCharts,
   Document,
   Connection,
@@ -18,6 +17,13 @@ import {
 
 export const WORKBENCH_QUICK_GROUPS = [
   {
+    name: '自主',
+    items: [
+      { label: '全面检查', icon: DataAnalysis, cmd: '帮我全面检查系统状态，发现问题并给出修复计划' },
+      { label: '自动运维', icon: RefreshRight, cmd: '自动运维：检查本机并处理问题' }
+    ]
+  },
+  {
     name: '观测',
     items: [
       { label: '磁盘检查', icon: Coin, cmd: '检查磁盘使用情况' },
@@ -30,7 +36,7 @@ export const WORKBENCH_QUICK_GROUPS = [
   {
     name: '诊断',
     items: [
-      { label: '日志分析', icon: Document, cmd: '分析最近的系统日志' },
+      { label: '最近日志', icon: Document, cmd: '分析最近的系统日志' },
       { label: 'OS 日志', icon: Connection, cmd: '查看 journalctl 最近30分钟日志' },
       { label: '端口套接字', icon: Connection, cmd: '查看本机监听端口与网络套接字概况' },
       {
@@ -42,7 +48,7 @@ export const WORKBENCH_QUICK_GROUPS = [
     ]
   },
   {
-    name: '处置与自动化',
+    name: '处置',
     items: [
       { label: '临时清理', icon: Delete, cmd: '清理 7 天前的临时文件' },
       { label: '日志清理预览', icon: Files, cmd: '预览清理 /var/log 中 30 天前的旧日志文件' },

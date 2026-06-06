@@ -56,22 +56,43 @@ done
 
 DEPLOY_OUT="$OUT" bash "$ROOT/scripts/deploy/deploy.sh"
 
+echo ""
+echo "打包麒麟部署附件..."
+cp -f "$ROOT/scripts/deploy/env.kylin.prod.example" "$OUT/"
+cp -f "$ROOT/scripts/deploy/award-log.service" "$OUT/"
+cp -f "$ROOT/scripts/deploy/nginx.kylin.sample.conf" "$OUT/"
+cp -f "$ROOT/scripts/deploy/sudoers.award-agent.example" "$OUT/"
+cp -f "$ROOT/scripts/deploy/smoke_kylin_acceptance.sh" "$OUT/"
+cp -f "$ROOT/scripts/deploy/setup_kylin_host.sh" "$OUT/"
+
 cat > "$OUT/START-KYLIN.txt" << 'EOF'
 麒麟 V11 + LoongArch 启动示例
 =============================
 
-1. 环境变量（见 scripts/deploy/env.kylin.prod.example）
+0. 目标机环境准备（首次，需 root）
+   sudo bash scripts/deploy/setup_kylin_host.sh
+   # 或解压产物后: sudo bash setup_kylin_host.sh
 
-2. 启动后端
-   export SPRING_PROFILES_ACTIVE=prod-kylin
-   java -Xms512m -Xmx2g -jar award-log.jar
+1. 环境变量（见 env.kylin.prod.example → /etc/threshcore/threshcore.env）
+   SPRING_PROFILES_ACTIVE=prod-kylin
+   DB_URL=jdbc:mariadb://127.0.0.1:3306/log_analysis?...
 
-3. 验收
+2. 安装产物
+   sudo cp award-log.jar /opt/threshcore/
+   sudo cp -r dist /opt/threshcore/
+   sudo cp award-log.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now award-log
+
+3. Nginx（可选）
+   sudo cp nginx.kylin.sample.conf /etc/nginx/conf.d/threshcore.conf
+   sudo nginx -t && sudo systemctl reload nginx
+
+4. 验收
+   BASE=http://127.0.0.1:8088/award-log bash smoke_kylin_acceptance.sh
+   # deliveryTargetMatch 应为 true
+
+5. 手动探活
    curl -s http://127.0.0.1:8088/award-log/api/platform/info | jq .
-   # acceptance.deliveryTargetMatch 应为 true
-
-4. Nginx + systemd
-   见 award-log.service、nginx.kylin.sample.conf
 EOF
 
 echo ""

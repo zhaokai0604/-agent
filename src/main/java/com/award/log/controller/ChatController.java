@@ -16,6 +16,8 @@ import com.award.log.security.OpsSecurityRejectedException;
 import com.award.log.security.PromptInjectionGuard;
 import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.security.RiskLevel;
+import com.award.log.security.McpToolSurface;
+import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.trace.TraceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -225,8 +227,8 @@ public class ChatController {
                     """;
             
             RiskLevel surfaceRisk = intentRiskFilter.evaluate(userInput);
-            OpsSecurityContext.open(traceId, userInput, false,
-                    toolSurfaceResolver.resolve(userInput, surfaceRisk));
+            McpToolSurface surface = toolSurfaceResolver.resolve(userInput, surfaceRisk);
+            OpsSecurityContext.openChatAgent(traceId, userInput, surface);
             try {
                 org.springframework.ai.tool.ToolCallback[] toolCallbacks = mcpToolRegistry.getToolCallbacksForSurface(
                         toolSurfaceResolver.resolve(userInput, surfaceRisk), readOnlySurfaceDenylist);

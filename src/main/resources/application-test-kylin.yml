@@ -1,0 +1,47 @@
+# 麒麟 V11 + LoongArch 联调测试（密钥写在本文件，无需 export 环境变量）
+# Profile：test-kylin（= prod + kylin + 本文件覆盖项）
+# 启动：java -jar award-log.jar
+# Windows 本地开发请改回 spring.profiles.active=dev（application-local.yml 可覆盖）
+
+spring:
+  datasource:
+    driver-class-name: org.mariadb.jdbc.Driver
+    url: jdbc:mariadb://127.0.0.1:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai
+    username: threshcore
+    password: "20070604zwk.."
+  ai:
+    openai:
+      api-key: "sk-d85baf9884424ff8b76176b6787d9056"
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+
+award:
+  middleware:
+    kafka: false
+    redis: false
+
+app:
+  security:
+    ai-audit-relaxed-read: false
+
+agent:
+  min-privilege:
+    enabled: false
+  autonomous:
+    run-after-patrol: false
+
+log:
+  collector:
+    file:
+      path: /var/log
+  pipeline:
+    decision:
+      rf:
+        force-heuristic-on-loongarch: true
+
+elastic:
+  enabled: false
+
+management:
+  endpoint:
+    health:
+      show-details: always

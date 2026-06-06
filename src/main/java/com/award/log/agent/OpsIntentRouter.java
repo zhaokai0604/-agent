@@ -40,6 +40,12 @@ public class OpsIntentRouter {
                     + "(高负载|cpu高|cpu满了|内存紧张|系统慢|负载过高|占用过高|CPU占用)",
             Pattern.CASE_INSENSITIVE);
 
+    private static final Pattern GENERAL_OPS_CHECK = Pattern.compile(
+            "(检查|排查|诊断|体检|巡检|看看|分析).*(系统|服务器|主机|本机|机器|环境|状况)|"
+                    + "(系统|服务器|主机|本机|环境).*(检查|排查|诊断|健康|状态|怎么样|如何|正常)|"
+                    + "健康检查|运维检查|全面检查|帮我运维|系统状态|检查本机",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
     private static final Pattern EXECUTE_FOLLOWUP = Pattern.compile(
             "(执行清理|按预览执行|真实删除|确认执行|开始清理|执行删除|执行修复|立即清理)",
             Pattern.CASE_INSENSITIVE);

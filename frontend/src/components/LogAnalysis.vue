@@ -4,8 +4,8 @@
       <transition name="el-fade-in-linear">
         <div v-if="!reportData && taskStatus.status !== 'PROCESSING' && taskStatus.status !== 'FAILED'" class="upload-section">
           <div class="hero-text">
-            <h1>系统故障智能诊断</h1>
-            <p>基于 Drain 算法与 AI 知识库，一键解析系统日志，精准定位系统隐患。</p>
+            <h1>异常诊断</h1>
+            <p>上传系统日志，自动识别异常并生成诊断报告。</p>
           </div>
           
           <div class="upload-box" @click="triggerUpload" @drop.prevent="handleDrop" @dragover.prevent>
@@ -20,8 +20,8 @@
       <!-- 2. 分析进度加载状态 -->
       <transition name="el-zoom-in-center">
         <div v-if="taskStatus.status === 'PROCESSING'" class="processing-section">
-          <div class="radar-scan"></div>
-          <h2 class="scan-text">正在进行全系统深度扫描...</h2>
+          <div class="processing-spinner"></div>
+          <h2 class="scan-text">正在分析日志</h2>
           <div class="current-step">{{ taskStatus.currentStep }}</div>
           <el-progress 
             :percentage="taskStatus.progress" 
@@ -31,8 +31,7 @@
             class="scan-progress"
           />
           <div class="scan-metrics">
-            <span>任务进度: {{ taskStatus.progress }}%</span>
-            <span>当前状态: {{ taskStatus.status }}</span>
+            <span>进度 {{ taskStatus.progress }}%</span>
           </div>
           <div class="task-controls">
             <el-button 
@@ -50,9 +49,9 @@
       <!-- 分析失败：跳转工作台对话 -->
       <transition name="el-fade-in-linear">
         <div v-if="taskStatus.status === 'FAILED' && !reportData" class="failure-section">
-          <el-result icon="error" title="日志分析失败" :sub-title="taskStatus.errorMsg || '引擎处理异常，可到工作台对话做关联排查'">
+          <el-result icon="error" title="诊断失败" :sub-title="taskStatus.errorMsg || '处理异常，可在对话中继续排查'">
             <template #extra>
-              <el-button type="primary" @click="goOpsAgentAfterFailure">打开工作台对话复核</el-button>
+              <el-button type="primary" @click="goOpsAgentAfterFailure">去对话排查</el-button>
               <el-button @click="resetTask">重新上传</el-button>
             </template>
           </el-result>
@@ -89,8 +88,8 @@
                 type="success"
                 size="large"
                 @click="goOpsAgentDeepDiveFromReport"
-              >对话深挖</el-button>
-              <el-button type="warning" size="large" @click="handleGlobalDiagnosis" :icon="Cpu">AI 智能全盘诊断</el-button>
+              >继续分析</el-button>
+              <el-button type="warning" size="large" @click="handleGlobalDiagnosis" :icon="Cpu">生成诊断报告</el-button>
               
               <el-dropdown @command="handleDownload">
                 <el-button plain size="large" :icon="Download">
@@ -112,7 +111,7 @@
               <el-card class="detail-card" shadow="never">
                 <template #header>
                   <div class="card-header">
-                    <span class="title">关键事件追踪 (Top Risks)</span>
+                    <span class="title">关键异常事件</span>
                     <el-tag type="danger" effect="plain" size="small">{{ anomalyLogs.length }} 个异常项</el-tag>
                   </div>
                 </template>
@@ -137,7 +136,7 @@
                         link 
                         :icon="Cpu" 
                         @click.stop="handleSingleRowDiagnosis(scope.row)"
-                      >智能分析</el-button>
+                      >诊断</el-button>
                     </template>
                   </el-table-column>
                 </el-table>
@@ -205,13 +204,13 @@
     </el-dialog>
 
     <!-- AI 诊断弹窗 -->
-    <el-dialog v-model="aiDialogVisible" title="AI 系统故障智能诊断助手" width="700px" center custom-class="ai-dialog">
+    <el-dialog v-model="aiDialogVisible" title="诊断结果" width="700px" center custom-class="ai-dialog">
       <div class="ai-content">
         <div class="ai-header">
           <div class="ai-avatar"><el-icon :size="28"><Service /></el-icon></div>
           <div class="ai-bubble">
-            <p v-if="aiThinking">正在深度分析关键异常日志，生成专业诊断报告...</p>
-            <p v-else>基于 <strong>AI大模型 (Qwen-Max)</strong> 的诊断结果如下：</p>
+            <p v-if="aiThinking">正在分析异常日志并生成诊断建议…</p>
+            <p v-else>诊断结果如下：</p>
           </div>
         </div>
         
@@ -294,6 +293,9 @@ const taskStatus = reactive({
 })
 
 let timer = null
+let pollFailCount = 0
+let lastProgress = -1
+let stallTicks = 0
 
 // Initialize with prop if available
 onMounted(() => {
@@ -393,7 +395,7 @@ const handleSingleRowDiagnosis = async (row) => {
              aiResultText.value = '诊断失败: ' + (resData.message || '未知错误')
         }
     } catch (error) {
-        aiResultText.value = '智能诊断服务连接失败，请稍后再试。'
+        aiResultText.value = '诊断服务暂时不可用，请稍后再试。'
         console.error('Diagnosis error:', error)
     } finally {
         aiThinking.value = false
@@ -509,22 +511,51 @@ const processFiles = async (files) => {
     const id = await uploadLog(formData)
     taskId.value = id
     
+    pollFailCount = 0
+    lastProgress = -1
+    stallTicks = 0
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+
     timer = setInterval(async () => {
       try {
         const res = await getTaskStatus(taskId.value)
+        pollFailCount = 0
         taskStatus.progress = res.progress
         taskStatus.currentStep = res.currentStep
         taskStatus.status = res.status
-        
+
+        if (res.status === 'PROCESSING') {
+          if (res.progress === lastProgress) {
+            stallTicks++
+            if (stallTicks >= 30 && stallTicks % 15 === 0) {
+              taskStatus.currentStep = `${res.currentStep || '处理中'}（仍在运行，请稍候…）`
+            }
+          } else {
+            stallTicks = 0
+            lastProgress = res.progress
+          }
+        }
+
         if (res.status === 'COMPLETED') {
           clearInterval(timer)
+          timer = null
           fetchReport()
         } else if (res.status === 'FAILED') {
           clearInterval(timer)
+          timer = null
           taskStatus.errorMsg = res.errorMsg || '分析失败'
           ElMessage.error(taskStatus.errorMsg)
         }
       } catch (err) {
+        pollFailCount++
+        if (pollFailCount >= 3) {
+          clearInterval(timer)
+          timer = null
+          ElMessage.error(err?.message || '任务状态查询失败，请稍后刷新页面查看结果')
+        }
       }
     }, 1000)
 
@@ -789,12 +820,12 @@ defineExpose({
 }
 
 .hero-text h1 {
-  font-size: 32px;
-  color: #0f172a;
-  margin-bottom: 10px;
-  font-weight: 700;
+  font-size: 22px;
+  color: var(--ops-text, #0f172a);
+  margin-bottom: 8px;
+  font-weight: 600;
   text-shadow: none;
-  line-height: 1.2;
+  line-height: 1.3;
 }
 
 .hero-text p {
@@ -810,58 +841,30 @@ defineExpose({
 
 .upload-box {
   width: min(760px, 100%);
-  height: 240px;
+  height: 220px;
   margin: 0 auto;
-  background: #ffffff;
-  border: 2px dashed #cbd5e1;
-  border-radius: 12px;
+  background: var(--ops-panel, #ffffff);
+  border: 2px dashed var(--ops-border, #cbd5e1);
+  border-radius: var(--ops-radius, 12px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-  position: relative;
-  overflow: hidden;
-}
-
-.upload-box::before {
-  content: '';
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: linear-gradient(45deg, transparent, rgba(79, 195, 247, 0.1), transparent);
-  transform: rotate(45deg);
-  animation: shimmer 2s infinite;
-  opacity: 0;
-  transition: opacity 0.3s ease;
+  transition: border-color 0.2s ease, background 0.2s ease;
+  box-shadow: var(--ops-shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.08));
 }
 
 .upload-box:hover {
-  border-color: #0ea5e9;
-  background: #f8fbff;
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(14, 165, 233, 0.12);
-}
-
-.upload-box:hover::before {
-  opacity: 1;
+  border-color: var(--ops-primary, #0d9488);
+  background: var(--ops-panel-soft, #f8fafc);
 }
 
 .upload-icon {
-  font-size: 56px;
-  color: #0ea5e9;
-  margin-bottom: 14px;
-  transition: all 0.3s ease;
-  opacity: 0.8;
-}
-
-.upload-box:hover .upload-icon {
-  transform: scale(1.1) rotate(5deg);
-  opacity: 1;
+  font-size: 48px;
+  color: var(--ops-primary, #0d9488);
+  margin-bottom: 12px;
+  opacity: 0.85;
 }
 
 .upload-hint {
@@ -873,7 +876,7 @@ defineExpose({
 }
 
 .upload-box:hover .upload-hint {
-  color: #1a237e;
+  color: var(--ops-text, #1e293b);
 }
 
 .upload-sub {
@@ -894,51 +897,37 @@ defineExpose({
   text-align: center;
   margin: 36px 0;
   padding: 28px;
-  background: #ffffff;
-  border-radius: 12px;
-  border: 1px solid #dbe2ea;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-  animation: fadeIn 0.8s ease;
+  background: var(--ops-panel, #ffffff);
+  border-radius: var(--ops-radius, 12px);
+  border: 1px solid var(--ops-border, #dbe2ea);
+  box-shadow: var(--ops-shadow-sm);
 }
 
-.radar-scan {
-  width: 120px;
-  height: 120px;
-  margin: 0 auto 40px;
-  border: 4px solid rgba(79, 195, 247, 0.2);
+.processing-spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 24px;
+  border: 3px solid var(--ops-border, #e2e8f0);
+  border-top-color: var(--ops-primary, #0d9488);
   border-radius: 50%;
-  position: relative;
-  animation: radarScan 2s linear infinite;
+  animation: spin 0.8s linear infinite;
 }
 
-.radar-scan::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-top: 2px solid #4fc3f7;
-  border-right: 60px solid #4fc3f7;
-  border-bottom: 2px solid transparent;
-  border-left: 60px solid transparent;
-  transform-origin: left center;
-  animation: radarRotate 2s linear infinite;
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .scan-text {
-  color: #0f172a;
-  margin-bottom: 12px;
-  font-size: 20px;
+  color: var(--ops-text, #0f172a);
+  margin-bottom: 8px;
+  font-size: 18px;
   font-weight: 600;
-  text-shadow: 0 2px 4px rgba(26, 35, 126, 0.1);
 }
 
 .current-step {
-  color: #0284c7;
+  color: var(--ops-text-subtle, #64748b);
   font-size: 14px;
   margin-bottom: 16px;
-  font-weight: 500;
 }
 
 .scan-progress {
@@ -956,8 +945,7 @@ defineExpose({
 
 .scan-progress .el-progress__bar__inner {
   border-radius: 8px;
-  background: linear-gradient(90deg, #4fc3f7, #29b6f6);
-  box-shadow: 0 0 10px rgba(79, 195, 247, 0.5);
+  background: var(--ops-primary, #0d9488);
 }
 
 .scan-metrics {
@@ -979,17 +967,7 @@ defineExpose({
 }
 
 .task-controls .el-button {
-  min-width: 140px;
-  height: 48px;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 600;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.task-controls .el-button:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  min-width: 120px;
 }
 
 /* KPI仪表盘 */
@@ -1018,8 +996,7 @@ defineExpose({
 }
 
 .kpi-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.1);
+  box-shadow: var(--ops-shadow-md, 0 4px 12px rgba(15, 23, 42, 0.08));
 }
 
 .health-score {
@@ -1434,36 +1411,6 @@ defineExpose({
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes radarScan {
-  0% {
-    border-color: rgba(79, 195, 247, 0.2);
-  }
-  50% {
-    border-color: rgba(79, 195, 247, 0.6);
-  }
-  100% {
-    border-color: rgba(79, 195, 247, 0.2);
-  }
-}
-
-@keyframes radarRotate {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes shimmer {
-  0% {
-    transform: translateX(-100%) rotate(45deg);
-  }
-  100% {
-    transform: translateX(100%) rotate(45deg);
   }
 }
 

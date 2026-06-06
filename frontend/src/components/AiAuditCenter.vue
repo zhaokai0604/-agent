@@ -1,10 +1,10 @@
 <template>
-  <div class="ops-page">
+  <div :class="embedded ? 'audit-pane' : 'ops-page'">
   <el-card shadow="never" class="ops-surface-card">
     <template #header>
       <div class="header">
-        <span>AI 审计中心</span>
-        <div class="header-actions">
+        <span v-if="!embedded">访问记录</span>
+        <div class="header-actions" :class="{ 'header-actions--solo': embedded }">
           <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
           <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
           <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">导出 CSV</el-button>
@@ -60,7 +60,7 @@ const loadData = async () => {
   try {
     rows.value = await getAiAuditRecent(limit.value)
   } catch (e) {
-    ElMessage.error(e.message || '加载AI审计失败')
+    ElMessage.error(e.message || '加载失败')
   } finally {
     loading.value = false
   }
@@ -92,5 +92,7 @@ onMounted(loadData)
 <style scoped>
 .header { display: flex; align-items: center; justify-content: space-between; }
 .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.header-actions--solo { margin-left: auto; width: 100%; justify-content: flex-end; }
+.audit-pane .ops-surface-card { border: none; box-shadow: none; }
 .audit-export-wrap { background: #fff; }
 </style>

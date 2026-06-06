@@ -30,6 +30,7 @@
 - [后端 API 索引](#后端-api-索引)
 - [前端开发](#前端开发)
 - [日志分析流水线](#日志分析流水线)
+- [知识库 RAG](#知识库-rag)
 - [配置参考](#配置参考)
 - [快速开始](#快速开始)
 - [本地开发与测试](#本地开发与测试)
@@ -53,7 +54,7 @@
 | **运维 / 值班** | [安全与审计](#安全与审计)、[配置参考](#配置参考)、`docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` |
 | **测试** | [后端 API 索引](#后端-api-索引)、[MCP 工具链](#mcp-工具链)、[本地开发与测试](#本地开发与测试) |
 | **后端 / 全栈** | 全文；接口细节以 **Knife4j**（`/award-log/doc.html`）为准 |
-| **前端** | [前端开发](#前端开发)、[后端 API 索引](#后端-api-索引) |
+| **前端** | [前端开发](#前端开发)、[知识库 RAG](#知识库-rag)、[后端 API 索引](#后端-api-索引) |
 | **部署** | [快速开始](#快速开始)、[构建与部署](#构建与部署)、[麒麟 V11 + LoongArch](#麒麟-v11--loongarch) |
 
 ---
@@ -67,19 +68,24 @@
 | **生产配置示例** | `docs/deployment/prod-config-example.yml` | 复制为未入库的 `application-prod.yml` |
 | **在线接口** | `http://<host>:8088/award-log/doc.html` | Knife4j / OpenAPI |
 
-> 仓库仅保留与运行/部署相关的文档；赛题 PPT、路演稿、需求 docx 等已移出代码库。
+> 答辩/PPT 等历史材料已归档至 `docs/archive/competition/`（不参与产品构建）。
 
 ---
 
 ## 系统是做什么的
 
-**一句话**：ThreshCore 是 B/S 运维与日志平台——既能**上传分析海量日志**，也能用**中文对话**让 Agent 感知磁盘、进程、日志、容器、证书等，但所有「动机器」的操作都经过**白名单、风险评分、二次确认和六步审计**，避免 AI 或误操作破坏生产。
+**一句话**：ThreshCore 是 B/S 运维与日志平台——支持**上传分析日志**，也支持**中文对话**排查磁盘、进程、服务等问题；所有会修改系统的操作都经过**路径白名单、风险评分、二次确认和审计记录**。
 
-| 主线 | 说明 | 典型入口 |
+| 能力 | 说明 | 界面入口 |
 |------|------|----------|
-| **可观测与根因** | Drain-Plus 模板挖掘 + 异常检测 + AI 诊断 | Tab 5 日志分析 |
-| **受控智能运维** | 登记过的 MCP 工具 + 统一安全门 | Tab 1 工作台 / Tab 2 工具台 |
-| **主动闭环** | 定时巡检 + 有界自动修复 + 全工具自主编排 | 顶栏告警 / `POST /api/ops/autonomous/run` |
+| **智能对话** | 自然语言运维、Playbook 编排、RAG 引用与执行计划 | 工作台 · 对话 |
+| **工具箱** | 登记过的运维能力，统一安全校验与结构化结果 | 工作台 · 工具箱 |
+| **知识库 RAG** | Runbook 入库（txt/md/pdf）、向量检索，对话自动引用 | 工作台 · 知识库 |
+| **溯源审计** | HTTP 访问记录 + MCP 执行链路（CoT 步骤） | 工作台 · 溯源 |
+| **环境状态** | AI / Qdrant / MCP 连接自检与执行策略一览 | 工作台 · 环境 |
+| **异常诊断** | 模板挖掘 + 多维异常检测 + AI 建议 | 洞察 · 诊断 |
+| **态势大屏** | 本机 CPU/内存/磁盘/告警实时可视化（浅色工作区风格，与控制台一致） | 洞察 · 态势 |
+| **巡检** | 定时巡检与待确认修复 | 顶栏巡检 |
 
 **不是什么**：不是「给 AI 一个 root 终端」；不是必须装齐 Kafka/Redis（默认关闭）。
 
@@ -172,7 +178,7 @@ flowchart TB
 
 | 路径 | 入口 | 编排 | 审计 |
 |------|------|------|------|
-| **HTTP MCP** | `McpExecuteController` → `McpSecurityService` / `McpExecutionService` / `McpAuditService` → `McpToolDispatcher` | 单工具调用 | `ops_audit_trace` 四步 CoT（接收→感知→推理→校验） |
+| **HTTP MCP** | `McpExecuteController` → … → `McpToolDispatcher` | 单工具调用 | `ops_audit_trace` 记录执行步骤 |
 | **对话 Playbook** | `UnifiedAssistantService` → `OpsRuntimeService` | 规则编排，不经过 LLM 多步 | `AssistantAuditRecorder` **六步** |
 | **对话 LLM** | 同上，意图 `NONE` | `ChatClient` 自动 `@Tool` | 切面 `McpToolSecurityAspect` + 工具层 dry-run |
 
@@ -181,9 +187,10 @@ flowchart TB
 | 层级 | 技术 |
 |------|------|
 | 后端 | Spring Boot 3.5、MyBatis、Spring AI 1.1.0、WebSocket |
-| 前端 | Vue 3、Vite 4、Element Plus、ECharts |
-| 必选 | MySQL 8 |
-| 可选 | Redis、Kafka、Elasticsearch、Qdrant（默认不加载） |
+| 前端 | Vue 3、Vite 4、Element Plus、ECharts、markdown-it |
+| 关系库 | **本地/Windows 默认 MySQL 8**；麒麟生产 **MariaDB 10.6+**（双 JDBC 驱动，环境变量切换） |
+| 向量库 | **Qdrant**（本机 Docker 或 Cloud + `api-key`）；运维知识库 RAG |
+| 可选 | Redis、Kafka、Elasticsearch（默认不加载） |
 | 观测 | Actuator、Prometheus |
 | 文档 | Knife4j 4.5、Springdoc |
 
@@ -288,7 +295,7 @@ POST /award-log/api/ops/autonomous/run?forceRemediate=false&readOnly=false
 GET  /award-log/api/ops/autonomous/supports?message=全自动运维
 ```
 
-### 六步审计（赛题闭环）
+### 操作审计（六步）
 
 常量：`com.award.log.agent.audit.OpsAuditPhases`
 
@@ -301,7 +308,7 @@ GET  /award-log/api/ops/autonomous/supports?message=全自动运维
 | 5 | `execute` | 执行 |
 | 6 | `verify` | 验证 |
 
-Playbook 路径写入 `ops_audit_trace`；HTTP MCP 仍为四步 CoT（兼容工具台展示）。
+Playbook 路径写入 `ops_audit_trace`；HTTP 工具调用在界面「操作追踪」中展示执行步骤。
 
 ### AssistantOrchestrator — 单场景 Playbook
 
@@ -607,23 +614,21 @@ public class ExampleProbeTool {
 | **AWM** | `WorkflowMemoryService` | 成功轨迹 → 可复用 workflow（`ops_workflow_memory`） |
 | **Reflexion** | `FailureInsightService` | REJECT 轨迹 → 教训（`ops_failure_insight`），**不**写入 workflow |
 
-### 工作台本地护栏（Tab1）
+### 工作台本地风控（助手页）
 
 实现：`frontend/src/utils/opsIntentSafety.js`，与后端 `IntentRiskFilter` 口径对齐。
 
-- 破坏性话术（如「删除整个系统」）**不**走本地 MCP 快捷路由，避免误绑 `SystemLoadTool`。  
-- 延时任务创建前同样拦截；延时白名单与 `OpsDeferredTaskService` 一致（只读/清理类，**不含** `ServiceRestartTool` 等）。
+- 破坏性话术（如「删除整个系统」）**不**走本地工具快捷路由。  
+- 延时任务创建前同样拦截；延时白名单与 `OpsDeferredTaskService` 一致（只读/清理类，**不含**服务重启等写操作）。
 
-### 一键安全自检（答辩向）
+### 安全自检
 
 | 项 | 说明 |
 |----|------|
-| **入口** | 顶栏 **安全自检**（`TopPerformanceBar`） |
+| **入口** | 顶栏 **安全自检** |
 | **接口** | `GET /api/security/self-check` |
-| **实现** | `SecuritySelfCheckService`：10+ 固定探针调用真实 `McpInvocationSecurityGate`，**不执行系统命令** |
-| **展示** | 弹窗：配置快照（风险阈值、白名单规模、dry-run、最小权限）+ 分层探针表（预期 vs 实际：放行 / 须确认 / 拒绝） |
-
-弹窗顶部按评委关心的四类能力分组展示：**未注册工具**、**提示注入**、**高危意图**、**只读 vs 写**（含 READ_ONLY 面禁写工具、破坏性话术与只读工具不匹配）。探针覆盖二次确认信任边界；**不执行任何系统命令**。
+| **实现** | `SecuritySelfCheckService`：固定用例调用真实安全校验逻辑，**不执行系统命令** |
+| **展示** | 配置快照 + 检查项表（预期 vs 实际：放行 / 须确认 / 拒绝） |
 
 ### 两条工具入口
 
@@ -793,6 +798,36 @@ GET /award-log/api/platform/info
 
 ---
 
+## 知识库 RAG
+
+实现：`KnowledgeBaseServiceImpl` + `KnowledgeController`；对话侧由 `MultiAgentContextBuilder` / `UnifiedAssistantService` 在编排前检索并随 SSE 返回引用元数据（`ASSISTANT_META:`）。
+
+| 能力 | 说明 |
+|------|------|
+| 入库 | 文本 JSON 上传；文件支持 **txt / md / pdf / log** |
+| 分块 | 可配置 `chunk-size` / `chunk-overlap`，写入 Qdrant 集合 `ops_knowledge` |
+| 向量 | 优先 DashScope Embedding（Spring AI）；不可用时可选本地降级向量 |
+| 检索 | `GET /api/v1/knowledge/search?query=&topK=` |
+| 对话 | 助手自动检索 Top-K，前端展示依据条与引用摘要 |
+| 集合创建 | **惰性创建**：`getStatus` / `search` 不自动 POST；**首次上传**时进程内仅发起一次创建请求 |
+| 状态缓存 | 集合探测与文档数缓存 120s，降低 Qdrant scroll / GET 频率 |
+
+**Qdrant 部署方式**（二选一）：
+
+```bash
+# 本机 Docker（无需 API Key）
+docker compose up -d qdrant
+# QDRANT_URL=http://localhost:6333
+
+# Qdrant Cloud：控制台复制 Cluster URL + API Key，写入 application-local.yml 或环境变量
+# QDRANT_URL=https://<cluster>.region.gcp.cloud.qdrant.io
+# QDRANT_API_KEY=...
+```
+
+首次空库：**环境页**显示「集群已连接，集合将在首次上传时创建」；文档列表返回空表；检索返回空结果。上传文档后自动建集合并向量化入库。
+
+---
+
 ## 前端开发
 
 ### 目录
@@ -826,11 +861,19 @@ frontend/
     └── dashboardExport.js         # 图表 PDF（jspdf）
 ```
 
+### 导航分组
+
+| 分组 | 页面 | 快捷键 |
+|------|------|--------|
+| **工作台** | 对话 · 工具箱 · 溯源 · 知识库 · 环境 | 1–5 |
+| **洞察** | 态势 · 诊断 · 报告 · 看板 | 6–9 |
+
 ### 环境变量
 
 | 变量 | 说明 |
 |------|------|
-| `VITE_AWARD_LOG_BASE_URL` | **必须**含 `/award-log`，无尾斜杠；开发推荐 `http://localhost:3000/award-log`（Vite 代理） |
+| `VITE_AWARD_LOG_BASE_URL` | **必须**含 `/award-log`，无尾斜杠；开发推荐 `http://localhost:3000/award-log`（Vite 代理到 8088） |
+| `VITE_DEV_PROXY_TARGET` | Vite dev 代理目标，默认 `http://127.0.0.1:8088` |
 | `VITE_AWARD_LOG_WS_URL` | 跨域时指定 wss |
 | `VITE_API_TIMEOUT_MS` | 大文件上传可调大（默认 600000） |
 
@@ -864,7 +907,7 @@ frontend/
 
 ```bash
 cd frontend
-cp .env.example .env.development   # 可选
+cp .env.example .env.development   # 可选，仓库已含 .env.development
 npm install && npm run dev
 ```
 
@@ -878,7 +921,8 @@ npm install && npm run dev
 |------|------|
 | 分片读取 | `shardSize` 控制内存 |
 | Drain-Plus | `log.pipeline.analyzer.drain` |
-| 异常检测 | 启发式 + 可选 RF ONNX |
+| 异常检测 | 启发式 + 综合评分 + IntelligentRouter（按模板去重，上限 400 条；大任务可 `skipLlm` 跳过逐条 LLM） |
+| 进度 | 89% 后为综合评分与智能决策阶段（映射至 90%–97%）；前端轮询可显示细粒度步骤 |
 | 导出 | `target/output/<taskId>/` |
 | 取消 | `cancelAnalysis` |
 
@@ -899,6 +943,20 @@ npm install && npm run dev
 
 实时分析写 ES 时优先走 **`LogDocumentAsyncIndexer`**（`log.elasticsearch.async.*`），避免阻塞分析线程。
 
+### 后台日志采集（可选）
+
+实现：`LogCollectorConfig` + `FileLogCollector` + `LogCollectorPathResolver`
+
+| 配置 | 默认 | 说明 |
+|------|------|------|
+| `log.collector.enabled` | `true` | 关闭可显著降低开发机磁盘 I/O |
+| `LOG_COLLECTOR_ROOT` / `log.collector.file.path` | `auto` | `auto` 时按 OS 扫描常见日志目录（非整盘） |
+| `LOG_COLLECTOR_MAX_DEPTH` | `4` | 目录递归深度上限 |
+| `LOG_COLLECTOR_POLL_MS` | `5000` | 文件轮询间隔（毫秒） |
+| `log.pipeline.collector.dispatch-interval-ms` | `5000` | 采集批次派发间隔 |
+
+开发机若 CPU/磁盘压力大，可在 `application-local.yml` 设 `log.collector.enabled: false`，或 `LOG_COLLECTOR_ROOT=./logs` 缩小范围。
+
 ---
 
 ## 配置参考
@@ -907,8 +965,10 @@ npm install && npm run dev
 
 | 变量 | 必填 | 含义 |
 |------|------|------|
-| `DB_PASSWORD` | **是** | MySQL 密码 |
-| `AI_API_KEY` | 助手需要 | 大模型密钥 |
+| `DB_URL` | 否 | JDBC；默认 **MySQL** `jdbc:mysql://localhost:3306/log_analysis?...` |
+| `DB_DRIVER` | 否 | 默认 `com.mysql.cj.jdbc.Driver`；麒麟改为 `org.mariadb.jdbc.Driver` |
+| `DB_PASSWORD` | **是** | 数据库密码 |
+| `AI_API_KEY` | 助手需要 | 大模型密钥（DashScope 等） |
 | `AI_BASE_URL` | 否 | 兼容网关 |
 | `AI_CHAT_TEMPERATURE` | 否 | 对话采样温度，默认 **0.1**（答辩建议 0～0.2） |
 | `AI_CHAT_TOP_P` | 否 | 默认 0.85 |
@@ -922,10 +982,10 @@ npm install && npm run dev
 | `AGENT_PERCEPTION_CACHE_TTL_MS` | 否 | 感知缓存 |
 | `APP_CONFIG_SECRET` | 配置中心敏感项必需 | 用于加密 `system-config-secrets.json` 中的 AI Key 等敏感配置 |
 | `RF_FORCE_HEURISTIC_LOONGARCH` | 龙芯 | ONNX 不可用时启发式 |
-| `SPRING_PROFILES_ACTIVE` | 生产 | `prod` 或 `prod-kylin` |
+| `SPRING_PROFILES_ACTIVE` | 环境 | `dev` / `prod` / `prod-kylin` / `test-kylin` |
 | `APP_AI_AUDIT_RELAXED_READ` | 否 | **生产必须 false** |
 
-本地密钥：复制 `application-local.example.yml` → `application-local.yml`（已 gitignore）。
+本地密钥：复制 `application-local.example.yml` → `application-local.yml`（已 gitignore）。麒麟联调密钥见 `application-test-kylin.yml`。
 
 ### 统一配置中心补充
 
@@ -942,6 +1002,7 @@ npm install && npm run dev
 | 路径 | 含义 |
 |------|------|
 | `server.servlet.context-path` | `/award-log` |
+| `spring.sql.init.mode` | **`never`** — 不自动跑 `schema.sql`，需手动建表 |
 | `spring.profiles.group.prod-kylin` | `prod` + `kylin` |
 | `spring.ai.openai.chat.options.temperature` | LLM 低温（默认 0.1） |
 | `agent.runtime.enabled` | OpsRuntimeService / Playbook 路由 |
@@ -965,6 +1026,7 @@ npm install && npm run dev
 | `ops.websocket.replay-buffer-size` | WS 断线重连消息缓冲条数 |
 | `audit.retention-days` / `audit.cleanup-cron` | 审计表自动清理 |
 | `log.elasticsearch.async.*` | ES 异步批量索引 |
+| `log.collector.*` | 后台文件日志采集（path / max-depth / poll-interval） |
 | `log.pipeline.decision.rf.force-heuristic-on-loongarch` | 龙芯 ONNX 降级 |
 
 路径白名单也可通过控制台「路径白名单」写入 `agent-path-policy-overrides.json`（工作目录，已 gitignore）。
@@ -977,25 +1039,43 @@ npm install && npm run dev
 
 JDK 17 · Maven 3.8+ · MySQL 8 · **Node.js 18+**（推荐 18 LTS 或 20+；`frontend/package.json` 声明 `engines.node >= 18`）
 
-### 开发者一条龙
+### 开发者一条龙（Windows / 本地 MySQL）
 
 ```bash
-# 1. 数据库
+# 1. 数据库（任选其一）
+#    A) 本机 MySQL
 mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS log_analysis DEFAULT CHARSET utf8mb4;"
 mysql -u root -p log_analysis < src/main/resources/schema.sql
 
-# 2. 密钥：application-local.yml 或环境变量 DB_PASSWORD、AI_API_KEY
+#    B) Docker MySQL
+docker compose up -d mysql
+# 等待 healthy 后对容器执行 schema.sql（见 docker-compose.yml 注释）
 
-# 3. 后端
+# 2. 密钥：application-local.yml（见 application-local.example.yml）或 .env 导出 DB_PASSWORD、AI_API_KEY
+
+# 3. 可选向量库
+docker compose up -d qdrant
+# 或使用 Qdrant Cloud：在 application-local.yml 填写 qdrant.url / api-key
+
+# 4. 后端
 mvn spring-boot:run
 
-# 4. 前端
+# 5. 前端（Vite 3000 → 代理 8088）
 cd frontend && npm install && npm run dev
 ```
 
 - 接口文档：http://localhost:8088/award-log/doc.html  
-- Windows 开发可将 `application-dev.yml` 中 `agent.min-privilege.enabled` 设为 `false`  
+- 前端控制台：http://localhost:3000  
+- Windows 开发可将 `application-dev.yml` 或 `application-local.yml` 中 `agent.min-privilege.enabled` 设为 `false`  
 - 演练环境可设 `ops.dry-run.global=true`，验证写工具而不改机器
+
+### 麒麟 / MariaDB 联调
+
+```bash
+# Profile test-kylin（MariaDB + 麒麟路径策略），密钥见 application-test-kylin.yml
+export SPRING_PROFILES_ACTIVE=test-kylin
+# 或 docker compose --profile mariadb up -d mariadb
+```
 
 ---
 
@@ -1021,7 +1101,7 @@ mvn -DskipTests package     # 打包
 | `HistoryFilterTimeTest` | 历史列表日期边界 |
 | `McpToolParamReaderTest` | 二次确认是否升级真实写入 |
 
-**安全回归建议**（答辩前手测）：
+**安全回归建议**（发版前手测）：
 
 1. 「删除整个系统」→ 工作台拦截，不执行只读工具  
 2. 「预览清理 /tmp」→ 二次确认后仍为 `dryRun`  
@@ -1059,32 +1139,50 @@ Windows 说明：
 
 参考：`scripts/deploy/nginx.sample.conf`、`deploy.sh`、`deploy.ps1`。
 
-### Docker Compose（可选）
+### Docker Compose（可选依赖）
 
 ```bash
+# MySQL（本地默认）
 docker compose up -d mysql
-# 首次对容器执行 schema.sql
+# 首次：对库执行 src/main/resources/schema.sql
+
+# Qdrant（知识库向量）
+docker compose up -d qdrant
+
+# MariaDB（麒麟联调 profile）
+docker compose --profile mariadb up -d mariadb
 ```
+
+应用进程建议仍本机 `mvn spring-boot:run` 或 jar，便于 MCP 访问宿主路径。
 
 ---
 
 ## 麒麟 V11 + LoongArch
 
-**Profile**：`prod-kylin`（= `prod` + `kylin`）
+**Profile**：`prod-kylin`（= `prod` + `kylin`）；联调 **`test-kylin`**（= `prod` + `kylin` + `application-test-kylin.yml`）  
+**数据库**：系统 MariaDB（`jdbc:mariadb://…`，见 `env.kylin.prod.example` / `application-test-kylin.yml`）
 
 ```bash
+# 首次：目标机环境（MariaDB / award-agent / /opt/threshcore）
+sudo bash scripts/deploy/setup_kylin_host.sh
+
 bash scripts/deploy/deploy_kylin_loongarch.sh
-export SPRING_PROFILES_ACTIVE=prod-kylin
-java -Xms512m -Xmx2g -jar award-log.jar
+sudo cp deploy/release-kylin/award-log.jar /opt/threshcore/
+sudo cp -r deploy/release-kylin/dist /opt/threshcore/
+sudo cp deploy/release-kylin/award-log.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now award-log
 
 # 验收（无需登录）
 curl -s http://127.0.0.1:8088/award-log/api/platform/acceptance
 bash scripts/deploy/smoke_kylin_acceptance.sh
+curl -s http://127.0.0.1:8088/award-log/api/platform/info
 ```
 
 | 资源 | 路径 |
 |------|------|
 | 环境变量模板 | `scripts/deploy/env.kylin.prod.example` |
+| 目标机初始化 | `scripts/deploy/setup_kylin_host.sh` |
+| 最小权限 sudoers | `scripts/deploy/sudoers.award-agent.example` |
 | systemd 单元 | `scripts/deploy/award-log.service` |
 | Nginx 样例 | `scripts/deploy/nginx.kylin.sample.conf` |
 | 检查清单 | `docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` |
@@ -1188,8 +1286,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 | MCP 权限错误（Windows） | `agent.min-privilege.enabled=false`（仅 dev） |
 | ONNX 龙芯加载失败 | `RF_FORCE_HEURISTIC_LOONGARCH=true` |
 | 感知快照过旧 | `useCache=false` 或调小 `cache-ttl-ms` |
-| 历史筛选无结果 | 确认 `startTime`/`endTime` 为 `YYYY-MM-DD`；库中 `create_time` 在区间内 |
-| 仪表盘趋势错位 | 清 Redis 统计缓存键 `statistics:log_summary:v3:*` 后刷新 |
+| 历史筛选无结果 | 确认 `startTime`/`endTime` 为 `YYYY-MM-DD` |
 | 二次确认仍真删 | 检查是否传了「真实删除」或 `confirmDelete=true` |
 | 工作台显示执行成功但应为拦截 | 确认请求带 `userMessage`；升级后 destructive+只读工具应返回 `securityCode` |
 | MCP 失败却显示超大「耗时」 | 升级 `McpDurationSupport` / `mcpToolResult.normalizeDurationMs`；勿把 `startTime` 当 duration |
@@ -1234,9 +1331,10 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 │   │   └── tools/                # 全部 @Tool
 │   ├── service/mcp/              # McpSecurity/Execution/AuditService
 │   ├── security/                 # Gate、OpsPathPolicy、OpsSecurityKernel
-│   ├── service/                  # 业务、PatrolHistory、LogDocumentAsyncIndexer、SecuritySelfCheck、OpsEffectDashboard
+│   ├── service/                  # 业务、KnowledgeBase、PatrolHistory、LogDocumentAsyncIndexer、SecuritySelfCheck
 │   ├── metrics/                  # PatrolMetricsExporter
 │   ├── analyzer/ / analysis/     # Drain、日志解析
+│   ├── collector/                # FileLogCollector、LogCollectorPathResolver
 │   ├── decision/                 # RF ONNX、规则融合
 │   ├── platform/                 # KylinCommandProbe、OsRuntime
 │   └── config/                   # WebMvc、ProductionProfileValidator
@@ -1245,6 +1343,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 │   ├── application-dev.yml
 │   ├── application-kylin.yml     # 麒麟路径/命令探测
 │   ├── application-local.example.yml
+│   ├── application-test-kylin.yml  # 麒麟/MariaDB 联调
 │   └── schema.sql
 └── src/test/java/
 ```
@@ -1260,6 +1359,7 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 | **Playbook** | `OpsIntentRouter` 决定的规则编排路径 |
 | **traceId** | 一次运维操作的审计流水号 |
 | **dry-run** | 写工具默认只预览命令 |
+| **RAG** | 知识库向量检索增强对话（Qdrant + Embedding） |
 | **prod-kylin** | 生产 + 麒麟安全与路径策略 |
 | **McpToolCatalog** | 启动时扫描工具 Bean，替代手写 ALLOWED_TOOLS |
 | **OpsRemediationGate** | 写操作统一门禁：治理准入 → 风险分档位 → PREVIEW / EXECUTE |
@@ -1286,10 +1386,10 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 
 | 页面 | PNG | PDF | 说明 |
 |------|-----|-----|------|
-| Tab7 日志分析仪表盘 | 分图导出 | jspdf 多图 A4 横向 | `dashboardExport.js` |
-| Tab3 执行审计 | 表格截图 | 多页 PDF | `tableExport.js` |
-| Tab4 运维链路审计 | 列表截图 | 多页 PDF | 同上 |
-| Tab4 CoT 弹窗 | 详情截图 | 多页 PDF | 含四步闭环 + 结果摘要 |
+| 看板 | 分图导出 | jspdf 多图 A4 横向 | `dashboardExport.js` |
+| 溯源 · 访问记录 | 表格截图 | 多页 PDF | `tableExport.js` |
+| 溯源 · 执行链路 | 列表截图 | 多页 PDF | 同上 |
+| 执行链路 · 详情 | 详情截图 | 多页 PDF | 含执行步骤与结果摘要 |
 
 导出前会临时展开表格/摘要滚动区域，尽量包含当前已加载的全部行。
 

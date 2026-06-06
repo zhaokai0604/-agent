@@ -1,10 +1,10 @@
 <template>
-  <div class="ops-page">
+  <div :class="embedded ? 'audit-pane' : 'ops-page'">
   <el-card shadow="never" class="ops-surface-card">
     <template #header>
       <div class="header">
-        <span>运维链路审计（接收 → 感知 → 推理 → 校验 → 执行）</span>
-        <div class="header-actions">
+        <span v-if="!embedded">执行链路</span>
+        <div class="header-actions" :class="{ 'header-actions--solo': embedded }">
           <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
           <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
           <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">导出 CSV</el-button>
@@ -16,11 +16,15 @@
 
     <div class="audit-export-wrap">
     <el-table :data="rows" border stripe height="520">
-      <el-table-column prop="traceId" label="traceId" min-width="200" show-overflow-tooltip />
+      <el-table-column prop="traceId" label="追踪 ID" min-width="200" show-overflow-tooltip />
       <el-table-column prop="channel" label="通道" width="76" />
       <el-table-column prop="riskLevel" label="风险" width="88" />
       <el-table-column prop="securityOutcome" label="安全结论" width="130" show-overflow-tooltip />
-      <el-table-column prop="toolName" label="工具" width="140" show-overflow-tooltip />
+      <el-table-column prop="toolName" label="工具" width="140" show-overflow-tooltip>
+        <template #default="scope">
+          {{ mcpToolDisplayName(scope.row.toolName) }}
+        </template>
+      </el-table-column>
       <el-table-column prop="executionOk" label="成功" width="72">
         <template #default="scope">
           <el-tag :type="scope.row.executionOk ? 'success' : 'danger'" size="small">
@@ -29,9 +33,13 @@
         </template>
       </el-table-column>
       <el-table-column prop="durationMs" label="耗时ms" width="92" />
-      <el-table-column prop="resultSummary" label="摘要" min-width="160" show-overflow-tooltip />
+      <el-table-column prop="resultSummary" label="摘要" min-width="200" show-overflow-tooltip>
+        <template #default="scope">
+          {{ formatSummaryCell(scope.row.resultSummary) }}
+        </template>
+      </el-table-column>
       <el-table-column prop="createdAt" label="时间" min-width="170" show-overflow-tooltip />
-      <el-table-column label="思维链" width="100" fixed="right">
+      <el-table-column label="详情" width="100" fixed="right">
         <template #default="scope">
           <el-button type="primary" link size="small" @click="openCot(scope.row.traceId)">查看</el-button>
         </template>
@@ -48,7 +56,7 @@
     >
       <template #header>
         <div class="cot-dialog-header">
-          <span class="cot-dialog-title">思维链审计（CoT）</span>
+          <span class="cot-dialog-title">执行详情</span>
           <div v-if="cotDetail.traceId && !cotLoading" class="cot-dialog-actions">
             <el-button size="small" type="success" plain :loading="cotExporting" @click="onExportCotCsv">
               导出 CSV
@@ -60,13 +68,13 @@
       <div v-if="cotLoading" class="cot-loading">加载中…</div>
       <template v-else-if="cotDetail.traceId">
         <el-descriptions :column="1" border size="small" class="cot-meta">
-          <el-descriptions-item label="traceId">{{ cotDetail.traceId }}</el-descriptions-item>
+          <el-descriptions-item label="追踪 ID">{{ cotDetail.traceId }}</el-descriptions-item>
           <el-descriptions-item label="通道">{{ cotDetail.channel }}</el-descriptions-item>
-          <el-descriptions-item label="工具">{{ cotDetail.toolName }}</el-descriptions-item>
+          <el-descriptions-item label="工具">{{ mcpToolDisplayName(cotDetail.toolName) }}</el-descriptions-item>
           <el-descriptions-item label="安全结论">{{ cotDetail.securityOutcome }}</el-descriptions-item>
           <el-descriptions-item label="风险">{{ cotDetail.riskLevel }}</el-descriptions-item>
         </el-descriptions>
-        <el-divider content-position="left">四步闭环</el-divider>
+        <el-divider content-position="left">执行步骤</el-divider>
         <div class="cot-steps">
           <el-card
             v-for="(step, idx) in cotStepsNormalized"
@@ -108,7 +116,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getOpsTraceRecent, getOpsTraceDetail } from '../api'
-import { buildStructuredViewModel, coerceStructuredInput } from '../utils/structuredDataView'
+import { buildStructuredViewModel, coerceStructuredInput, formatResultPreview } from '../utils/structuredDataView'
+import { traceStepTitle } from '../utils/traceStepLabels'
 import StructuredResultView from './StructuredResultView.vue'
 import OpsMemoryPanel from './OpsMemoryPanel.vue'
 import { formatLocalDateKey } from '../utils/formatDate.js'
@@ -172,8 +181,7 @@ const cotStepsNormalized = computed(() => {
   const steps = cotDetail.value?.steps
   if (!Array.isArray(steps)) return []
   return steps.map((s) => {
-    const title = s?.title || s?.phase || '步骤'
-    const stepNum = s?.step != null ? `[${s.step}] ` : ''
+    const title = traceStepTitle(s)
     const rawBody = s?.detail != null ? s.detail : s
     const parsed = coerceStructuredInput(rawBody)
     const isWorkflow = isWorkflowPhase(s)
@@ -185,6 +193,12 @@ const cotStepsNormalized = computed(() => {
     }
   })
 })
+
+function formatSummaryCell(raw) {
+  if (raw == null || raw === '') return '—'
+  const text = formatResultPreview(raw, 200)
+  return text && text !== '—' ? text : String(raw).slice(0, 120)
+}
 
 const openCot = (traceId) => {
   if (!traceId) return
@@ -288,6 +302,8 @@ const onExportCsv = () => {
 }
 
 onMounted(() => loadData())
+
+defineExpose({ openTrace: openCot })
 </script>
 
 <style scoped>
@@ -303,6 +319,15 @@ onMounted(() => loadData())
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+.header-actions--solo {
+  margin-left: auto;
+  width: 100%;
+  justify-content: flex-end;
+}
+.audit-pane .ops-surface-card {
+  border: none;
+  box-shadow: none;
 }
 .audit-export-wrap {
   background: #fff;

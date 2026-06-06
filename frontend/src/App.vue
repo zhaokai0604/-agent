@@ -318,6 +318,12 @@ watch(isMobile, value => {
   isSidebarCollapsed.value = value
 })
 
+watch(activeTab, (tab) => {
+  if (tab === 'live-wall' && !isMobile.value) {
+    isSidebarCollapsed.value = true
+  }
+})
+
 watch(
   visibleNavGroups,
   groups => {

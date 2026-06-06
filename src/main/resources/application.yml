@@ -19,10 +19,12 @@ spring:
   config:
     import: optional:classpath:application-local.yml
   profiles:
-    active: dev
+    active: ${SPRING_PROFILES_ACTIVE:dev}
     # 麒麟 V11 + LoongArch 生产：prod-kylin = prod + kylin（安全校验 + 路径/命令探测）
+    # 联调测试：test-kylin（= prod + kylin + application-test-kylin.yml）
     group:
       prod-kylin: prod,kylin
+      test-kylin: prod,kylin,test-kylin
   main:
     allow-circular-references: false
   autoconfigure:
@@ -38,9 +40,9 @@ spring:
       max-file-size: 200MB
       max-request-size: 200MB
   
-  # Database Configuration
+  # Database：本地/Windows 默认 MySQL；麒麟迁移时设 DB_URL=jdbc:mariadb://… 与 DB_DRIVER=org.mariadb.jdbc.Driver
   datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    driver-class-name: ${DB_DRIVER:com.mysql.cj.jdbc.Driver}
     url: ${DB_URL:jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
@@ -133,9 +135,11 @@ log:
   collector:
     enabled: true
     file:
-      path: ${LOG_COLLECTOR_ROOT:E:\}
+      path: ${LOG_COLLECTOR_ROOT:auto}
+      max-depth: ${LOG_COLLECTOR_MAX_DEPTH:4}
+      poll-interval-ms: ${LOG_COLLECTOR_POLL_MS:5000}
       include-extensions: .log,.txt,.out,.err,.debug,.info,.warn,.error,.fatal,.access,.audit,.trace
-      exclude-directories: node_modules,target,.git,.idea,.vscode,.cursor
+      exclude-directories: node_modules,target,.git,.idea,.vscode,.cursor,$recycle.bin,system volume information,winsxs,windows,program files,program files (x86),appdata
     db:
       enabled: false
       query: SELECT id, level, message, created_at FROM system_log WHERE id > {lastId} ORDER BY id ASC LIMIT 500
@@ -160,7 +164,7 @@ log:
     collector:
       source-id: file-watcher
       dispatch-enabled: true
-      dispatch-interval-ms: 1000
+      dispatch-interval-ms: 5000
     stream:
       error-rate-threshold: 0.30
       min-sample-size: 20
@@ -322,7 +326,17 @@ agent:
 
 qdrant:
   url: ${QDRANT_URL:http://localhost:6333}
+  api-key: ${QDRANT_API_KEY:}
   collection: ${QDRANT_COLLECTION:ops_knowledge}
+
+# 运维知识库 RAG：分块入库 Qdrant，统一助手对话时检索 similarHistoricalCases
+knowledge:
+  enabled: ${KNOWLEDGE_ENABLED:true}
+  chunk-size: ${KNOWLEDGE_CHUNK_SIZE:900}
+  chunk-overlap: ${KNOWLEDGE_CHUNK_OVERLAP:150}
+  search-top-k: ${KNOWLEDGE_SEARCH_TOP_K:5}
+  vector-dimensions: ${KNOWLEDGE_VECTOR_DIM:1024}
+  allow-local-fallback-embedding: ${KNOWLEDGE_LOCAL_EMBED_FALLBACK:true}
 
 # 主动巡检：磁盘/告警/异常日志突增/僵尸进程/Drain 新模板；WebSocket channel=patrol_alert；GET /api/ops/patrol/alerts/recent
 # 自动修复：巡检后按磁盘阈值对白名单临时目录 / 日志根执行真实清理（WebSocket channel=patrol_remediation）；生产可关 OPS_AUTO_REMEDIATION_ENABLED

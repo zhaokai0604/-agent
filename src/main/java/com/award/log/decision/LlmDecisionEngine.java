@@ -15,8 +15,11 @@ public class LlmDecisionEngine {
 
     public DecisionResult evaluate(DecisionInput input) {
         String analysis = aiAnalysisService == null
-                ? "LLM服务未接入，使用默认建议"
+                ? "LLM 服务未接入"
                 : aiAnalysisService.analyzeLog(input.getEvent().getContent());
+        if (analysis != null && analysis.startsWith("AI 分析未就绪")) {
+            analysis = "当前环境未配置 AI，已跳过 LLM 兜底建议。";
+        }
         boolean shouldAlert = input.getErrorRate1m() >= 0.5 || "FATAL".equals(input.getEvent().getLevel());
         return DecisionResult.builder()
                 .engineType(EngineType.LLM)

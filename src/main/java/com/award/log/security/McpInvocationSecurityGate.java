@@ -96,6 +96,9 @@ public class McpInvocationSecurityGate {
         if (!mcpToolCatalog.isRegistered(toolName)) {
             return GateDecision.block("UNKNOWN_TOOL", "未知或未授权的工具: " + toolName);
         }
+        if (!mcpToolCatalog.isHttpAllowed(toolName)) {
+            return GateDecision.block("TOOL_NOT_HTTP_ALLOWED", "工具未开放 HTTP/Agent 调用: " + toolName);
+        }
 
         if (profile == McpSecurityProfile.INITIAL_REQUEST || profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
             OpsSecurityContext.Ctx secCtx = OpsSecurityContext.get();
@@ -199,7 +202,8 @@ public class McpInvocationSecurityGate {
     /**
      * 工作台 ChatClient 多步 {@code @Tool}：与 HTTP 共用评分/注入/意图规则；MEDIUM 意图或确认区间风险分须二次确认。
      */
-    public GateDecision evaluateChatToolInvocation(String toolBeanName, String instruction) {
+    public GateDecision evaluateChatToolInvocation(String toolBeanName, Map<String, Object> parameters,
+                                                   String instruction, String userUtterance) {
         String instr = instruction == null ? "" : instruction.trim();
         String userMsg = null;
         OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();

@@ -19,7 +19,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Random;
 import com.award.log.collector.LogCollectorManager;
 
 /**
@@ -34,8 +33,6 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
     // 定时任务执行器
     private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
     private volatile ScheduledFuture<?> periodicPushTask;
-    // 随机数生成器，用于模拟日志数据（作为备份）
-    private final Random random = new Random();
     // 日志采集器管理器，用于获取真实日志数据
     @Resource
     private LogCollectorManager logCollectorManager;
@@ -128,19 +125,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                 }
                 log.debug("推送真实日志数据成功，条数: {}, 活跃连接数: {}", realLogs.size(), sessions.size());
             } else {
-                // 如果没有真实日志，使用模拟数据（作为备份）
-                Map<String, Object> logData = generateMockLogData();
-                String jsonMessage = com.alibaba.fastjson.JSON.toJSONString(logData);
-                TextMessage textMessage = new TextMessage(jsonMessage);
-
-                // 推送给所有活跃的客户端
-                for (WebSocketSession session : sessions) {
-                    if (session.isOpen()) {
-                        session.sendMessage(textMessage);
-                    }
-                }
-
-                log.debug("无真实日志数据，推送模拟数据，活跃连接数: {}", sessions.size());
+                log.trace("暂无采集日志，跳过推送（活跃连接数: {}）", sessions.size());
             }
         } catch (Exception e) {
             log.error("推送日志数据失败", e);
@@ -206,48 +191,4 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    /**
-     * 生成模拟日志数据
-     * @return 模拟的日志数据
-     */
-    private Map<String, Object> generateMockLogData() {
-        Map<String, Object> logData = new HashMap<>();
-
-        // 生成时间戳
-        logData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")));
-
-        // 随机生成日志级别
-        String[] levels = {"INFO", "WARNING", "ERROR", "DEBUG", "FATAL"};
-        String level = levels[random.nextInt(levels.length)];
-        logData.put("level", level);
-
-        // 随机生成日志来源
-        String[] sources = {"SYSTEM", "APPLICATION", "SECURITY", "SERVICE", "DATABASE"};
-        String source = sources[random.nextInt(sources.length)];
-        logData.put("source", source);
-
-        // 随机生成日志内容
-        String[] messages = {
-            "系统启动成功",
-            "用户登录成功",
-            "数据库连接异常",
-            "文件上传失败",
-            "网络连接超时",
-            "内存使用过高",
-            "CPU负载异常",
-            "磁盘空间不足",
-            "服务重启成功",
-            "配置文件加载失败"
-        };
-        String message = messages[random.nextInt(messages.length)];
-        logData.put("message", message);
-
-        // 生成随机的进程ID
-        logData.put("pid", random.nextInt(10000) + 1000);
-
-        // 生成随机的线程ID
-        logData.put("threadId", "thread-" + (random.nextInt(100) + 1));
-
-        return logData;
-    }
 }

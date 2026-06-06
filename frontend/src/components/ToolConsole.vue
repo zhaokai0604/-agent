@@ -1,28 +1,32 @@
 <template>
-  <div class="ops-page mcp-tools-demo">
-    <div class="hero-section">
-      <h1>本地工具控制台</h1>
-      <p class="subtitle">受控执行 · Agentic 风险分 · 思维链审计 · Windows / Linux 节点</p>
-      <div class="tech-tags">
-        <el-tag type="success">Spring AI 1.1.0</el-tag>
-        <el-tag type="info">MCP Protocol</el-tag>
-        <el-tag type="warning">Drain-Plus Parser</el-tag>
-        <el-tag type="danger">Security Guardrail</el-tag>
-      </div>
+  <div class="ops-page tool-console">
+    <div class="page-header">
+      <h1>工具箱</h1>
+      <p class="subtitle">连接本机运维服务执行能力；写操作经确认后才会落地</p>
     </div>
 
+    <el-alert
+      v-if="!registryConnected"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="conn-alert"
+      title="未连接运维服务"
+      description="请确认后端已启动并已登录。工具状态与执行记录均来自真实环境，不会在本地伪造。"
+    />
+
     <el-tabs v-model="activeTab" type="border-card" class="tools-tabs">
-      <el-tab-pane label="工具概览" name="overview">
+      <el-tab-pane label="能力列表" name="overview">
         <div class="tools-grid">
           <el-card
             v-for="tool in tools"
             :key="tool.name"
             class="tool-card"
-            :class="{ active: selectedTool === tool.name, offline: tool.status === 'offline' }"
+            :class="{ active: selectedTool === tool.name, offline: tool.status !== 'online' }"
             @click="selectTool(tool)"
           >
             <div class="tool-icon-badge">{{ mcpToolBadge(tool.name) }}</div>
-            <div class="tool-name">{{ tool.name }}</div>
+            <div class="tool-name">{{ tool.displayName || mcpToolDisplayName(tool.name) }}</div>
             <div class="tool-desc">{{ tool.description }}</div>
             <div class="tool-status" :class="tool.status">
               <span class="status-dot"></span>
@@ -32,20 +36,20 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="工具执行" name="execute">
+      <el-tab-pane label="立即执行" name="execute">
         <div class="execute-panel">
           <div class="selected-tool-info" v-if="selectedTool">
-            <el-tag size="large" type="success">{{ selectedTool }}</el-tag>
+            <el-tag size="large" type="success">{{ selectedToolLabel }}</el-tag>
             <span class="tool-description">{{ getToolByName(selectedTool)?.description }}</span>
           </div>
 
           <div v-if="!selectedTool" class="no-selection">
-            <el-empty description="请从左侧选择一个工具进行演示" />
+            <el-empty description="请先在「能力列表」中选择一项" />
           </div>
 
           <div v-else class="tool-execute-area">
             <div class="tool-params" v-if="getToolByName(selectedTool)?.params?.length">
-              <h4>参数配置</h4>
+              <h4>参数</h4>
               <el-form :model="params" label-width="120px">
                 <el-form-item
                   v-for="param in getToolByName(selectedTool)?.params"
@@ -70,7 +74,7 @@
                 :loading="executing"
                 :icon="Cpu"
               >
-                执行工具
+                执行
               </el-button>
               <el-button size="large" @click="resetParams">重置</el-button>
             </div>
@@ -78,10 +82,22 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="执行历史" name="history">
-        <el-table :data="executionHistory" stripe style="width: 100%">
-          <el-table-column prop="toolName" label="工具名称" width="150" />
-          <el-table-column prop="timestamp" label="执行时间" width="180" />
+      <el-tab-pane label="执行记录" name="history">
+        <div class="history-toolbar">
+          <span class="history-hint">来自溯源库的真实 MCP 执行记录</span>
+          <el-button size="small" :loading="historyLoading" @click="loadExecutionHistory">刷新</el-button>
+        </div>
+        <el-table :data="executionHistory" stripe style="width: 100%" v-loading="historyLoading">
+          <el-table-column prop="toolName" label="工具" width="150">
+            <template #default="scope">
+              {{ mcpToolDisplayName(scope.row.toolName) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="timestamp" label="执行时间" width="180">
+            <template #default="scope">
+              {{ formatExecTime(scope.row.timestamp) }}
+            </template>
+          </el-table-column>
           <el-table-column prop="duration" label="耗时" width="100">
             <template #default="scope">
               <el-tag>{{ scope.row.duration }}ms</el-tag>
@@ -95,48 +111,25 @@
             </template>
           </el-table-column>
           <el-table-column prop="resultPreview" label="结果预览" show-overflow-tooltip />
-          <el-table-column label="操作" width="120">
+          <el-table-column label="操作" width="180">
             <template #default="scope">
               <el-button type="primary" link @click="viewDetail(scope.row)">查看详情</el-button>
+              <el-button v-if="scope.row.traceId" type="success" link @click="openTrace(scope.row)">查看溯源</el-button>
             </template>
           </el-table-column>
         </el-table>
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="resultDialogVisible" title="工具执行结果" width="800px" center>
-      <div v-if="currentResult" class="result-detail">
-        <div class="result-header">
-          <el-tag size="large" type="success">{{ currentResult.toolName }}</el-tag>
-          <el-tag :type="currentResult.success ? 'success' : 'danger'">
-            {{ currentResult.success ? '执行成功' : '执行失败' }}
-          </el-tag>
-          <span class="duration">耗时: {{ currentResult.duration }}ms</span>
-        </div>
-
-        <el-divider content-position="left">返回详情</el-divider>
-
-        <div class="result-structured">
-          <StructuredResultView :data="currentResult.fullResult" />
-        </div>
-      </div>
-    </el-dialog>
-
-    <div v-if="executing" class="execution-overlay">
-      <div class="execution-animation">
-        <div class="spinner"></div>
-        <p>正在执行 {{ selectedTool }}...</p>
-        <p class="hint">调用底层系统命令: {{ getToolCommand(selectedTool) }}</p>
-      </div>
-    </div>
+    <ToolResultDialog ref="resultDialogRef" />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu } from '@element-plus/icons-vue'
-import { executeMcpTool, confirmMcpExecute, getMcpTools } from '../api'
+import { executeMcpTool, confirmMcpExecute, getMcpTools, getOpsTraceRecent } from '../api'
 import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
 import { formatMcpResultPreview } from '../utils/mcpHumanReadable'
 import { mergeToolRegistry, getMcpToolCommandHint, applyMcpWriteConfirmParams, mcpToolBadge } from '../utils/mcpToolsMeta'
@@ -146,27 +139,73 @@ import StructuredResultView from './StructuredResultView.vue'
 const activeTab = ref('overview')
 const selectedTool = ref(null)
 const executing = ref(false)
-const resultDialogVisible = ref(false)
-const currentResult = ref(null)
+const resultDialogRef = ref(null)
 const executionHistory = ref([])
+const registryConnected = ref(false)
+const historyLoading = ref(false)
 
 const params = reactive({})
-
 const tools = ref([])
 
-onMounted(async () => {
+const selectedToolLabel = computed(() =>
+  selectedTool.value ? mcpToolDisplayName(selectedTool.value) : ''
+)
+
+const loadTools = async () => {
   try {
     const raw = await getMcpTools()
-    tools.value = mergeToolRegistry(raw)
+    tools.value = mergeToolRegistry(raw, { registryLoaded: true })
+    registryConnected.value = true
   } catch {
-    tools.value = mergeToolRegistry(null)
-    ElMessage.warning('未能拉取服务端工具列表，已显示本地定义（状态可能不准）')
+    tools.value = mergeToolRegistry(null, { registryLoaded: false })
+    registryConnected.value = false
+    ElMessage.warning('未能连接运维服务，请确认已登录')
   }
+}
+
+function formatExecTime (ts) {
+  if (!ts) return '—'
+  const d = new Date(ts)
+  return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString('zh-CN')
+}
+
+function openTrace (row) {
+  const tid = row?.traceId
+  if (!tid) return
+  window.dispatchEvent(
+    new CustomEvent('ops-navigate-tab', { detail: { tab: 'audit', auditPane: 'trace', traceId: tid } })
+  )
+}
+
+const loadExecutionHistory = async () => {
+  historyLoading.value = true
+  try {
+    const rows = await getOpsTraceRecent(80)
+    const list = (Array.isArray(rows) ? rows : [])
+      .filter((r) => r?.toolName && r.toolName !== 'NONE')
+      .map((r) => ({
+        toolName: r.toolName,
+        timestamp: r.createdAt || '',
+        duration: r.durationMs || 0,
+        success: r.executionOk === true,
+        resultPreview: formatResultPreview(r.resultSummary),
+        traceId: r.traceId,
+        fullResult: r
+      }))
+    executionHistory.value = list
+  } catch {
+    ElMessage.error('加载执行记录失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadTools()
+  await loadExecutionHistory()
 })
 
-const getToolByName = (name) => {
-  return tools.value.find(t => t.name === name)
-}
+const getToolByName = (name) => tools.value.find((t) => t.name === name)
 
 const selectTool = (tool) => {
   selectedTool.value = tool.name
@@ -175,13 +214,30 @@ const selectTool = (tool) => {
 }
 
 const resetParams = () => {
-  Object.keys(params).forEach(key => delete params[key])
+  Object.keys(params).forEach((key) => delete params[key])
 }
 
-const getToolCommand = (toolName) => getMcpToolCommandHint(toolName)
+const presentResult = (result) => {
+  resultDialogRef.value?.open({
+    toolName: result.toolName,
+    success: result.success,
+    duration: result.duration,
+    traceId: result.traceId || result.fullResult?.traceId,
+    raw: result.fullResult?.resultSummary ?? result.fullResult ?? result.raw
+  })
+}
 
 const executeTool = async () => {
   if (!selectedTool.value) return
+  if (!registryConnected.value) {
+    ElMessage.error('未连接运维服务，无法执行')
+    return
+  }
+  const toolMeta = getToolByName(selectedTool.value)
+  if (toolMeta?.status !== 'online') {
+    ElMessage.warning('所选工具当前不可用')
+    return
+  }
 
   executing.value = true
 
@@ -190,7 +246,7 @@ const executeTool = async () => {
 
     if (data && data.needConfirm === true) {
       try {
-        await ElMessageBox.confirm(buildMcpRiskConfirmMessage(data), '安全护栏 · Agentic 风险 · 二次确认', {
+        await ElMessageBox.confirm(buildMcpRiskConfirmMessage(data), '操作确认', {
           confirmButtonText: '确认执行',
           cancelButtonText: '取消',
           type: 'warning',
@@ -204,7 +260,7 @@ const executeTool = async () => {
           timestamp: new Date().toLocaleString('zh-CN'),
           duration: 0,
           success: false,
-          resultPreview: '用户取消中等风险二次确认',
+          resultPreview: '用户取消确认',
           fullResult: { success: false, needConfirm: true, cancelled: true }
         })
         return
@@ -228,44 +284,60 @@ const executeTool = async () => {
     }
 
     executionHistory.value.unshift(result)
-
-    if (data.success) {
-      ElMessage.success(`${selectedTool.value} 执行成功，耗时 ${result.duration}ms`)
-    } else {
+    presentResult(result)
+    await loadExecutionHistory()
+    const label = mcpToolDisplayName(selectedTool.value)
+    if (!data.success) {
       const errMsg = data.error || data.message || data.data?.error || '未知错误'
-      ElMessage.error(`${selectedTool.value} 执行失败: ${errMsg}`)
+      ElMessage.error(`${label} 执行失败：${errMsg}`)
     }
-
   } catch (error) {
-    ElMessage.error('工具执行失败: ' + error.message)
-    executionHistory.value.unshift({
+    const failResult = {
       toolName: selectedTool.value,
       timestamp: new Date().toLocaleString('zh-CN'),
       duration: 0,
       success: false,
       resultPreview: error.message,
       fullResult: { success: false, error: error.message }
-    })
+    }
+    executionHistory.value.unshift(failResult)
+    presentResult(failResult)
+    ElMessage.error('执行失败：' + error.message)
   } finally {
     executing.value = false
   }
 }
 
 const viewDetail = (row) => {
-  currentResult.value = row
-  resultDialogVisible.value = true
+  presentResult(row)
 }
-
 </script>
 
 <style scoped>
-.mcp-tools-demo {
+.tool-console {
   padding: 0;
   background: transparent;
   min-height: auto;
 }
 
-.hero-section {
+.conn-alert {
+  margin-bottom: 14px;
+}
+
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 0;
+  gap: 12px;
+}
+
+.history-hint {
+  font-size: 12px;
+  color: var(--ops-text-subtle);
+}
+
+.page-header {
   text-align: left;
   padding: 16px 18px;
   background: var(--ops-panel);
@@ -275,7 +347,7 @@ const viewDetail = (row) => {
   box-shadow: var(--ops-shadow-sm);
 }
 
-.hero-section h1 {
+.page-header h1 {
   font-size: 17px;
   font-weight: 600;
   color: var(--ops-text);
@@ -286,15 +358,8 @@ const viewDetail = (row) => {
 .subtitle {
   font-size: 13px;
   color: var(--ops-text-subtle);
-  margin: 0 0 12px;
+  margin: 0;
   line-height: 1.5;
-}
-
-.tech-tags {
-  display: flex;
-  justify-content: flex-start;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .tools-tabs {
@@ -320,7 +385,6 @@ const viewDetail = (row) => {
 }
 
 .tool-card:hover {
-  transform: none;
   box-shadow: var(--ops-shadow-md);
   border-color: #94a3b8 !important;
 }
@@ -332,10 +396,6 @@ const viewDetail = (row) => {
 
 .tool-card.offline {
   opacity: 0.72;
-}
-
-.tool-card.offline .status-dot {
-  background: #909399;
 }
 
 .tool-icon-badge {
@@ -383,10 +443,6 @@ const viewDetail = (row) => {
   background: #67c23a;
 }
 
-.tool-status.online .status-dot {
-  background: #67c23a;
-}
-
 .execute-panel {
   padding: 20px;
 }
@@ -397,25 +453,21 @@ const viewDetail = (row) => {
   gap: 15px;
   margin-bottom: 20px;
   padding: 15px;
-  background: #f5f7fa;
+  background: var(--ops-panel-soft, #f5f7fa);
   border-radius: 8px;
 }
 
 .tool-description {
-  color: #606266;
+  color: var(--ops-text-subtle, #606266);
 }
 
 .no-selection {
   padding: 60px 20px;
 }
 
-.tool-params {
-  margin-bottom: 20px;
-}
-
 .tool-params h4 {
   margin-bottom: 15px;
-  color: #303133;
+  color: var(--ops-text, #303133);
 }
 
 .param-hint {
@@ -430,74 +482,6 @@ const viewDetail = (row) => {
   gap: 15px;
   justify-content: center;
   margin-top: 30px;
-}
-
-.result-detail {
-  padding: 10px;
-}
-
-.result-header {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  margin-bottom: 20px;
-}
-
-.duration {
-  color: #909399;
-  font-size: 14px;
-}
-
-.result-structured {
-  max-height: min(56vh, 520px);
-  overflow-y: auto;
-  padding: 4px 2px;
-}
-
-.execution-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2000;
-}
-
-.execution-animation {
-  background: white;
-  padding: 40px 60px;
-  border-radius: 16px;
-  text-align: center;
-}
-
-.spinner {
-  width: 60px;
-  height: 60px;
-  border: 4px solid #f3f3f3;
-  border-top: 4px solid #409eff;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 20px;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.execution-animation p {
-  margin: 10px 0;
-  font-size: 16px;
-  color: #303133;
-}
-
-.execution-animation .hint {
-  font-size: 12px;
-  color: #909399;
 }
 </style>
 

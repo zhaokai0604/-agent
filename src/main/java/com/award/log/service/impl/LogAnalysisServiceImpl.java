@@ -42,6 +42,9 @@ import java.util.stream.Collectors;
 @Service
 public class LogAnalysisServiceImpl implements LogAnalysisService {
 
+    /** 智能决策逐条评估上限，避免大文件在 89% 后长时间无进度 */
+    private static final int ROUTER_EVAL_MAX = 400;
+
     // 任务状态映射，用于跟踪每个任务的状态
     private final ConcurrentHashMap<String, String> taskStatusMap = new ConcurrentHashMap<>();
     
@@ -750,7 +753,9 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
      */
     private void calcComprehensiveAnomalyScore(List<EnhancedLogParseResultEntity> resultList, String taskId) {
         checkCancelStatus(taskId);
+        taskManager.updateProgress(taskId, 89, "正在计算综合异常得分...");
         LogAnomalyHeuristics.calcComprehensiveAnomalyScore(resultList);
+        taskManager.updateProgress(taskId, 90, "综合异常评分完成...");
     }
 
     /**
@@ -795,84 +800,90 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
      * 使用 IntelligentRouter 评估异常日志
      */
     private void evaluateAnomaliesWithIntelligentRouter(List<EnhancedLogParseResultEntity> resultList, String taskId) {
-        // 检查任务是否被取消
         checkCancelStatus(taskId);
-        
-        // 统计错误率和其他指标
+
         int totalLogs = resultList.size();
         int errorLogs = (int) resultList.stream()
                 .filter(log -> log.getSeverity() == LogSeverityLevel.ERROR_LEVEL || log.getSeverity() == LogSeverityLevel.FATAL_LEVEL)
                 .count();
-        
         double errorRate = totalLogs > 0 ? (double) errorLogs / totalLogs : 0.0;
-        
-        // 处理异常日志
+
+        List<EnhancedLogParseResultEntity> candidates = new ArrayList<>();
+        Set<String> seenTemplates = new HashSet<>();
         for (EnhancedLogParseResultEntity logEntity : resultList) {
-            // 检查任务是否被取消
+            if (!logEntity.isAnomaly()
+                    && logEntity.getSeverity() != LogSeverityLevel.ERROR_LEVEL
+                    && logEntity.getSeverity() != LogSeverityLevel.FATAL_LEVEL) {
+                continue;
+            }
+            String templateId = logEntity.getTemplateId();
+            if (templateId != null && !templateId.isBlank() && !seenTemplates.add(templateId)) {
+                continue;
+            }
+            candidates.add(logEntity);
+        }
+
+        int candidateTotal = candidates.size();
+        int evalLimit = Math.min(candidateTotal, ROUTER_EVAL_MAX);
+        if (candidateTotal > evalLimit) {
+            log.warn("【智能决策】候选 {} 条，按模板去重后截断为 {} 条以控制耗时", candidateTotal, evalLimit);
+        }
+        taskManager.updateProgress(taskId, 91, String.format("智能决策评估准备 (%d 条)...", evalLimit));
+
+        for (int idx = 0; idx < evalLimit; idx++) {
+            EnhancedLogParseResultEntity logEntity = candidates.get(idx);
             checkCancelStatus(taskId);
-            
-            // 只处理异常日志和严重级别日志
-            if (logEntity.isAnomaly() || logEntity.getSeverity() == LogSeverityLevel.ERROR_LEVEL || logEntity.getSeverity() == LogSeverityLevel.FATAL_LEVEL) {
-                // 构建 RawLogEvent
-                RawLogEvent event = new RawLogEvent();
-                event.setEventId(UUID.randomUUID().toString());
-                event.setSourceId(taskId);
-                event.setSourceType("file");
-                event.setHost("localhost"); // 单文件分析默认主机
-                event.setEventTime(logEntity.getTimestamp());
-                event.setLevel(logEntity.getSeverity().name());
-                event.setContent(logEntity.getDesensitizedLog());
-                
-                // 构建 DecisionInput
-                DecisionInput input = DecisionInput.builder()
-                        .event(event)
-                        .template(logEntity.getTemplateId())
-                        .errorRate1m(errorRate)
-                        .total1m(totalLogs)
-                        .error1m(errorLogs)
-                        .build();
-                
-                // 使用 CollaborativeDecisionService 进行决策
-                DecisionResult decisionResult = collaborativeDecisionService.decide(input);
-                
-                // 处理决策结果
-                if (decisionResult.isShouldAlert()) {
-                    // 只有当置信度高于阈值时才处理告警
-                    if (decisionResult.getConfidence() > 0.75) {
-                        // 添加决策结果到异常原因
-                        logEntity.getAnomalyReasons().add("智能决策告警: " + decisionResult.getReason() + " (置信度: " + String.format("%.2f", decisionResult.getConfidence()) + ")");
-                        
-                        // 根据置信度调整异常得分
-                        double currentScore = logEntity.getAnomalyScore();
-                        double confidenceBoost = decisionResult.getConfidence() * 0.1;
-                        logEntity.setAnomalyScore(Math.min(1.0, currentScore + confidenceBoost));
-                        
-                        // 标记为异常
-                        logEntity.setAnomaly(true);
-                        log.info("【智能决策】高置信度异常确认，模板: [{}], 原因: [{}], 置信度: [{}]", 
-                                logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence());
-                    } else {
-                        // 对于低置信度的告警，只记录，不标记为异常
-                        log.info("【智能决策】低置信度告警，忽略，模板: [{}], 原因: [{}], 置信度: [{}]", 
-                                logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence());
-                    }
+
+            if (idx == 0 || idx == evalLimit - 1 || idx % 5 == 0) {
+                // 智能决策占整体进度 85%–97%，避免 91% 时仍显示 1/N 的错觉
+                int progress = 85 + (idx + 1) * 12 / Math.max(1, evalLimit);
+                taskManager.updateProgress(taskId, progress,
+                        String.format("智能决策评估 %d/%d...", idx + 1, evalLimit));
+            }
+
+            RawLogEvent event = new RawLogEvent();
+            event.setEventId(UUID.randomUUID().toString());
+            event.setSourceId(taskId);
+            event.setSourceType("file");
+            event.setHost("localhost");
+            event.setEventTime(logEntity.getTimestamp());
+            event.setLevel(logEntity.getSeverity().name());
+            event.setContent(logEntity.getDesensitizedLog());
+
+            DecisionInput input = DecisionInput.builder()
+                    .event(event)
+                    .template(logEntity.getTemplateId())
+                    .errorRate1m(errorRate)
+                    .total1m(totalLogs)
+                    .error1m(errorLogs)
+                    .skipLlm(true)
+                    .build();
+
+            DecisionResult decisionResult = collaborativeDecisionService.decide(input);
+
+            if (decisionResult.isShouldAlert()) {
+                if (decisionResult.getConfidence() > 0.75) {
+                    logEntity.getAnomalyReasons().add("智能决策告警: " + decisionResult.getReason()
+                            + " (置信度: " + String.format("%.2f", decisionResult.getConfidence()) + ")");
+                    double currentScore = logEntity.getAnomalyScore();
+                    double confidenceBoost = decisionResult.getConfidence() * 0.1;
+                    logEntity.setAnomalyScore(Math.min(1.0, currentScore + confidenceBoost));
+                    logEntity.setAnomaly(true);
+                    log.info("【智能决策】高置信度异常确认，模板: [{}], 原因: [{}], 置信度: [{}]",
+                            logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence());
                 } else {
-                    // 如果决策结果是不告警，且当前日志被标记为异常，降低其异常得分
-                    if (logEntity.isAnomaly()) {
-                        double currentScore = logEntity.getAnomalyScore();
-                        // 根据置信度降低得分
-                        double confidenceReduction = decisionResult.getConfidence() * 0.25;
-                        logEntity.setAnomalyScore(Math.max(0.0, currentScore - confidenceReduction));
-                        
-                        // 如果得分低于阈值，取消异常标记
-                        if (logEntity.getAnomalyScore() < 0.4) {
-                            logEntity.setAnomaly(false);
-                            // 清空异常原因，因为这不是真正的异常
-                            logEntity.getAnomalyReasons().clear();
-                            log.info("【智能决策】异常日志被取消，模板: [{}], 原因: [{}], 置信度: [{}]", 
-                                    logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence());
-                        }
-                    }
+                    log.info("【智能决策】低置信度告警，忽略，模板: [{}], 原因: [{}], 置信度: [{}]",
+                            logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence());
+                }
+            } else if (logEntity.isAnomaly()) {
+                double currentScore = logEntity.getAnomalyScore();
+                double confidenceReduction = decisionResult.getConfidence() * 0.25;
+                logEntity.setAnomalyScore(Math.max(0.0, currentScore - confidenceReduction));
+                if (logEntity.getAnomalyScore() < 0.4) {
+                    logEntity.setAnomaly(false);
+                    logEntity.getAnomalyReasons().clear();
+                    log.info("【智能决策】异常日志被取消，模板: [{}], 原因: [{}], 置信度: [{}]",
+                            logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence());
                 }
             }
         }
