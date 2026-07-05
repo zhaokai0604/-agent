@@ -1,11 +1,12 @@
 package com.award.log.controller;
 
 import com.award.log.common.Result;
+import com.award.log.security.RequestUserResolver;
 import com.award.log.service.AiLogAlarmService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,102 +14,121 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 告警历史Controller
- * 用于处理告警历史分析的请求
- */
 @Slf4j
 @Tag(name = "AlarmHistory")
 @RestController
 @RequestMapping("/api/alarm/history")
 public class AlarmHistoryController {
 
-    @Autowired
-    private AiLogAlarmService aiLogAlarmService;
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
+    private final AiLogAlarmService aiLogAlarmService;
+    private final JdbcTemplate jdbcTemplate;
+    private final RequestUserResolver requestUserResolver;
 
     @Value("${spring.datasource.url:}")
     private String datasourceUrl;
 
-    @Operation(summary = "获取告警历史列表")
+    public AlarmHistoryController(AiLogAlarmService aiLogAlarmService,
+                                  JdbcTemplate jdbcTemplate,
+                                  RequestUserResolver requestUserResolver) {
+        this.aiLogAlarmService = aiLogAlarmService;
+        this.jdbcTemplate = jdbcTemplate;
+        this.requestUserResolver = requestUserResolver;
+    }
+
+    @Operation(summary = "Get alarm history")
     @GetMapping("/list")
-    public Result<Map<String, Object>> getAlarmHistory(
-            @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "10") int pageSize,
-            @RequestParam(required = false) String level,
-            @RequestParam(required = false) String taskId) {
-        log.info("获取告警历史列表，页码: [{}], 每页大小: [{}], 告警级别: [{}], 任务ID: [{}]", pageNum, pageSize, level, taskId);
-        Map<String, Object> history = aiLogAlarmService.getAlarmHistory(pageNum, pageSize, level, taskId);
+    public Result<Map<String, Object>> getAlarmHistory(HttpServletRequest request,
+                                                       @RequestParam(defaultValue = "1") int pageNum,
+                                                       @RequestParam(defaultValue = "10") int pageSize,
+                                                       @RequestParam(required = false) String level,
+                                                       @RequestParam(required = false) String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        Map<String, Object> history = aiLogAlarmService.getAlarmHistoryForUser(
+                pageNum, pageSize, level, taskId, userId, admin);
         return Result.success(history);
     }
 
-    @Operation(summary = "获取告警统计分析")
+    @Operation(summary = "Get alarm statistics")
     @GetMapping("/statistics")
-    public Result<Map<String, Object>> getAlarmStatistics(
-            @RequestParam(defaultValue = "7") int days,
-            @RequestParam(required = false) String level,
-            @RequestParam(required = false) String taskId) {
-        log.info("获取告警统计分析，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        Map<String, Object> statistics = aiLogAlarmService.getAlarmStatistics(days, level, taskId);
+    public Result<Map<String, Object>> getAlarmStatistics(HttpServletRequest request,
+                                                          @RequestParam(defaultValue = "7") int days,
+                                                          @RequestParam(required = false) String level,
+                                                          @RequestParam(required = false) String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        Map<String, Object> statistics = aiLogAlarmService.getAlarmStatisticsForUser(
+                days, level, taskId, userId, admin);
         return Result.success(statistics);
     }
 
-    @Operation(summary = "获取告警趋势")
+    @Operation(summary = "Get alarm trend")
     @GetMapping("/trend")
-    public Result<List<Map<String, Object>>> getAlarmTrend(
-            @RequestParam(defaultValue = "7") int days,
-            @RequestParam(required = false) String level,
-            @RequestParam(required = false) String taskId) {
-        log.info("获取告警趋势，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        List<Map<String, Object>> trend = aiLogAlarmService.getAlarmTrend(days, level, taskId);
-        return Result.success(trend);
+    public Result<List<Map<String, Object>>> getAlarmTrend(HttpServletRequest request,
+                                                           @RequestParam(defaultValue = "7") int days,
+                                                           @RequestParam(required = false) String level,
+                                                           @RequestParam(required = false) String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        return Result.success(aiLogAlarmService.getAlarmTrendForUser(days, level, taskId, userId, admin));
     }
 
-    @Operation(summary = "获取告警级别分布")
+    @Operation(summary = "Get alarm level distribution")
     @GetMapping("/level-distribution")
-    public Result<List<Map<String, Object>>> getAlarmLevelDistribution(
-            @RequestParam(defaultValue = "7") int days,
-            @RequestParam(required = false) String level,
-            @RequestParam(required = false) String taskId) {
-        log.info("获取告警级别分布，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        List<Map<String, Object>> distribution = aiLogAlarmService.getAlarmLevelDistribution(days, level, taskId);
-        return Result.success(distribution);
+    public Result<List<Map<String, Object>>> getAlarmLevelDistribution(HttpServletRequest request,
+                                                                       @RequestParam(defaultValue = "7") int days,
+                                                                       @RequestParam(required = false) String level,
+                                                                       @RequestParam(required = false) String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        return Result.success(aiLogAlarmService.getAlarmLevelDistributionForUser(
+                days, level, taskId, userId, admin));
     }
 
-    @Operation(summary = "获取告警根因分析统计")
+    @Operation(summary = "Get alarm root cause statistics")
     @GetMapping("/root-cause-statistics")
-    public Result<List<Map<String, Object>>> getAlarmRootCauseStatistics(
-            @RequestParam(defaultValue = "7") int days,
-            @RequestParam(required = false) String level,
-            @RequestParam(required = false) String taskId) {
-        log.info("获取告警根因分析统计，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        List<Map<String, Object>> statistics = aiLogAlarmService.getAlarmRootCauseStatistics(days, level, taskId);
-        return Result.success(statistics);
+    public Result<List<Map<String, Object>>> getAlarmRootCauseStatistics(HttpServletRequest request,
+                                                                         @RequestParam(defaultValue = "7") int days,
+                                                                         @RequestParam(required = false) String level,
+                                                                         @RequestParam(required = false) String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        return Result.success(aiLogAlarmService.getAlarmRootCauseStatisticsForUser(
+                days, level, taskId, userId, admin));
     }
 
-    @Operation(summary = "根据任务ID处理告警")
+    @Operation(summary = "Reprocess alarms for a task")
     @GetMapping("/process-by-task")
-    public Result<Void> processAlarmsByTaskId(
-            @RequestParam String taskId) {
-        log.info("根据任务ID处理告警，任务ID: [{}]", taskId);
-        aiLogAlarmService.processAlarmsByTaskId(taskId);
-        return Result.success();
+    public Result<Void> processAlarmsByTaskId(HttpServletRequest request, @RequestParam String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        try {
+            aiLogAlarmService.processAlarmsByTaskIdForUser(taskId, userId, admin);
+            return Result.success();
+        } catch (IllegalArgumentException e) {
+            return Result.error(404, e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to process alarms for task {}", taskId, e);
+            return Result.error("Process failed");
+        }
     }
 
-    @Operation(summary = "告警历史调试信息")
+    @Operation(summary = "Alarm history debug summary")
     @GetMapping("/debug/summary")
-    public Result<Map<String, Object>> debugSummary() {
+    public Result<Map<String, Object>> debugSummary(HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
+            return Result.error(403, "Only administrators can view alarm debug summary");
+        }
         Long total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM log_alarm", Long.class);
         String currentDb = jdbcTemplate.queryForObject("SELECT DATABASE()", String.class);
-        Map<String, Object> data = new java.util.HashMap<>();
+        Map<String, Object> data = new HashMap<>();
         data.put("alarmTotal", total == null ? 0 : total);
         data.put("currentDatabase", currentDb);
         data.put("datasourceUrl", datasourceUrl);
         return Result.success(data);
     }
-
 }

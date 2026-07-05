@@ -169,7 +169,7 @@ public class RealTimeLogAnalyzer {
      */
     private void adjustResourcesBasedOnMemory() {
         double memoryUsage = getMemoryUsage();
-        int processors = Runtime.getRuntime().availableProcessors();
+        int processors = Math.max(1, Runtime.getRuntime().availableProcessors());
         
         // 调整线程池大小
         int newCoreSize;
@@ -187,6 +187,7 @@ public class RealTimeLogAnalyzer {
             log.info("内存使用率低 ({}), 线程池核心大小调整为: {}", String.format("%.2f", memoryUsage), newCoreSize);
         }
         
+        newCoreSize = Math.max(1, newCoreSize);
         resizeWorkerPool(newCoreSize);
         
         // 调整缓冲区大小
@@ -217,8 +218,13 @@ public class RealTimeLogAnalyzer {
                 return;
             }
             if (corePoolSize != newCoreSize) {
-                workerPool.setCorePoolSize(newCoreSize);
-                workerPool.setMaximumPoolSize(newCoreSize);
+                if (newCoreSize > corePoolSize) {
+                    workerPool.setMaximumPoolSize(newCoreSize);
+                    workerPool.setCorePoolSize(newCoreSize);
+                } else {
+                    workerPool.setCorePoolSize(newCoreSize);
+                    workerPool.setMaximumPoolSize(newCoreSize);
+                }
                 corePoolSize = newCoreSize;
                 log.info("实时分析工作线程池已调整核心大小: {}", newCoreSize);
             }

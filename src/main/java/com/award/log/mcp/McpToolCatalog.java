@@ -1,5 +1,7 @@
 package com.award.log.mcp;
 
+import com.award.log.config.SystemBootstrapSupport;
+import com.award.log.util.OsRuntime;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -17,7 +19,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 启动时扫描 MCP 工具 Bean，集中维护 HTTP 白名单、只读观测集与默认风险分。
+ * Discovers MCP tools and exposes API metadata.
  */
 @Slf4j
 @Component
@@ -36,14 +38,12 @@ public class McpToolCatalog {
     @Getter
     private Set<String> readOnlyObservationToolNames = Set.of();
 
-    /**
-     * 为 true 时，{@link McpKnownTools#DISPATCHABLE} 内工具一律视为 HTTP/Agent 可调用（整体授权）。
-     */
     private final boolean httpAllowAllRegistered;
 
     public McpToolCatalog(
             ApplicationContext applicationContext,
-            @org.springframework.beans.factory.annotation.Value("${agent.security.mcp-http-allow-all-registered:false}") boolean httpAllowAllRegistered) {
+            @org.springframework.beans.factory.annotation.Value("${agent.security.mcp-http-allow-all-registered:false}")
+            boolean httpAllowAllRegistered) {
         this.applicationContext = applicationContext;
         this.httpAllowAllRegistered = httpAllowAllRegistered;
     }
@@ -72,7 +72,7 @@ public class McpToolCatalog {
             String toolName = ann != null && ann.value() != null && !ann.value().isBlank()
                     ? ann.value().trim()
                     : type.getSimpleName();
-            boolean httpAllowed = ann != null ? ann.httpAllowed() : isReadOnlyByConvention(toolName);
+            boolean httpAllowed = ann != null ? ann.httpAllowed() : isHttpAllowedByConvention(toolName);
             double risk = ann != null ? ann.defaultRiskScore() : defaultRiskFor(toolName);
             boolean readOnly = ann != null ? ann.readOnlyObservation() : isReadOnlyByConvention(toolName);
             if ("FirstMcpTools".equals(toolName)) {
@@ -87,17 +87,17 @@ public class McpToolCatalog {
         descriptors = Collections.unmodifiableMap(map);
         Set<String> http = new LinkedHashSet<>();
         Set<String> readOnly = new LinkedHashSet<>();
-        for (McpToolDescriptor d : map.values()) {
-            if (d.httpAllowed()) {
-                http.add(d.toolName());
+        for (McpToolDescriptor descriptor : map.values()) {
+            if (descriptor.httpAllowed()) {
+                http.add(descriptor.toolName());
             }
-            if (d.readOnlyObservation()) {
-                readOnly.add(d.toolName());
+            if (descriptor.readOnlyObservation()) {
+                readOnly.add(descriptor.toolName());
             }
         }
         httpAllowedToolNames = Collections.unmodifiableSet(http);
         readOnlyObservationToolNames = Collections.unmodifiableSet(readOnly);
-        log.info("McpToolCatalog 已加载 {} 个工具描述，HTTP 可执行 {} 个", map.size(), http.size());
+        log.info("McpToolCatalog loaded {} tools, {} HTTP-executable", map.size(), http.size());
     }
 
     private static void registerAlias(
@@ -107,23 +107,22 @@ public class McpToolCatalog {
             boolean httpAllowed,
             double risk,
             boolean readOnly) {
-        map.put(toolName, new McpToolDescriptor(
-                toolName,
-                beanClassName,
-                httpAllowed,
-                risk,
-                readOnly));
+        map.put(toolName, new McpToolDescriptor(toolName, beanClassName, httpAllowed, risk, readOnly));
     }
 
     private static void applyBuiltinRiskDefaults(Map<String, McpToolDescriptor> map) {
-        for (var e : map.entrySet()) {
-            McpToolDescriptor d = e.getValue();
-            if (d.defaultRiskScore() >= 0) {
+        for (var entry : map.entrySet()) {
+            McpToolDescriptor descriptor = entry.getValue();
+            if (descriptor.defaultRiskScore() >= 0) {
                 continue;
             }
-            double risk = defaultRiskFor(d.toolName());
-            map.put(e.getKey(), new McpToolDescriptor(
-                    d.toolName(), d.beanClassName(), d.httpAllowed(), risk, d.readOnlyObservation()));
+            double risk = defaultRiskFor(descriptor.toolName());
+            map.put(entry.getKey(), new McpToolDescriptor(
+                    descriptor.toolName(),
+                    descriptor.beanClassName(),
+                    descriptor.httpAllowed(),
+                    risk,
+                    descriptor.readOnlyObservation()));
         }
     }
 
@@ -131,7 +130,7 @@ public class McpToolCatalog {
         return switch (toolName) {
             case "DiskTool", "ProcessTool", "SystemLoadTool", "LogAnalysisTool", "NetworkTool" -> 0.5;
             case "ConfigCheckTool", "DiskAnalyzeTool", "DiskInsightTool", "PortHealthTool", "SslCertTool",
-                 "ConfigDriftTool" -> 1.0;
+                    "ConfigDriftTool" -> 1.0;
             case "PrivilegeTool", "OsInsightTool", "DockerTool", "CronJobTool", "FirewallTool", "SystemdTool" -> 2.0;
             case "AutonomousOpsTool" -> 5.0;
             case "CleanTempTool", "DiskOpsTool" -> 4.5;
@@ -146,11 +145,23 @@ public class McpToolCatalog {
     private static boolean isReadOnlyByConvention(String toolName) {
         return switch (toolName) {
             case "DiskTool", "DiskAnalyzeTool", "DiskInsightTool", "ProcessTool", "SystemLoadTool",
-                 "LogAnalysisTool", "NetworkTool", "ConfigCheckTool", "PrivilegeTool", "OsInsightTool",
-                 "PortHealthTool", "DockerTool", "CronJobTool", "FirewallTool", "SslCertTool",
-                 "SystemdTool", "ConfigDriftTool" -> true;
+                    "LogAnalysisTool", "NetworkTool", "ConfigCheckTool", "PrivilegeTool", "OsInsightTool",
+                    "PortHealthTool", "DockerTool", "CronJobTool", "FirewallTool", "SslCertTool",
+                    "SystemdTool", "ConfigDriftTool" -> true;
             default -> false;
         };
+    }
+
+    private static boolean isHttpAllowedWriteTool(String toolName) {
+        return switch (toolName) {
+            case "CleanTempTool", "LogCleanupTool", "ServiceRestartTool", "AutonomousOpsTool",
+                    "DiskOpsTool", "LogOpsTool", "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool" -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean isHttpAllowedByConvention(String toolName) {
+        return isReadOnlyByConvention(toolName) || isHttpAllowedWriteTool(toolName);
     }
 
     public boolean isRegistered(String toolName) {
@@ -169,22 +180,22 @@ public class McpToolCatalog {
         if (httpAllowAllRegistered && McpKnownTools.isDispatchable(key)) {
             return true;
         }
-        McpToolDescriptor d = descriptors.get(key);
-        return d != null && d.httpAllowed();
+        McpToolDescriptor descriptor = descriptors.get(key);
+        return descriptor != null && descriptor.httpAllowed();
     }
 
     private static void ensureDispatchableToolsRegistered(Map<String, McpToolDescriptor> map) {
         for (String name : McpKnownTools.DISPATCHABLE) {
-            map.compute(name, (k, existing) -> {
+            map.compute(name, (key, existing) -> {
                 if (existing != null) {
                     return existing;
                 }
-                boolean readOnly = isReadOnlyByConvention(k);
+                boolean readOnly = isReadOnlyByConvention(key);
                 return new McpToolDescriptor(
-                        k,
+                        key,
                         null,
-                        readOnly,
-                        defaultRiskFor(k),
+                        isHttpAllowedByConvention(key),
+                        defaultRiskFor(key),
                         readOnly);
             });
         }
@@ -195,72 +206,243 @@ public class McpToolCatalog {
     }
 
     public double defaultRiskScore(String toolName) {
-        McpToolDescriptor d = descriptors.get(toolName);
-        if (d == null) {
+        McpToolDescriptor descriptor = descriptors.get(toolName);
+        if (descriptor == null) {
             return defaultRiskFor(toolName);
         }
-        return d.resolvedRiskScore(defaultRiskFor(toolName));
+        return descriptor.resolvedRiskScore(defaultRiskFor(toolName));
     }
 
-    /**
-     * 供 HTTP /api/mcp/tools 与前端动态元数据同步。
-     */
     public List<Map<String, Object>> listToolsForApi() {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (McpToolDescriptor d : descriptors.values()) {
-            if (!d.httpAllowed()) {
+        for (McpToolDescriptor descriptor : descriptors.values()) {
+            if (!descriptor.httpAllowed()) {
                 continue;
             }
-            ToolUiMeta meta = TOOL_UI_META.getOrDefault(d.toolName(), ToolUiMeta.generic(d.toolName()));
+            ToolUiMeta meta = TOOL_UI_META.getOrDefault(descriptor.toolName(), ToolUiMeta.generic(descriptor.toolName()));
+            Map<String, Object> platformSupport = describePlatformSupport(descriptor.toolName());
+            boolean available = Boolean.TRUE.equals(platformSupport.get("available"));
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("name", d.toolName());
+            row.put("name", descriptor.toolName());
+            row.put("displayName", meta.title());
             row.put("description", meta.title());
             row.put("summary", meta.summary());
+            row.put("group", toolGroup(descriptor.toolName()));
+            row.put("groupLabel", groupLabel(toolGroup(descriptor.toolName())));
             row.put("endpoint", "/mcp/execute");
             row.put("commandHint", meta.commandHint());
-            row.put("readOnly", d.readOnlyObservation());
-            row.put("defaultRiskScore", d.resolvedRiskScore(defaultRiskFor(d.toolName())));
+            row.put("readOnly", descriptor.readOnlyObservation());
+            row.put("writeAction", !descriptor.readOnlyObservation());
+            row.put("defaultRiskScore", descriptor.resolvedRiskScore(defaultRiskFor(descriptor.toolName())));
+            row.put("operations", operationsFor(descriptor.toolName()));
+            row.put("supportedPlatforms", supportedPlatformsFor(descriptor.toolName()));
+            row.put("confirmStrategy", descriptor.readOnlyObservation() ? "none" : "risk-gated");
+            row.put("dependencyChecks", dependencyChecksFor(descriptor.toolName(), OsRuntime.isWindows()));
+            row.put("defaultParameters", defaultParametersFor(descriptor.toolName()));
+            row.put("platformSupport", platformSupport);
+            row.put("status", available ? "online" : "unavailable");
+            row.put("unavailableReason", available ? "" : String.valueOf(platformSupport.getOrDefault("reason", "")));
+            row.put("warnings", available
+                    ? List.of()
+                    : List.of(String.valueOf(platformSupport.getOrDefault("reason", "当前平台不可用"))));
+            row.put("contractVersion", 2);
             out.add(row);
         }
         return out;
     }
 
+    public Map<String, Object> describePlatformSupport(String toolName) {
+        LinkedHashMap<String, Object> support = new LinkedHashMap<>();
+        Map<String, Object> capabilities = SystemBootstrapSupport.buildCapabilitySnapshot();
+        boolean windows = Boolean.TRUE.equals(capabilities.get("windows"));
+        String currentPlatform = windows ? "windows" : "linux";
+        List<String> supportedPlatforms = supportedPlatformsFor(toolName);
+        List<String> dependencyChecks = dependencyChecksFor(toolName, windows);
+        boolean platformMatched = supportedPlatforms.contains(currentPlatform);
+        boolean dependencyPassed = true;
+        for (String check : dependencyChecks) {
+            if (!Boolean.TRUE.equals(capabilities.get(check))) {
+                dependencyPassed = false;
+                break;
+            }
+        }
+        boolean available = platformMatched && dependencyPassed;
+        support.put("available", available);
+        support.put("currentPlatform", currentPlatform);
+        support.put("supportedPlatforms", supportedPlatforms);
+        support.put("requiredCapabilities", dependencyChecks);
+        support.put("capabilities", capabilities);
+        support.put("reason", buildUnavailableReason(toolName, currentPlatform, supportedPlatforms, dependencyChecks, capabilities));
+        return support;
+    }
+
+    /** 供 Tool Agent 系统提示词注入：简要工具目录 */
+    public String summarizeToolsForPrompt(int maxEntries) {
+        if (descriptors.isEmpty() || maxEntries <= 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (McpToolDescriptor descriptor : descriptors.values()) {
+            if (count >= maxEntries) {
+                break;
+            }
+            ToolUiMeta meta = TOOL_UI_META.getOrDefault(descriptor.toolName(), ToolUiMeta.generic(descriptor.toolName()));
+            sb.append("- **").append(descriptor.toolName()).append("**：")
+                    .append(meta.summary())
+                    .append(descriptor.readOnlyObservation() ? "（只读）" : "")
+                    .append("\n");
+            count++;
+        }
+        return sb.toString().trim();
+    }
+
+    private static String toolGroup(String toolName) {
+        return switch (toolName) {
+            case "DiskTool", "DiskInsightTool", "ProcessTool", "SystemLoadTool", "PortHealthTool",
+                    "DockerTool", "CronJobTool", "FirewallTool", "SslCertTool", "SystemdTool",
+                    "OsInsightTool", "NetworkTool" -> "observe";
+            case "DiskAnalyzeTool", "LogAnalysisTool", "ConfigCheckTool", "ConfigDriftTool",
+                    "PrivilegeTool" -> "diagnose";
+            case "CleanTempTool", "LogCleanupTool", "ServiceRestartTool", "DiskOpsTool", "LogOpsTool",
+                    "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool" -> "execute";
+            case "AutonomousOpsTool" -> "automation";
+            default -> "tool";
+        };
+    }
+
+    private static String groupLabel(String group) {
+        return switch (group) {
+            case "observe" -> "观测";
+            case "diagnose" -> "诊断";
+            case "execute" -> "执行";
+            case "automation" -> "自动化";
+            default -> "工具";
+        };
+    }
+
+    private static List<String> operationsFor(String toolName) {
+        return switch (toolName) {
+            case "DiskOpsTool" -> List.of("df", "hotspots", "analyze", "clean-temp");
+            case "LogOpsTool" -> List.of("analyze", "cleanup");
+            case "ServiceOpsTool", "SystemdTool" -> List.of("failed", "status", "restart");
+            case "ContainerOpsTool", "DockerTool" -> List.of("list", "inspect", "restart", "stop");
+            case "ProcessOpsTool", "ProcessTool" -> List.of("list", "kill");
+            case "OsInsightTool" -> List.of("journal", "ss", "lsof");
+            case "NetworkTool" -> List.of("ping", "traceroute");
+            case "CronJobTool" -> List.of("user", "system");
+            default -> List.of();
+        };
+    }
+
+    private static List<String> supportedPlatformsFor(String toolName) {
+        return switch (toolName) {
+            case "SystemdTool", "ServiceRestartTool", "ServiceOpsTool",
+                    "CronJobTool", "FirewallTool", "OsInsightTool", "DockerTool", "ContainerOpsTool" ->
+                    List.of("windows", "linux");
+            default -> List.of("windows", "linux");
+        };
+    }
+
+    private static List<String> dependencyChecksFor(String toolName, boolean windows) {
+        return switch (toolName) {
+            case "DockerTool", "ContainerOpsTool" -> List.of("docker");
+            case "CronJobTool" -> windows ? List.of("schtasks") : List.of();
+            case "FirewallTool" -> windows ? List.of("netsh") : List.of();
+            case "SystemdTool", "ServiceRestartTool", "ServiceOpsTool" ->
+                    windows ? List.of("powershell", "getService") : List.of("systemctl");
+            case "OsInsightTool" -> windows ? List.of("powershell") : List.of();
+            default -> List.of();
+        };
+    }
+
+    private static Map<String, Object> defaultParametersFor(String toolName) {
+        boolean windows = OsRuntime.isWindows();
+        LinkedHashMap<String, Object> defaults = new LinkedHashMap<>();
+        switch (toolName) {
+            case "DiskInsightTool", "DiskAnalyzeTool", "DiskOpsTool" -> defaults.put("rootPath", windows ? "C:/Users/Administrator/AppData/Local/Temp" : "/tmp");
+            case "LogAnalysisTool", "LogCleanupTool", "LogOpsTool" -> defaults.put("logPath", windows ? "logs" : "/var/log");
+            case "CleanTempTool" -> defaults.put("path", windows ? "C:/Users/Administrator/AppData/Local/Temp" : "/tmp");
+            case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" -> defaults.put("serviceName", windows ? "W32Time" : "nginx");
+            case "NetworkTool" -> defaults.put("target", "127.0.0.1");
+            case "PortHealthTool" -> {
+                defaults.put("host", "127.0.0.1");
+                defaults.put("port", 8088);
+            }
+            case "SslCertTool" -> {
+                defaults.put("host", "www.baidu.com");
+                defaults.put("port", 443);
+            }
+            default -> {
+                return Map.of();
+            }
+        }
+        return defaults;
+    }
+
+    private static String buildUnavailableReason(String toolName,
+                                                 String currentPlatform,
+                                                 List<String> supportedPlatforms,
+                                                 List<String> dependencyChecks,
+                                                 Map<String, Object> capabilities) {
+        if (!supportedPlatforms.contains(currentPlatform)) {
+            return "当前平台 " + currentPlatform + " 不在支持范围内";
+        }
+        for (String capability : dependencyChecks) {
+            if (!Boolean.TRUE.equals(capabilities.get(capability))) {
+                return switch (capability) {
+                    case "docker" -> "当前环境未检测到 Docker 命令";
+                    case "schtasks" -> "当前环境未检测到 schtasks 能力";
+                    case "netsh" -> "当前环境未检测到 netsh 能力";
+                    case "systemctl" -> "当前环境未检测到 systemctl 能力";
+                    case "powershell" -> "当前环境未检测到 PowerShell 能力";
+                    case "getService" -> "当前环境未检测到 Windows 服务管理能力";
+                    default -> "当前环境缺少前置能力: " + capability;
+                };
+            }
+        }
+        return "";
+    }
+
     private record ToolUiMeta(String title, String summary, String commandHint) {
         static ToolUiMeta generic(String name) {
-            return new ToolUiMeta(name, "MCP 运维工具", "system command");
+            return new ToolUiMeta(name, "MCP ops tool", "system command");
         }
     }
 
     private static final Map<String, ToolUiMeta> TOOL_UI_META = buildUiMeta();
 
     private static Map<String, ToolUiMeta> buildUiMeta() {
-        Map<String, ToolUiMeta> m = new LinkedHashMap<>();
-        m.put("DiskTool", new ToolUiMeta("磁盘检查工具", "检查磁盘使用情况", "df -h"));
-        m.put("DiskInsightTool", new ToolUiMeta("磁盘热点扫描", "du 排序定位大目录（白名单路径）", "du -xk --max-depth=N"));
-        m.put("ProcessTool", new ToolUiMeta("进程管理工具", "查看和管理系统进程", "ps aux --sort=-%cpu"));
-        m.put("SystemLoadTool", new ToolUiMeta("系统负载工具", "检查系统负载状态", "top -bn1 + /proc/loadavg"));
-        m.put("LogAnalysisTool", new ToolUiMeta("日志分析工具", "分析系统日志", "日志采样 + Drain-Plus"));
-        m.put("CleanTempTool", new ToolUiMeta("文件清理工具", "清理临时文件", "find 白名单临时目录 + 可选 rm"));
-        m.put("ConfigCheckTool", new ToolUiMeta("配置检查工具", "检查配置文件", "配置语法探测"));
-        m.put("NetworkTool", new ToolUiMeta("网络诊断工具", "诊断网络连接", "ping / traceroute"));
-        m.put("PrivilegeTool", new ToolUiMeta("权限验证工具", "验证文件权限", "权限探测"));
-        m.put("OsInsightTool", new ToolUiMeta("OS 深度感知", "journalctl / ss / lsof", "journalctl | ss | lsof"));
-        m.put("LogCleanupTool", new ToolUiMeta("日志清理（写）", "清理白名单下过旧日志，默认仅预览", "find + rm"));
-        m.put("ServiceRestartTool", new ToolUiMeta("服务重启（写）", "白名单内非关键服务重启", "systemctl restart"));
-        m.put("DiskAnalyzeTool", new ToolUiMeta("磁盘分析", "综合 df + 热点目录", "df + du"));
-        m.put("PortHealthTool", new ToolUiMeta("端口健康检查", "TCP 端口连通性探测", "TCP Socket"));
-        m.put("DockerTool", new ToolUiMeta("Docker 巡检", "容器列表与 inspect 摘要", "docker ps / inspect"));
-        m.put("CronJobTool", new ToolUiMeta("计划任务", "crontab / schtasks 只读列表", "crontab -l | schtasks"));
-        m.put("FirewallTool", new ToolUiMeta("防火墙状态", "ufw / firewalld / netsh", "ufw | firewalld | netsh"));
-        m.put("SslCertTool", new ToolUiMeta("SSL 证书", "TLS 证书有效期与主题", "TLS 握手读证书"));
-        m.put("SystemdTool", new ToolUiMeta("服务状态", "systemctl 失败单元与服务状态", "systemctl --failed"));
-        m.put("AutonomousOpsTool", new ToolUiMeta("自主运维（融合）", "全工具感知→诊断→修复→验证", "融合编排"));
-        m.put("ConfigDriftTool", new ToolUiMeta("配置漂移", "配置文件 checksum 快照对比（只读）", "checksum diff"));
-        m.put("DiskOpsTool", new ToolUiMeta("磁盘运维（读写合一）", "operation: df|hotspots|analyze|clean-temp", "gateway"));
-        m.put("LogOpsTool", new ToolUiMeta("日志运维（读写合一）", "operation: analyze|cleanup", "gateway"));
-        m.put("ServiceOpsTool", new ToolUiMeta("服务运维（读写合一）", "operation: failed|status|restart", "gateway"));
-        m.put("ContainerOpsTool", new ToolUiMeta("容器运维（读写合一）", "operation: list|inspect|restart|stop", "gateway"));
-        m.put("ProcessOpsTool", new ToolUiMeta("进程运维（读写合一）", "operation: list|kill", "gateway"));
-        return Collections.unmodifiableMap(m);
+        Map<String, ToolUiMeta> map = new LinkedHashMap<>();
+        map.put("DiskTool", new ToolUiMeta("Disk usage", "Inspect filesystem usage", "df -h"));
+        map.put("DiskInsightTool", new ToolUiMeta("Disk hotspots", "Find large directories under allowed roots", "du -xk --max-depth=N"));
+        map.put("ProcessTool", new ToolUiMeta("Processes", "Inspect running processes", "ps aux --sort=-%cpu"));
+        map.put("SystemLoadTool", new ToolUiMeta("System load", "Inspect CPU and memory pressure", "top -bn1"));
+        map.put("LogAnalysisTool", new ToolUiMeta("Log analysis", "Analyze abnormal logs", "log sample + Drain"));
+        map.put("CleanTempTool", new ToolUiMeta("Temp cleanup", "Clean temp files under allowlisted paths", "find + rm"));
+        map.put("ConfigCheckTool", new ToolUiMeta("Config check", "Validate config syntax or structure", "config probe"));
+        map.put("NetworkTool", new ToolUiMeta("Network diagnostics", "Check connectivity and packet loss", "ping / traceroute"));
+        map.put("PrivilegeTool", new ToolUiMeta("Privilege check", "Inspect permission boundaries", "permission probe"));
+        map.put("OsInsightTool", new ToolUiMeta("OS insight", "Inspect host signals", "journalctl | ss | lsof"));
+        map.put("LogCleanupTool", new ToolUiMeta("Log cleanup", "Delete old logs in allowed directories", "find + rm"));
+        map.put("ServiceRestartTool", new ToolUiMeta("Service restart", "Restart allowlisted services", "systemctl restart"));
+        map.put("DiskAnalyzeTool", new ToolUiMeta("Disk analysis", "Combine disk usage and hotspot analysis", "df + du"));
+        map.put("PortHealthTool", new ToolUiMeta("Port health", "Check TCP port reachability", "TCP socket"));
+        map.put("DockerTool", new ToolUiMeta("Docker inspect", "Inspect containers and health", "docker ps / inspect"));
+        map.put("CronJobTool", new ToolUiMeta("Scheduled jobs", "List cron or scheduled tasks", "crontab -l / schtasks"));
+        map.put("FirewallTool", new ToolUiMeta("Firewall status", "Inspect host firewall status", "ufw / firewalld / netsh"));
+        map.put("SslCertTool", new ToolUiMeta("SSL certificate", "Read certificate validity and subject", "TLS handshake"));
+        map.put("SystemdTool", new ToolUiMeta(
+                "Service status",
+                OsRuntime.isWindows() ? "Inspect Windows auto-start services" : "Inspect failed systemd units",
+                OsRuntime.isWindows() ? "Get-Service" : "systemctl --failed"));
+        map.put("AutonomousOpsTool", new ToolUiMeta("Patrol automation", "Run patrol and auto-remediation single track", "patrol orchestration"));
+        map.put("ConfigDriftTool", new ToolUiMeta("Config drift", "Compare config file snapshots", "checksum diff"));
+        map.put("DiskOpsTool", new ToolUiMeta("Disk ops", "Unified disk read/write gateway", "gateway"));
+        map.put("LogOpsTool", new ToolUiMeta("Log ops", "Unified log read/write gateway", "gateway"));
+        map.put("ServiceOpsTool", new ToolUiMeta("Service ops", "Unified service read/write gateway", "gateway"));
+        map.put("ContainerOpsTool", new ToolUiMeta("Container ops", "Unified container gateway", "gateway"));
+        map.put("ProcessOpsTool", new ToolUiMeta("Process ops", "Unified process gateway", "gateway"));
+        return Collections.unmodifiableMap(map);
     }
 }

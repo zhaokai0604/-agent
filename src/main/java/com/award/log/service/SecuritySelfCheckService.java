@@ -157,13 +157,13 @@ public class SecuritySelfCheckService {
     private List<Map<String, Object>> buildLayers(List<Map<String, Object>> probes) {
         List<Map<String, Object>> layers = new ArrayList<>();
         layers.add(layer("catalog", "工具目录与白名单",
-                "启动时扫描 MCP Bean，HTTP 仅允许登记工具；未知名一律拒绝。"));
-        layers.add(layer("gate", "MCP 统一安全门",
-                "注入检测、意图分级、Agentic 风险分、高危命令模式、破坏性话术与只读工具不匹配。"));
+                "启动时扫描已注册工具，HTTP 仅允许登记工具；未知名一律拒绝。"));
+        layers.add(layer("gate", "统一安全门",
+                "注入检测、意图分级、风险评分、高危命令模式、破坏性话术与只读工具不匹配。"));
         layers.add(layer("surface", "只读工具面",
-                "AI 会话收缩为 READ_ONLY 时，写类工具在门控层直接拒绝。"));
+                "AI 会话收缩为只读时，写类工具在门控层直接拒绝。"));
         layers.add(layer("exec", "命令执行护栏",
-                "最小权限用户执行；全局 dry-run 开启时写操作仅返回模拟结果。"));
+                "最小权限用户执行；全局演练模式开启时写操作仅返回模拟结果。"));
         for (Map<String, Object> layer : layers) {
             String id = (String) layer.get("id");
             int lp = 0;

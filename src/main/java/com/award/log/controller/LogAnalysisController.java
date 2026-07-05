@@ -1,21 +1,38 @@
 package com.award.log.controller;
+
+import com.award.log.common.PageResult;
 import com.award.log.common.Result;
+import com.award.log.dto.EnhancedLogParseResultEntity;
+import com.award.log.security.RequestUserResolver;
+import com.award.log.service.AiDiagnosisService;
 import com.award.log.service.LogAnalysisService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import com.award.log.dto.EnhancedLogParseResultEntity;
-import com.award.log.service.AiDiagnosisService;
 
 @Slf4j
 @Tag(name = "Log Analysis Async")
@@ -32,270 +49,267 @@ public class LogAnalysisController {
     @Autowired
     private AnalysisTaskManager taskManager;
 
-    @Operation(summary = "上传日志文件 (异步)")
+    @Autowired
+    private RequestUserResolver requestUserResolver;
+
+    @Operation(summary = "Upload log file")
     @PostMapping("/upload")
-    public Result<String> uploadLog(@RequestParam("file") MultipartFile file) {
+    public Result<String> uploadLog(HttpServletRequest request, @RequestParam("file") MultipartFile file) {
         if (file.isEmpty()) {
-            log.warn("上传失败：文件为空");
-            return Result.error("文件不能为空");
+            return Result.error("File cannot be empty");
         }
-
+        Integer userId = requestUserResolver.currentUserId(request);
         String taskId = UUID.randomUUID().toString();
-        log.info("接收到日志上传请求，文件名: [{}], 生成任务ID: [{}]", file.getOriginalFilename(), taskId);
         try {
-            // 使用系统临时目录存储上传的文件
-            File tempDir = new File(System.getProperty("java.io.tmpdir"));      
-            File destFile = new File(tempDir, taskId + "_" + file.getOriginalFilename());
-            file.transferTo(destFile);
-            log.info("文件已成功保存至临时路径: [{}]", destFile.getAbsolutePath());
-
-            // 初始化任务并开始异步分析
-            taskManager.initTask(taskId, file.getOriginalFilename());
+            File destFile = createSafeTempUpload(taskId, file);
+            taskManager.initTask(taskId, userId, safeOriginalFilename(file));
             logAnalysisService.startAnalysisAsync(destFile, taskId);
-            log.info("异步分析任务已启动，任务ID: [{}]", taskId);
-
             return Result.success(taskId);
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
         } catch (Exception e) {
-            log.error("上传处理过程中发生异常, 任务ID: [{}]", taskId, e);
-            return Result.error("上传失败: " + e.getMessage());
+            log.error("Upload failed for task {}", taskId, e);
+            return Result.error("Upload failed");
         }
     }
 
-    @Operation(summary = "上传多个日志文件 (异步)")
+    @Operation(summary = "Upload multiple log files")
     @PostMapping("/upload/multi")
-    public Result<List<String>> uploadLogs(@RequestParam("files") MultipartFile[] files) {
+    public Result<List<String>> uploadLogs(HttpServletRequest request, @RequestParam("files") MultipartFile[] files) {
         if (files == null || files.length == 0) {
-            log.warn("上传失败：文件数组为空");
-            return Result.error("文件不能为空");
+            return Result.error("Files cannot be empty");
         }
-
+        Integer userId = requestUserResolver.currentUserId(request);
         List<String> taskIds = new ArrayList<>();
-        log.info("接收到多文件上传请求，文件数量: [{}]", files.length);
         try {
-            // 使用系统临时目录存储上传的文件
-            File tempDir = new File(System.getProperty("java.io.tmpdir"));
-            
             for (MultipartFile file : files) {
                 if (file.isEmpty()) {
-                    log.warn("跳过空文件");
                     continue;
                 }
-                
                 String taskId = UUID.randomUUID().toString();
-                taskIds.add(taskId);
-                log.info("处理文件: [{}], 生成任务ID: [{}]", file.getOriginalFilename(), taskId);
-                
-                File destFile = new File(tempDir, taskId + "_" + file.getOriginalFilename());
-                file.transferTo(destFile);
-                log.info("文件已成功保存至临时路径: [{}]", destFile.getAbsolutePath());
-
-                // 初始化任务并开始异步分析
-                taskManager.initTask(taskId, file.getOriginalFilename());
+                File destFile = createSafeTempUpload(taskId, file);
+                taskManager.initTask(taskId, userId, safeOriginalFilename(file));
                 logAnalysisService.startAnalysisAsync(destFile, taskId);
-                log.info("异步分析任务已启动，任务ID: [{}]", taskId);
+                taskIds.add(taskId);
             }
-
             return Result.success(taskIds);
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());
         } catch (Exception e) {
-            log.error("多文件上传处理过程中发生异常", e);
-            return Result.error("上传失败: " + e.getMessage());
+            log.error("Batch upload failed", e);
+            return Result.error("Upload failed");
         }
     }
 
-    @Operation(summary = "获取分析进度")
+    @Operation(summary = "Get task progress")
     @GetMapping("/task/{taskId}")
-    public Result<TaskInfo> getTaskStatus(@PathVariable String taskId) {
-        log.debug("查询任务状态，任务ID: [{}]", taskId);
-        TaskInfo task = taskManager.getTask(taskId);
+    public Result<TaskInfo> getTaskStatus(HttpServletRequest request, @PathVariable String taskId) {
+        TaskInfo task = resolveOwnedTask(request, taskId);
         if (task == null) {
-            log.warn("查询失败：未找到任务ID为 [{}] 的任务", taskId);
-            return Result.error("未找到相关任务");
+            return Result.error(404, "Task not found or access denied");
         }
-        
-        // 直接返回完整任务信息，不做简化，确保前端能够获取最新状态
         return Result.success(task);
     }
 
-    @Operation(summary = "分页获取历史任务")
+    @Operation(summary = "Get task history")
     @GetMapping("/history")
-    public Result<com.award.log.common.PageResult<TaskInfo>> getHistory(
-            @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "10") int pageSize,
-            @RequestParam(required = false) String fileName,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) String startTime,
-            @RequestParam(required = false) String endTime) {
-        log.info("分页获取历史分析任务，页码: [{}], 每页条数: [{}], 文件名: [{}], 状态: [{}], 开始时间: [{}], 结束时间: [{}]", 
-                pageNum, pageSize, fileName, status, startTime, endTime);
-        return Result.success(taskManager.getTasksPage(pageNum, pageSize, fileName, status, startTime, endTime));
+    public Result<PageResult<TaskInfo>> getHistory(HttpServletRequest request,
+                                                   @RequestParam(defaultValue = "1") int pageNum,
+                                                   @RequestParam(defaultValue = "10") int pageSize,
+                                                   @RequestParam(required = false) String fileName,
+                                                   @RequestParam(required = false) String status,
+                                                   @RequestParam(required = false) String startTime,
+                                                   @RequestParam(required = false) String endTime) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        return Result.success(taskManager.getTasksPageForUser(
+                userId, admin, pageNum, pageSize, fileName, status, startTime, endTime));
     }
 
-    @Operation(summary = "获取最终分析报告")
+    @Operation(summary = "Get final task report")
     @GetMapping("/report/{taskId}")
-    public Result<TaskInfo> getTaskReport(@PathVariable String taskId) {
-        log.info("获取任务报告，任务ID: [{}]", taskId);
-        TaskInfo task = taskManager.getTask(taskId);
+    public Result<TaskInfo> getTaskReport(HttpServletRequest request, @PathVariable String taskId) {
+        TaskInfo task = resolveOwnedTask(request, taskId);
         if (task == null) {
-            log.warn("获取报告失败：未找到任务ID为 [{}] 的任务", taskId);
-            return Result.error("未找到相关任务");
+            return Result.error(404, "Task not found or access denied");
         }
         return Result.success(task);
     }
 
-    @Operation(summary = "下载分析报告文件（按任务 ID，避免多任务覆盖导致下错文件）")
+    @Operation(summary = "Download report file")
     @GetMapping("/download/{taskId}/{type}")
-    public void downloadReport(@PathVariable String taskId, @PathVariable String type, jakarta.servlet.http.HttpServletResponse response) {
-        log.info("请求下载分析报告，任务ID: [{}], 类型: [{}]", taskId, type);
+    public void downloadReport(HttpServletRequest request,
+                               @PathVariable String taskId,
+                               @PathVariable String type,
+                               HttpServletResponse response) {
         try {
-            if (taskId == null || taskId.isBlank() || taskId.contains("..") || taskId.contains(File.separator) || taskId.contains("/") || taskId.contains("\\")) {
-                response.sendError(400, "无效的任务 ID。");
-                return;
-            }
-            TaskInfo task = taskManager.getTask(taskId);
+            TaskInfo task = resolveOwnedTask(request, taskId);
             if (task == null) {
-                log.warn("下载失败：任务不存在，任务ID: [{}]", taskId);
-                response.sendError(404, "任务不存在。");
+                response.sendError(404, "Task not found or access denied");
                 return;
             }
-            boolean isCsv = "csv".equalsIgnoreCase(type);
-            if (!isCsv && !"html".equalsIgnoreCase(type)) {
-                response.sendError(400, "不支持的导出类型，请使用 csv 或 html。");
+            boolean csv = "csv".equalsIgnoreCase(type);
+            boolean html = "html".equalsIgnoreCase(type);
+            if (!csv && !html) {
+                response.sendError(400, "Unsupported report type");
                 return;
             }
-            String fileName = isCsv ? "log_analysis_result.csv" : "log_analysis_report.html";
-            String filePath = System.getProperty("user.dir") + File.separator + "target" + File.separator + "output" + File.separator + taskId + File.separator + fileName;
-            File file = new File(filePath);
-            if (!file.exists()) {
-                if ("COMPLETED".equalsIgnoreCase(task.getStatus())
-                        && task.getResult() != null
-                        && !task.getResult().isEmpty()) {
-                    try {
-                        log.info("报告文件缺失，尝试根据库内明细重新生成: [{}] -> [{}]", taskId, filePath);
-                        logAnalysisService.ensureReportArtifacts(taskId, task.getResult());
-                    } catch (java.io.IOException e) {
-                        log.error("按需生成报告失败，任务ID: [{}]", taskId, e);
-                        response.sendError(500, "生成报告文件失败。");
-                        return;
-                    }
-                    file = new File(filePath);
-                }
+            String fileName = csv ? "log_analysis_result.csv" : "log_analysis_report.html";
+            File file = Paths.get(System.getProperty("user.dir"), "target", "output", taskId, fileName).toFile();
+            if (!file.exists()
+                    && "COMPLETED".equalsIgnoreCase(task.getStatus())
+                    && task.getResult() != null
+                    && !task.getResult().isEmpty()) {
+                logAnalysisService.ensureReportArtifacts(taskId, task.getResult());
+                file = Paths.get(System.getProperty("user.dir"), "target", "output", taskId, fileName).toFile();
             }
             if (!file.exists()) {
-                log.warn("下载失败：报告文件不存在，路径: [{}]", filePath);
-                response.sendError(404, "报告文件尚未生成。");
+                response.sendError(404, "Report file not generated");
                 return;
             }
-
-            response.setContentType(isCsv ? "text/csv;charset=UTF-8" : "text/html;charset=UTF-8");
+            response.setContentType(csv ? "text/csv;charset=UTF-8" : "text/html;charset=UTF-8");
             response.setHeader("Content-Disposition", "attachment; filename=" + fileName);
-            
-            try (java.io.InputStream is = new java.io.FileInputStream(file);
-                 java.io.OutputStream os = response.getOutputStream()) {
-                byte[] buffer = new byte[1024];
+            try (InputStream is = new FileInputStream(file); OutputStream os = response.getOutputStream()) {
+                byte[] buffer = new byte[8192];
                 int len;
                 while ((len = is.read(buffer)) != -1) {
                     os.write(buffer, 0, len);
                 }
                 os.flush();
             }
-            log.info("报告文件 [{}] 下载成功", fileName);
         } catch (Exception e) {
-            log.error("下载文件时发生异常", e);
+            log.error("Download report failed for task {}", taskId, e);
+            try {
+                response.sendError(500, "Download failed");
+            } catch (Exception ignored) {
+            }
         }
     }
 
-    @Operation(summary = "执行 AI 故障诊断")
+    @Operation(summary = "Run AI diagnosis")
     @PostMapping("/diagnose/{taskId}")
-    public Result<String> performDiagnosis(@PathVariable String taskId) {
-        log.info("开始对任务 [{}] 执行 AI 智能诊断", taskId);
+    public Result<String> performDiagnosis(HttpServletRequest request, @PathVariable String taskId) {
         try {
-            TaskInfo task = taskManager.getTask(taskId);
+            TaskInfo task = resolveOwnedTask(request, taskId);
             if (task == null || task.getResult() == null) {
-                log.warn("AI 诊断失败：任务不存在或未完成，任务ID: [{}]", taskId);
-                return Result.error("任务不存在或尚未完成分析。");
+                return Result.error(404, "Task not found, access denied, or analysis not completed");
             }
-
-            log.info("使用完整任务结果构造 AI 诊断上下文（多样模板 + 正常对照 + 时间序）");
             String diagnosis = aiDiagnosisService.generateDiagnosisFromFullResult(task.getResult());
             taskManager.updateAiDiagnosis(taskId, diagnosis);
-            task.setAiDiagnosis(diagnosis); 
-            
-            log.info("任务 [{}] 的 AI 诊断报告已生成", taskId);
             return Result.success(diagnosis);
         } catch (Exception e) {
-            log.error("AI 诊断执行失败，任务ID: [{}]", taskId, e);
-            return Result.error("诊断失败: " + e.getMessage());
+            log.error("Diagnosis failed for task {}", taskId, e);
+            return Result.error("Diagnosis failed");
         }
     }
 
-    @Operation(summary = "单条日志快速诊断")
+    @Operation(summary = "Quick diagnose single log")
     @PostMapping("/quick-diagnose")
     public Result<String> quickDiagnose(@RequestBody EnhancedLogParseResultEntity logEntry) {
-        log.info("执行单条日志快速诊断");
         try {
-            String result = aiDiagnosisService.diagnoseSingleLog(logEntry);
-            return Result.success(result);
+            return Result.success(aiDiagnosisService.diagnoseSingleLog(logEntry));
         } catch (Exception e) {
-            log.error("快速诊断失败", e);
-            return Result.error("诊断失败: " + e.getMessage());
+            log.error("Quick diagnose failed", e);
+            return Result.error("Diagnosis failed");
         }
     }
-    
-    @Operation(summary = "暂停分析任务")
+
+    @Operation(summary = "Pause analysis task")
     @PostMapping("/pause/{taskId}")
-    public Result<String> pauseTask(@PathVariable String taskId) {
-        log.info("暂停任务请求，任务ID: [{}]", taskId);
+    public Result<String> pauseTask(HttpServletRequest request, @PathVariable String taskId) {
+        if (!canOperateTask(request, taskId)) {
+            return Result.error(404, "Task not found or access denied");
+        }
         try {
             logAnalysisService.pauseAnalysis(taskId);
-            return Result.success("任务已暂停");
+            return Result.success("Task paused");
         } catch (Exception e) {
-            log.error("暂停任务失败，任务ID: [{}]", taskId, e);
-            return Result.error("暂停任务失败: " + e.getMessage());
+            log.error("Pause task failed for {}", taskId, e);
+            return Result.error("Pause task failed");
         }
     }
-    
-    @Operation(summary = "恢复分析任务")
+
+    @Operation(summary = "Resume analysis task")
     @PostMapping("/resume/{taskId}")
-    public Result<String> resumeTask(@PathVariable String taskId) {
-        log.info("恢复任务请求，任务ID: [{}]", taskId);
+    public Result<String> resumeTask(HttpServletRequest request, @PathVariable String taskId) {
+        if (!canOperateTask(request, taskId)) {
+            return Result.error(404, "Task not found or access denied");
+        }
         try {
             logAnalysisService.resumeAnalysis(taskId);
-            return Result.success("任务已恢复");
+            return Result.success("Task resumed");
         } catch (Exception e) {
-            log.error("恢复任务失败，任务ID: [{}]", taskId, e);
-            return Result.error("恢复任务失败: " + e.getMessage());
+            log.error("Resume task failed for {}", taskId, e);
+            return Result.error("Resume task failed");
         }
     }
-    
-    @Operation(summary = "取消分析任务")
+
+    @Operation(summary = "Cancel analysis task")
     @PostMapping("/cancel/{taskId}")
-    public Result<String> cancelTask(@PathVariable String taskId) {
-        log.info("取消任务请求，任务ID: [{}]", taskId);
+    public Result<String> cancelTask(HttpServletRequest request, @PathVariable String taskId) {
+        if (!canOperateTask(request, taskId)) {
+            return Result.error(404, "Task not found or access denied");
+        }
         try {
             logAnalysisService.cancelAnalysis(taskId);
-            return Result.success("任务已取消");
+            return Result.success("Task cancelled");
         } catch (Exception e) {
-            log.error("取消任务失败，任务ID: [{}]", taskId, e);
-            return Result.error("取消任务失败: " + e.getMessage());
+            log.error("Cancel task failed for {}", taskId, e);
+            return Result.error("Cancel task failed");
         }
     }
-    
-    @Operation(summary = "删除分析任务")
-    @DeleteMapping("/delete/{taskId}")
-    public Result<Boolean> deleteTask(@PathVariable String taskId) {
-        log.info("删除任务请求，任务ID: [{}]", taskId);
-        try {
-            boolean success = taskManager.deleteTask(taskId);
-            if (success) {
-                return Result.success(true, "任务删除成功");
-            } else {
-                return Result.error("任务不存在或删除失败");
-            }
-        } catch (Exception e) {
-            log.error("删除任务失败，任务ID: [{}]", taskId, e);
-            return Result.error("删除任务失败: " + e.getMessage());
-        }
-    }
-    
 
+    @Operation(summary = "Delete analysis task")
+    @DeleteMapping("/delete/{taskId}")
+    public Result<Boolean> deleteTask(HttpServletRequest request, @PathVariable String taskId) {
+        try {
+            Integer userId = requestUserResolver.currentUserId(request);
+            boolean admin = requestUserResolver.isAdmin(request);
+            boolean success = taskManager.deleteTaskForUser(taskId, userId, admin);
+            return success ? Result.success(true, "Task deleted") : Result.error(404, "Task not found or access denied");
+        } catch (Exception e) {
+            log.error("Delete task failed for {}", taskId, e);
+            return Result.error("Delete task failed");
+        }
+    }
+
+    private TaskInfo resolveOwnedTask(HttpServletRequest request, String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        return taskManager.getTaskForUser(taskId, userId, admin);
+    }
+
+    private boolean canOperateTask(HttpServletRequest request, String taskId) {
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        return taskManager.canAccessTask(taskId, userId, admin);
+    }
+
+    private File createSafeTempUpload(String taskId, MultipartFile file) throws Exception {
+        String safeName = safeOriginalFilename(file);
+        Path tempDir = Paths.get(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize();
+        Path destPath = tempDir.resolve(taskId + "_" + safeName).normalize();
+        if (!destPath.startsWith(tempDir)) {
+            throw new IllegalArgumentException("Illegal upload path");
+        }
+        File destFile = destPath.toFile();
+        file.transferTo(destFile);
+        return destFile;
+    }
+
+    private String safeOriginalFilename(MultipartFile file) {
+        String original = file.getOriginalFilename();
+        if (original == null || original.isBlank()) {
+            return "upload.log";
+        }
+        String normalized = Paths.get(original).getFileName().toString();
+        String sanitized = normalized.replaceAll("[\\r\\n\\\\/]+", "_");
+        if (sanitized.contains("..")) {
+            sanitized = sanitized.replace("..", "_");
+        }
+        if (sanitized.isBlank()) {
+            return "upload.log";
+        }
+        return sanitized;
+    }
 }

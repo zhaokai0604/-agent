@@ -1,14 +1,24 @@
 <template>
   <div class="ops-page environment-status">
-    <div class="page-header">
-      <h1>环境状态</h1>
-      <p class="subtitle">连接、AI、向量库与本机执行能力一览；异常项请按提示修复</p>
-    </div>
+    <OpsPageHeader
+      title="环境状态"
+      subtitle="连接、AI、向量库与本机执行能力一览；异常项请按提示修复"
+    >
+      <template #actions>
+        <el-button :icon="Refresh" :loading="loading" @click="refresh">刷新</el-button>
+        <el-button text @click="openPathPolicy">路径白名单</el-button>
+      </template>
+    </OpsPageHeader>
 
-    <div class="toolbar">
-      <el-button :icon="Refresh" :loading="loading" @click="refresh">刷新</el-button>
-      <el-button text @click="openPathPolicy">路径白名单</el-button>
-    </div>
+    <el-alert
+      v-if="platform?.runtime?.dbReachable === false"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="env-alert"
+      title="数据库未连接"
+      description="日志分析、任务记录与审计依赖 MySQL。请检查 DB 服务与 application-dev.yml 中的连接配置。"
+    />
 
     <el-row :gutter="16">
       <el-col v-for="card in summaryCards" :key="card.key" :xs="24" :sm="12" :md="8">
@@ -30,7 +40,7 @@
         <el-descriptions-item label="日志采集">
           {{ logCollectorText }}
         </el-descriptions-item>
-        <el-descriptions-item label="全局 Dry-Run">{{ dryRunText }}</el-descriptions-item>
+        <el-descriptions-item label="全局演练模式">{{ dryRunText }}</el-descriptions-item>
       </el-descriptions>
     </el-card>
 
@@ -55,7 +65,7 @@
         <el-descriptions-item label="运行用户">{{ platform?.security?.runAsUser || '当前进程' }}</el-descriptions-item>
         <el-descriptions-item label="自动修复">{{ boolLabel(platform?.security?.autoRemediationEnabled === 'true') }}</el-descriptions-item>
         <el-descriptions-item label="自主运维">{{ boolLabel(platform?.security?.autonomousOpsEnabled !== 'false') }}</el-descriptions-item>
-        <el-descriptions-item label="MCP 在线工具">{{ mcpOnlineCount }} / {{ mcpTotal }}</el-descriptions-item>
+        <el-descriptions-item label="在线工具">{{ mcpOnlineCount }} / {{ mcpTotal }}</el-descriptions-item>
       </el-descriptions>
     </el-card>
   </div>
@@ -66,6 +76,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getPlatformInfo, getKnowledgeStatus, getMcpTools } from '../api'
 import { mergeToolRegistry } from '../utils/mcpToolsMeta'
+import OpsPageHeader from './OpsPageHeader.vue'
 
 const loading = ref(false)
 const platform = ref(null)
@@ -155,6 +166,12 @@ const dependencyRows = computed(() => [
     detail: platform.value ? '平台信息可读' : '无法获取 /api/platform/info'
   },
   {
+    name: 'MySQL',
+    ok: platform.value?.runtime?.dbReachable !== false,
+    status: platform.value?.runtime?.dbReachable ? '已连接' : '未连接',
+    detail: platform.value?.runtime?.dbReachable ? '数据源探测通过' : '请检查 DB_PASSWORD 与 MySQL 服务'
+  },
+  {
     name: 'Qdrant',
     ok: knowledge.value?.qdrantConnected,
     status: knowledge.value?.qdrantConnected
@@ -169,7 +186,7 @@ const dependencyRows = computed(() => [
     detail: `模式：${knowledge.value?.embeddingMode || '—'}`
   },
   {
-    name: 'MCP 工具箱',
+    name: '运维工具箱',
     ok: !mcpLoadError.value && mcpRegistryLoaded.value && mcpOnlineCount.value > 0,
     status: mcpLoadError.value ? '连接失败' : !mcpRegistryLoaded.value ? '未连接' : mcpOnlineCount.value > 0 ? '在线' : '无在线工具',
     detail: mcpLoadError.value ? '无法访问 /api/mcp/tools' : `${mcpOnlineCount.value}/${mcpTotal.value} 工具可用`
@@ -231,6 +248,10 @@ defineExpose({ refresh })
   margin: 0;
   color: var(--ops-text-muted);
   font-size: 13px;
+}
+
+.environment-status .env-alert {
+  margin-bottom: 14px;
 }
 
 .toolbar {

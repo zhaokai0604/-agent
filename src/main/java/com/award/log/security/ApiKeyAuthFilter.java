@@ -38,6 +38,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         READ_ONLY_API_KEY_PATHS.add("/api/ops/patrol/correlation/latest");
         READ_ONLY_API_KEY_PATHS.add("/api/security/self-check");
         READ_ONLY_API_KEY_PATHS.add("/api/platform/acceptance");
+        READ_ONLY_API_KEY_PATHS.add("/api/platform/backend-probe");
     }
 
     private final UserApiKeyService userApiKeyService;
@@ -57,8 +58,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         String path = normalizedPath(request);
         return path.startsWith("/admin/user/login")
                 || path.startsWith("/admin/user/register")
-                || path.startsWith("/admin/user/check-user")
-                || path.startsWith("/admin/user/reset-password");
+                || path.startsWith("/admin/user/check-user");
     }
 
     @Override

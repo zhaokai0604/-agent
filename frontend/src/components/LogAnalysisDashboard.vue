@@ -1,20 +1,18 @@
 <template>
   <div class="ops-page log-analysis-dashboard">
-    <el-card class="dashboard-card">
-      <template #header>
-        <div class="card-header">
-          <span>趋势看板</span>
-          <div class="card-header-actions">
-            <el-button type="success" plain size="small" @click="goToOpsAgent">
-              打开对话
-            </el-button>
-            <el-button type="primary" @click="refreshData">刷新数据</el-button>
-            <el-button type="info" plain size="small" @click="exportDashboardPng">导出 PNG</el-button>
-            <el-button type="info" plain size="small" @click="exportDashboardPdf">导出 PDF</el-button>
-          </div>
-        </div>
+    <OpsPageHeader
+      title="趋势看板"
+      subtitle="近 7 日日志量、异常率、任务状态与系统性能趋势"
+    >
+      <template #actions>
+        <el-button type="success" plain size="small" @click="goToOpsAgent">打开对话</el-button>
+        <el-button type="primary" @click="refreshData">刷新数据</el-button>
+        <el-button type="info" plain size="small" @click="exportDashboardPng">导出 PNG</el-button>
+        <el-button type="info" plain size="small" @click="exportDashboardPdf">导出 PDF</el-button>
       </template>
+    </OpsPageHeader>
 
+    <el-card class="dashboard-card" shadow="never">
       <!-- 统计卡片 -->
       <div class="stats-row">
         <el-card class="stat-card">
@@ -153,6 +151,7 @@ import {
   agentPrefillHighAnomaly,
   agentPrefillFailedTask
 } from '../utils/opsAgentNavigate'
+import OpsPageHeader from './OpsPageHeader.vue'
 
 // 定义事件
 const emit = defineEmits(['view-task'])

@@ -1,427 +1,688 @@
-# ThreshCore（award-log）开发者文档
+# ThreshCore（award-log）项目说明文档
 
 | 项 | 说明 |
 |----|------|
-| **文档类型** | 工程与研发说明（产品 / 运维 / 测试 / 研发 / 部署均可读） |
-| **系统名称** | ThreshCore 控制台 + award-log 后端服务 |
-| **Context Path** | `/award-log`（所有后端接口前的统一前缀） |
-| **默认端口** | `8088`（后端）；前端开发常见 `3000`（Vite） |
-| **技术栈** | Java 17 · Spring Boot 3.5 · Spring AI 1.1.0 · Vue 3 · MySQL 8 |
-| **版本** | 与当前仓库实现同步（2026-06-07 · Auto 写操作治理统一 + 巡检单轨） |
-| **控制台 Tab** | **9** 项（快捷键 `1`–`9`；个人中心走右上角用户菜单） |
-| **HTTP MCP 工具** | 26+（白名单由 `McpToolCatalog` 启动扫描，HTTP 列表见 `GET /api/mcp/tools`） |
+| 项目名称 | `ThreshCore` 控制台 + `award-log` 后端服务 |
+| 项目定位 | 面向日志分析、智能运维、巡检审计与可控 Agent 执行的 B/S 平台 |
+| 后端技术栈 | Java 17、Spring Boot 3.5、MyBatis、Spring AI 1.1.0、WebSocket |
+| 前端技术栈 | Vue 3、Vite 4、Element Plus、ECharts、markdown-it |
+| 默认端口 | 业务 **8088**（Context Path `/award-log`）；可选管理端口 **8089**（默认关闭）；前端开发 **3000** |
+| Context Path | `/award-log` |
+| 数据库 | MariaDB 10.11+ 默认，兼容 MySQL 8 |
+| 当前规模 | 后端 **398** 个 Java 主代码文件、**44** 个 Controller、约 **191** 个 REST 映射；**26** 个 MCP 工具；**171** 个测试类、**646** 个 `@Test` |
+| 代码量（口径见下） | 仓库文本合计约 **14.5 万行**；自研业务代码约 **8.2 万行**（不含 `miniprogram_npm` 打包 JS） |
+| 质量门禁 | `mvn verify` 全绿；JaCoCo 指令覆盖率 **≥60%**（`pom.xml` 门禁 `0.60`）；分支覆盖率约 **39%**（无门禁） |
+| 文档版本 | **2026-07-06** |
+| 当前状态 | 已具备日志分析、MCP 工具执行、Agent 编排、巡检闭环、AWM 记忆、安全审计、知识库 RAG、HIDS/NIDS/PIDS 信号接入能力；**dev / prod-kylin 默认单端口 8088** |
 
-**版权声明**：Apache License 2.0，见 `LICENSE` 与 `NOTICE`。
+**版权声明**：本软件为陕西机电职业技术学院 ThreshCore 团队竞赛参赛作品，版权归项目团队所有。未经授权，不得公开发布、开源或用于竞赛以外的商业用途。详见根目录 [`版权声明与使用限制声明.md`](./版权声明与使用限制声明.md)。
 
 ---
 
 ## 目录
 
-- [谁该读哪一节](#谁该读哪一节)
+- [项目概览](#项目概览)
+- [谁应该先看哪一节](#谁应该先看哪一节)
 - [文档体系](#文档体系)
-- [系统是做什么的](#系统是做什么的)
-- [架构总览](#架构总览)
-- [Agent 运行时（核心）](#agent-运行时核心)
-- [Agent Workflow Memory（AWM）](#agent-workflow-memoryawm)
+- [系统能力总览](#系统能力总览)
+- [项目规模与代码量](#项目规模与代码量)
+- [端口与管理面必读](#端口与管理面必读)
+- [快速开始](#快速开始)
+- [维护与上手（不看长文档也能改）](#维护与上手不看长文档也能改)
+- [本地开发与联调](#本地开发与联调)
+- [系统架构](#系统架构)
+- [Agent 运行时与编排](#agent-运行时与编排)
+- [AWM 与 Reflexion 记忆层](#awm-与-reflexion-记忆层)
 - [MCP 工具链](#mcp-工具链)
-- [扩展 MCP 工具（开发指南）](#扩展-mcp-工具开发指南)
+- [Markdown 输出规范](#markdown-输出规范)
 - [安全与审计](#安全与审计)
-- [生产治理改造路线](#生产治理改造路线)
-- [后端 API 索引](#后端-api-索引)
-- [前端开发](#前端开发)
+- [生产治理路线](#生产治理路线)
 - [日志分析流水线](#日志分析流水线)
 - [知识库 RAG](#知识库-rag)
+- [后端 API 索引](#后端-api-索引)
+- [前端说明](#前端说明)
 - [配置参考](#配置参考)
-- [快速开始](#快速开始)
-- [本地开发与测试](#本地开发与测试)
 - [构建与部署](#构建与部署)
 - [麒麟 V11 + LoongArch](#麒麟-v11--loongarch)
-- [赛题对照](#赛题对照)
-- [答辩演示路径（8 步）](#答辩演示路径8-步)
-- [近期更新](#近期更新)
-- [监控与排障](#监控与排障)
-- [报表导出（前端）](#报表导出前端)
+- [实际使用与演示模式](#实际使用与演示模式)
 - [仓库结构](#仓库结构)
-- [许可协议](#许可协议)
+- [测试与质量保障](#测试与质量保障)
+- [近期更新与当前边界](#近期更新与当前边界)
+- [验收与回归建议](#验收与回归建议)
+- [监控与排障](#监控与排障)
+- [答辩与演示建议](#答辩与演示建议)
+- [报表导出](#报表导出)
+- [常见问题](#常见问题)
+- [Git 与发布注意事项](#git-与发布注意事项)
 
 ---
 
-## 谁该读哪一节
+## 项目概览
 
-| 你是… | 建议阅读 |
-|--------|----------|
-| **产品 / 运维** | [系统是做什么的](#系统是做什么的)、顶栏安全自检、Tab **8** 效果评分、[AWM](#agent-workflow-memoryawm)、[赛题对照](#赛题对照) |
-| **运维 / 值班** | [安全与审计](#安全与审计)、[配置参考](#配置参考)、`docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` |
-| **测试** | [后端 API 索引](#后端-api-索引)、[MCP 工具链](#mcp-工具链)、[本地开发与测试](#本地开发与测试) |
-| **后端 / 全栈** | 全文；接口细节以 **Knife4j**（`/award-log/doc.html`）为准 |
-| **前端** | [前端开发](#前端开发)、[知识库 RAG](#知识库-rag)、[后端 API 索引](#后端-api-索引) |
-| **部署** | [快速开始](#快速开始)、[构建与部署](#构建与部署)、[麒麟 V11 + LoongArch](#麒麟-v11--loongarch) |
+### 一句话介绍
+
+`ThreshCore` 是一个把“日志分析”“智能运维对话”“可控工具执行”“安全风控”“审计留痕”“经验沉淀”整合到同一控制台里的平台。  
+它不是给模型一个无约束终端，而是通过白名单工具、风险评分、路径策略、二次确认、审计记录，把 Agent 的执行收敛到一个可控边界内。
+
+### 适用场景
+
+- 上传应用或系统日志，做异常检测、模板提取、诊断建议、报告导出
+- 通过中文对话触发磁盘清理、CPU 压力排查、服务检查、巡检续办等运维流程
+- 用内置 MCP 工具执行只读探测或受控写操作
+- 基于巡检结果进行自动处置提案、确认执行与效果评估
+- 将成功处置链路沉淀为 AWM，可被后续流程复用
+- 将被安全门拦截的危险轨迹沉淀为 Reflexion 教训
+- 接入 Suricata / Wazuh / Sysmon / NetFlow 风格的安全信号，参与巡检与自动化诊断
+
+### 项目边界
+
+- 不是“开放 root shell 给 AI”
+- 不是独立的完整商用 IDS / PIDS / HIDS 产品
+- 不是必须依赖 Kafka / Redis / Elasticsearch 才能运行的系统，这些中间件默认可关闭
+- Runbook 审批与执行记录已落库到 `ops_runbook_approval`，服务重启后可恢复
+
+---
+
+## 谁应该先看哪一节
+
+| 角色 | 建议先看 |
+|------|----------|
+| 产品 / 评审 / 答辩 | [系统能力总览](#系统能力总览)、[答辩与演示建议](#答辩与演示建议)、[系统架构](#系统架构)、[安全与审计](#安全与审计) |
+| 新开发同学 | [端口与管理面必读](#端口与管理面必读)、[快速开始](#快速开始)、[维护与上手（不看长文档也能改）](#维护与上手不看长文档也能改)、[常见问题](#常见问题) |
+| 后端开发 | [系统架构](#系统架构)、[Agent 运行时与编排](#agent-运行时与编排)、[MCP 工具链](#mcp-工具链)、[安全与审计](#安全与审计) |
+| 前端开发 | [前端说明](#前端说明)、[后端 API 索引](#后端-api-索引)、[配置参考](#配置参考) |
+| 运维 / 部署 | [构建与部署](#构建与部署)、[麒麟 V11 + LoongArch](#麒麟-v11--loongarch)、[安全与审计](#安全与审计) |
+| 测试 / QA | [测试与质量保障](#测试与质量保障)、[验收与回归建议](#验收与回归建议)、[安全与审计](#安全与审计) |
 
 ---
 
 ## 文档体系
 
-| 文档 | 路径 | 用途 |
+| 文档 | 路径 | 说明 |
 |------|------|------|
-| **本文 README** | 根目录 | 架构、API、配置、开发扩展 |
-| **麒麟上线检查清单** | `docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` | LoongArch 生产验收 |
-| **生产配置示例** | `docs/deployment/prod-config-example.yml` | 复制为未入库的 `application-prod.yml` |
-| **在线接口** | `http://<host>:8088/award-log/doc.html` | Knife4j / OpenAPI |
+| 本文 README | 根目录 | 项目总说明、架构、运行、部署、开发与边界 |
+| 部署文档 | [`docs/deployment/部署文档.md`](./docs/deployment/部署文档.md) | 更细的部署流程与上线步骤 |
+| 新机 Jar+Dist 速查 | [`部署指南.md`](./部署指南.md) | 麒麟目标机只部署预构建产物（2026-07 实测） |
+| 麒麟 Jar+Dist 速查 | [`docs/deployment/麒麟Jar+Dist部署速查.md`](./docs/deployment/麒麟Jar+Dist部署速查.md) | 与根目录部署指南互补的速查版 |
+| 麒麟上线检查清单 | [`docs/deployment/麒麟V11-LoongArch生产上线检查清单.md`](./docs/deployment/麒麟V11-LoongArch生产上线检查清单.md) | 麒麟 / LoongArch 生产验收 |
+| 远程运维 SSH | [`docs/deployment/ssh-remote-ops.md`](./docs/deployment/ssh-remote-ops.md) | 生产环境 SSH 运维说明 |
+| 生产配置示例 | `docs/deployment/prod-config-example.yml` | 生产配置模板参考 |
+| Agent UI 改版说明 | [`frontend/AGENT_UI_REDESIGN.md`](./frontend/AGENT_UI_REDESIGN.md) | Agent 页面改版说明 |
+| PPT / 答辩修订建议 | [`docs/deployment/慧鉴日志-PPT内容建议-按项目现状修订.md`](./docs/deployment/慧鉴日志-PPT内容建议-按项目现状修订.md) | 按当前代码现状整理的答辩要点 |
+| 历史答辩材料 | `docs/archive/competition/` | 归档材料，不参与运行与构建 |
+| 竞赛 Word 定稿 | `docs/competition/word-supplements/` | 功能设计 V1.4、需求 V2.6、说明书 V1.2、部署 V2.2 |
+| 文档对照审计 | [`docs/review/文档与项目对照审计-2026-06-20.md`](./docs/review/文档与项目对照审计-2026-06-20.md) | 代码与交付文档逐项核对 |
 
-> 答辩/PPT 等历史材料已归档至 `docs/archive/competition/`（不参与产品构建）。
+在线接口文档默认位于：
+
+- `http://localhost:8088/award-log/doc.html`
 
 ---
 
-## 系统是做什么的
+## 系统能力总览
 
-**一句话**：ThreshCore 是 B/S 运维与日志平台——支持**上传分析日志**，也支持**中文对话**排查磁盘、进程、服务等问题；所有会修改系统的操作都经过**路径白名单、风险评分、二次确认和审计记录**。
+### 控制台主能力
 
-| 能力 | 说明 | 界面入口 |
-|------|------|----------|
-| **智能对话** | 自然语言运维、Playbook 编排、RAG 引用与执行计划 | 工作台 · 对话 |
-| **工具箱** | 登记过的运维能力，统一安全校验与结构化结果 | 工作台 · 工具箱 |
-| **知识库 RAG** | Runbook 入库（txt/md/pdf）、向量检索，对话自动引用 | 工作台 · 知识库 |
-| **溯源审计** | HTTP 访问记录 + MCP 执行链路（CoT 步骤） | 工作台 · 溯源 |
-| **环境状态** | AI / Qdrant / MCP 连接自检与执行策略一览 | 工作台 · 环境 |
-| **异常诊断** | 模板挖掘 + 多维异常检测 + AI 建议 | 洞察 · 诊断 |
-| **态势大屏** | 本机 CPU/内存/磁盘/告警实时可视化（浅色工作区风格，与控制台一致） | 洞察 · 态势 |
-| **巡检** | 定时巡检与待确认修复 | 顶栏巡检 |
+| 能力 | 说明 | 入口 |
+|------|------|------|
+| Agent 对话 | 中文自然语言运维，Playbook、工具调用、RAG | 快捷键 **1** / `ops-chat` |
+| MCP 工具控制台 | 26 个白名单工具，搜索、参数表单、确认执行 | 快捷键 **2** / `mcp-tools` |
+| 执行审计 | HTTP 访问轨迹、AI/MCP 执行记录 | 快捷键 **3** / `audit` |
+| 运维链路审计 | 六步 CoT、AWM / Reflexion | 快捷键 **4** / `ops-audit-trace` |
+| 日志分析 | 上传、Drain 模板、AI 诊断 | 快捷键 **5** / `analysis` |
+| 任务记录 | 历史诊断任务 | 快捷键 **6** / `history` |
+| 日志分析仪表盘 | 统计趋势 | 快捷键 **7** / `dashboard` |
+| 运维效果评分 | 处置效果五维评分 | 快捷键 **8** / `ops-effect` |
+| 系统配置与效果 | 运行配置、路径策略等 | 快捷键 **9** / `system-config` |
+| MCP 技能 | 工具说明与技能页 | `agent-skills`（Agent 侧栏） |
+| 环境状态 / 运行态势 | 组件就绪、本机大屏 | 顶栏 / 侧栏（无数字快捷键） |
+| 知识库 RAG | 文档上传与检索 | 「日志与分析」分组 / `knowledge` |
+| 个人中心 | 资料、API Key、RBAC | 顶栏用户菜单 / `profile-center` |
 
-**不是什么**：不是「给 AI 一个 root 终端」；不是必须装齐 Kafka/Redis（默认关闭）。
+### 关键设计点
 
-**答辩叙事（建议）**：日志过阈 → 异常定位 → Agent 处置建议 → 安全门评分 → 最小权限执行（可预览）→ 全链路审计 → **AWM 套路沉淀 / Reflexion 教训**。对外少铺工具数量，多讲闭环与可进化记忆。
+- Agent 走的是“可控执行”而不是“自由生成 shell”
+- 写操作默认预览，风险达阈值需要显式确认口令 `确认执行`
+- MCP 工具通过统一调度器、统一审计、统一风险分流
+- 巡检、自动修复和 LLM 对话是并存能力；自动化主链路已收敛为巡检 + 自动修复，历史自主运维命名仅作兼容入口
+- AWM 只沉淀成功套路，Reflexion 只沉淀安全拦截教训
+- Windows 本地开发与麒麟 / LoongArch 生产场景都有专门兼容配置
 
 ### 开发者 30 秒速览
 
-| 动作 | 怎么做 |
-|------|--------|
-| 起服务 | MySQL + `schema.sql` → `mvn spring-boot:run` → `cd frontend && npm run dev` |
-| 调 MCP | Tab **2** 或 `POST /api/mcp/execute`（body 带 `userMessage`） |
-| 调对话编排 | Tab **1**；磁盘/CPU 短路径 →「磁盘满了」「CPU占用过高」；全栈 →「一键巡检」或 `POST /api/ops/autonomous/run` |
-| 巡检 Auto | 默认仅 `ops.auto-remediation`（HYBRID + 治理）；`run-after-patrol` 默认 **关** |
-| 看审计 | Tab **3**（HTTP 访问）/ Tab **4**（traceId + CoT，可导出） |
-| 效果评分 | Tab **8** 运维效果评分，或 `GET /api/ops/effect/dashboard` |
-| AWM 套路 | Tab **4** 链路审计顶栏「Agent 记忆层」；或 `GET /api/ops/workflow/memory` |
-| Reflexion 教训 | Tab **4** 记忆层「安全教训」；或 `GET /api/ops/workflow/failure-insights` |
-| 安全自检 | 顶栏 **安全自检**；`GET /api/security/self-check`（探针走真实安全门） |
-| 加工具 | `mcp/tools/*` + `@McpTool` + `McpToolDispatcher` 分支 + `mcpToolsMeta.js` + `mcpHumanReadable.js` 摘要分支 |
-| 文档接口 | http://localhost:8088/award-log/doc.html |
-| LLM 归纳 workflow | `AGENT_AWM_LLM_INDUCTION=true` + `AI_API_KEY`；Tab **4**「离线诱导」或成功 Playbook 后自动尝试 |
+| 动作 | 说明 |
+|------|------|
+| 启动后端 | `mvn spring-boot:run` |
+| 启动前端 | `cd frontend && npm run dev` |
+| 初始化数据库 | 手工执行 `src/main/resources/schema.sql` |
+| 查看接口文档 | `http://localhost:8088/award-log/doc.html` |
+| 执行 MCP 工具 | `GET /api/mcp/tools`、`POST /api/mcp/execute` |
+| 触发 Agent 编排 | `POST /api/assistant/chat/stream` 或前端 `Tab1` |
+| 触发巡检自动化 | `POST /api/ops/autonomous/run`（兼容入口） |
+| 查看 AWM | `GET /api/ops/workflow/memory` |
+| 查看安全自检 | `GET /api/security/self-check` |
+| 查看安全信号摘要 | `GET /api/security/signals/summary` |
+| 跑全量测试与覆盖率 | `mvn verify`，报告见 `target/site/jacoco/index.html` |
+| 确认端口 | dev / prod-kylin 默认**仅 8088**；日志出现 `http-nio-8088` 即可（见 [端口与管理面](#端口与管理面必读)） |
 
 ---
 
-## 架构总览
+## 项目规模与代码量
 
-### 分层（2026 重构后）
+统计口径：物理行数（含空行与注释），不含 `node_modules`、`target`、`dist`、`.git`（2026-07 本仓库实测）。
+
+| 类别 | 行数 | 说明 |
+|------|------|------|
+| Java（主 + 测） | 69,366 | `src/main/java` + `src/test/java` |
+| Vue + JS + CSS（`frontend/src`） | 23,908 | 自研前端 |
+| JS（`frontend/miniprogram_npm`） | ~48,000 | 小程序/npm **预打包依赖**，非手写业务 |
+| XML / YAML / SQL | ~4,100 | Mapper、配置、建表脚本 |
+| Markdown / Shell / Python 等 | ~9,500 | 文档与脚本 |
+| **仓库文本合计** | **~145,000** | 各类源码与文档加总 |
+| **自研产品代码（推荐对外口径）** | **~82,500** | Java + `frontend/src` + XML/YML/SQL/脚本，**不含** `miniprogram_npm` 与 Markdown |
+
+答辩或申报材料建议写：**自研约 8.2 万行 + 646 个自动化测试 + 26 个 MCP 工具**，避免把 `miniprogram_npm` 或 `node_modules` 算进自研量。
+
+---
+
+## 端口与管理面必读
+
+**当前默认：单端口 8088**（`dev` 与 `prod-kylin` 一致）。登录、Agent、MCP、统计、巡检等管理类接口与业务接口**同走 8088**，前端 Vite 代理默认也只指向 `http://127.0.0.1:8088`。
+
+| 场景 | `app.management.enabled` | 监听端口 | 说明 |
+|------|--------------------------|----------|------|
+| **本地 dev（默认）** | `false`（`application-dev.yml`） | 仅 **8088** | 推荐；`npm run dev` 即可联调 |
+| **prod-kylin 生产** | `false`（`APP_MANAGEMENT_ENABLED=false`） | 仅 **8088** | Nginx 反代；不对外暴露 8089 |
+| **可选双端口联调** | `true` + `port: 8089` | **8088 + 8089** | 高级场景；需设 `VITE_DEV_MANAGEMENT_PROXY_TARGET=http://127.0.0.1:8089` |
+
+启用双端口时的机制：
+
+- `ManagementPortFilter`：管理路径**只能**走 8089，业务路径**不能**走 8089。
+- `ManagementAccessPaths` / `AdminAccessPaths` 决定哪些 URL 属于管理面。
+
+启动成功标志（默认单端口）：
+
+```text
+Starting ProtocolHandler ["http-nio-8088"]
+```
+
+若显式开启管理端口，日志中还应出现 `http-nio-8089`。
+
+**8088 已被占用**：说明后端已在跑，无需重复 `mvn spring-boot:run`；要重启先结束占用进程（Windows：`netstat -ano | findstr :8088` → `taskkill /PID <pid> /F`）。
+
+---
+
+## 快速开始
+
+### 环境要求
+
+| 组件 | 版本建议 |
+|------|----------|
+| JDK | 17 |
+| Maven | 3.8+ |
+| Node.js | 18+ |
+| npm | 随 Node.js |
+| MariaDB | 10.11+（生产/默认） |
+| MySQL | 8.0+（兼容可选，Windows 本地联调也可用） |
+| 可选 Qdrant | 本地 Docker 或 Cloud |
+
+### 1. 准备数据库
+
+创建数据库后，执行：
+
+```sql
+CREATE DATABASE IF NOT EXISTS log_analysis
+  DEFAULT CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+```
+
+然后导入（MariaDB / MySQL 均可）：
+
+```bash
+mariadb -u root -p log_analysis < src/main/resources/schema.sql
+```
+
+**旧库升级**：若表是早期版本缺少 `user_id` 等列，可重新导入 `schema.sql` 到新库，或依赖启动时 `LogAnalysisTaskSchemaService` 等 `*SchemaService` 自动 `ALTER` 补列（需 DDL 权限）。否则访问 `/log/history` 可能报 500（`Unknown column 'user_id'`）。
+
+#### Windows 本地使用 MySQL 8（兼容可选）
+
+在 `application-local.yml` 中覆盖（示例）：
+
+```yaml
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: "你的密码"
+```
+
+主配置 `application.yml` 默认已切到 MariaDB；仅在你继续使用 MySQL 8 时，才需要在 local 中覆盖驱动和 URL。
+
+### 2. 配置本地敏感参数
+
+复制示例文件：
+
+```bash
+copy src\main\resources\application-local.example.yml src\main\resources\application-local.yml
+```
+
+或使用环境变量方式：
+
+```powershell
+$env:DB_PASSWORD="你的数据库密码"
+$env:AI_API_KEY="你的模型密钥"
+```
+
+可参考根目录 [`.env.example`](./.env.example)。
+
+### 3. 启动后端
+
+```bash
+mvn spring-boot:run
+```
+
+默认地址（单端口 dev）：
+
+- 业务 + 登录 + MCP + Agent：`http://localhost:8088/award-log/`
+- OpenAPI / Knife4j：`http://localhost:8088/award-log/doc.html`
+
+浏览器开发时访问 `http://localhost:3000`，由 Vite 代理到 8088，**无需直连 8089**。
+
+可选依赖（按需 Docker 启动）：
+
+```bash
+docker compose up -d mariadb qdrant
+```
+
+需在根目录 `.env` 中设置 `MARIADB_ROOT_PASSWORD`（见 [`.env.example`](./.env.example)）。
+
+### 4. 启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+前端开发默认通过 `Vite` 代理访问后端，常见地址为：
+
+- `http://localhost:3000`
+
+### 5. 首次验证建议
+
+1. 打开前端登录页，注册一个普通用户
+2. 如需管理员能力，在数据库中把该用户 `role` 改为 `1`
+3. 打开环境状态页面确认 DB、AI、MCP、组件快照正常
+4. 在工具控制台执行只读工具，如磁盘/进程/负载探测
+5. 在 Agent 页面输入 `磁盘满了`、`CPU占用过高` 或 `一键巡检`
+6. 查看 `运维链路审计` 与 `AWM` 是否有结果写入
+7. 发布或答辩前执行 `mvn verify`，确认 JaCoCo 门禁与集成测试通过
+
+---
+
+## 维护与上手（不看长文档也能改）
+
+### 5 分钟本地跑通
+
+```bash
+# 1. 数据库
+mariadb -u root -p -e "CREATE DATABASE IF NOT EXISTS log_analysis DEFAULT CHARSET utf8mb4;"
+mariadb -u root -p log_analysis < src/main/resources/schema.sql
+
+# 2. 本地密钥（勿提交 Git）
+copy src\main\resources\application-local.example.yml src\main\resources\application-local.yml
+# 编辑 application-local.yml：DB 密码、AI_API_KEY
+
+# 3. 后端（确认 8088 已监听）
+mvn spring-boot:run
+
+# 4. 前端
+cd frontend && npm install && npm run dev
+# 浏览器 http://localhost:3000
+```
+
+### 改功能时怎么找代码
+
+| 要改什么 | 从哪里进 |
+|----------|----------|
+| REST 接口 | `src/main/java/com/award/log/controller/*`，或 Swagger `doc.html` |
+| MCP 工具 | `src/main/java/com/award/log/mcp/tools/*` + `McpToolCatalog` |
+| Agent 对话 / Playbook | `UnifiedAssistantService`、`OpsRuntimeService`、`AssistantOrchestrator` |
+| 安全拦截 / 权限 | `security/*`（`AuthInterceptor`、`McpInvocationSecurityGate`、`AdminAccessPaths`） |
+| 端口路由 | `ManagementPortFilter`、`ManagementAccessPaths`（双端口模式时生效） |
+| 前端页面 | `frontend/src/components/*` |
+| 前端 API | `frontend/src/api/index.js`（默认单端口 8088；可选双端口代理） |
+| 数据库表 | `src/main/resources/schema.sql` + `mapper/*.xml` |
+
+### Agent 请求主链路（改编排时必看）
+
+```text
+用户消息 → UnifiedAssistantService / ChatClient
+         → OpsIntentRouter（意图 → Playbook 或 LLM）
+         → AssistantOrchestrator / OpsRuntimeService
+         → McpToolDispatcher → McpInvocationSecurityGate → 具体 Tool
+         → AssistantAuditRecorder / OpsAuditTraceService（审计）
+```
+
+### 改完建议跑的测试
+
+```bash
+# 快速回归
+mvn test -Dtest=MainFlowIntegrationTest,SecurityMcpIntegrationTest,McpDispatchIntegrationTest
+
+# 发布前全量
+mvn verify
+```
+
+### 不读 README 也容易踩的坑
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| 前端连不上 / 登录失败 | 后端未起或 DB 密码未配 | 确认 `8088` 在监听；复制 `application-local.example.yml` 并填写 `DB_PASSWORD` |
+| 8088 端口被占用 | 后端已在跑 | 直接用现有实例，或 `taskkill` 后再启 |
+| `/log/history` 500 | 旧库缺 `user_id` 列 | 执行最新 `schema.sql` 或重启让 SchemaService 补列 |
+| 仪表盘部分 403 | 曾要求管理员访问 `/admin/statistics/*` | 当前已放宽为**登录即可**读统计；用户管理仍要管理员 |
+| clone 后启动 JDBC 失败 | 缺少 `application-local.yml` | 从 `application-local.example.yml` 复制并填密码 |
+
+---
+
+## 本地开发与联调
+
+### 本地开发默认行为
+
+当前 `dev` 配置强调“便于在 Windows 本机开发”：
+
+- **`app.management.enabled: false`**（默认单端口 **8088**，见 [端口与管理面必读](#端口与管理面必读)）
+- `agent.min-privilege.enabled=false`
+- `ops.auto-remediation.enabled=false`
+- `ops.patrol.inspect-roots` 默认指向本地 `logs`、用户临时目录、Windows 临时目录
+- `knowledge.seed-on-startup=false`（无 Qdrant 时不阻塞启动）
+- `app.security.ai-audit-relaxed-read=true`
+
+也就是说，开发环境默认更关注“能跑通链路”，而不是完全复刻生产权限边界。
+
+### Docker Compose 可选依赖
+
+根目录提供 `docker-compose.yml`，可快速拉起：
+
+- `mariadb`（需 `.env` 中 `MARIADB_ROOT_PASSWORD`）
+- `qdrant`（知识库可选）
+
+示例：
+
+```bash
+docker compose up -d mariadb qdrant
+```
+
+### Windows / 本地 MariaDB 或 MySQL 联调建议
+
+1. 启动 MariaDB 或 MySQL 8，执行 `schema.sql`（见 [快速开始](#快速开始)）
+2. 配置 `application-local.yml`（MariaDB 默认无需改驱动；MySQL 用户再手工切到 `driver-class-name` + `jdbc:mysql://…`）
+3. 启动后端 `mvn spring-boot:run`，**确认 8088 已在监听**
+4. 启动前端 `npm run dev`，访问 `http://localhost:3000`（不要只用 8088 当页面）
+5. 登录后优先验证：
+   - `环境状态`
+   - `工具控制台`
+   - `Agent 对话`
+   - `日志分析`
+6. 改代码后跑 `mvn verify` 或 `mvn test -Dtest=MainFlowIntegrationTest,SecurityMcpIntegrationTest` 做快速回归
+
+### 麒麟 / MariaDB 联调配置
+
+项目内已提供：
+
+- [`src/main/resources/application-kylin.yml`](./src/main/resources/application-kylin.yml)
+- [`src/main/resources/application-test-kylin.yml`](./src/main/resources/application-test-kylin.yml)
+- [`scripts/deploy/env.kylin.prod.example`](./scripts/deploy/env.kylin.prod.example)
+
+联调时可使用：
+
+```bash
+-Dspring.profiles.active=test-kylin
+```
+
+---
+
+## 系统架构
+
+### 总体分层
 
 ```mermaid
 flowchart TB
-  subgraph ui[浏览器 ThreshCore · 9 Work Tabs]
-    T1[Tab1 工作台]
-    T2[Tab2 MCP 工具台]
-    T4[Tab4 链路审计 + 记忆层]
-    T8[Tab8 效果评分]
+  subgraph ui["前端控制台"]
+    FE1["Agent 对话"]
+    FE2["MCP 工具控制台"]
+    FE3["运维链路审计"]
+    FE4["日志分析 / 运行态势 / 配置"]
   end
 
-  subgraph entry[统一入口]
-    UAS[UnifiedAssistantService]
-    ORS[OpsRuntimeService]
-    OIR[OpsIntentRouter]
+  subgraph entry["统一入口层"]
+    UAS["UnifiedAssistantService"]
+    ORS["OpsRuntimeService"]
+    OIR["OpsIntentRouter"]
   end
 
-  subgraph playbooks[编排 Playbook]
-    AOO[AutonomousOpsOrchestrator]
-    ASO[AssistantOrchestrator]
+  subgraph orchestration["编排层"]
+    ASO["AssistantOrchestrator"]
+    AOO["AutonomousOpsOrchestrator"]
   end
 
-  subgraph awm[Agent 记忆]
-    WMS[WorkflowMemoryService]
-    FIS[FailureInsightService]
-    IND[LlmWorkflowInductor + rule-based]
+  subgraph memory["记忆层"]
+    WMS["WorkflowMemoryService"]
+    FIS["FailureInsightService"]
+    IND["WorkflowInductionService / LlmWorkflowInductor"]
   end
 
-  subgraph mcp[MCP 层]
-    CAT[McpToolCatalog]
-    DISP[McpToolDispatcher]
-    TOOLS[mcp/tools/*]
+  subgraph mcp["MCP 层"]
+    CAT["McpToolCatalog"]
+    DISP["McpToolDispatcher"]
+    TOOLS["mcp/tools/*"]
   end
 
-  subgraph sec[安全层]
-    GATE[McpInvocationSecurityGate]
-    GOV[OpsGovernanceService]
-    REM[OpsRemediationGate]
-    TRUST[OpsTrustPolicy]
+  subgraph security["安全层"]
+    GATE["McpInvocationSecurityGate"]
+    COORD["WriteExecutionCoordinator"]
+    GOV["OpsGovernanceService / OpsRemediationGate"]
+    PATH["OpsPathPolicy"]
   end
 
-  subgraph patrol[主动巡检]
-    PATROL[OpsPatrolService]
-    AUTO[OpsAutoRemediationService]
+  subgraph business["业务层"]
+    LOG["日志分析"]
+    KB["知识库 RAG"]
+    PATROL["巡检与自动修复"]
+    SIGNAL["安全信号接入"]
   end
 
-  T1 --> UAS --> ORS --> OIR
-  OIR --> AOO & ASO
-  UAS -->|NONE| LLM[ChatClient + @Tool]
-  T2 --> GATE --> DISP --> TOOLS
-  AOO & ASO --> REM
-  PATROL --> AUTO --> REM
-  REM --> GOV
-  REM --> TRUST
-  AOO & ASO & LLM --> TOOLS
-  AOO & ASO --> WMS
-  GATE -->|REJECT| FIS
+  FE1 --> UAS --> ORS --> OIR
+  OIR --> ASO
+  OIR --> AOO
+  UAS --> TOOLS
+  FE2 --> DISP --> TOOLS
+  TOOLS --> GATE --> COORD --> GOV
+  ASO --> WMS
+  AOO --> WMS
+  GATE --> FIS
   WMS --> IND
-  T4 --> WMS & FIS
-  T8 --> WMS
+  PATROL --> AOO
+  SIGNAL --> PATROL
+  LOG --> business
+  KB --> UAS
 ```
 
-### 三条执行路径（开发必记）
+### 端口与管理面约束（可选双端口）
 
-| 路径 | 入口 | 编排 | 审计 |
-|------|------|------|------|
-| **HTTP MCP** | `McpExecuteController` → … → `McpToolDispatcher` | 单工具调用 | `ops_audit_trace` 记录执行步骤 |
-| **对话 Playbook** | `UnifiedAssistantService` → `OpsRuntimeService` | 规则编排，不经过 LLM 多步 | `AssistantAuditRecorder` **六步** |
-| **对话 LLM** | 同上，意图 `NONE` | `ChatClient` 自动 `@Tool` | 切面 `McpToolSecurityAspect` + 工具层 dry-run |
+默认 **单端口 8088**：登录、Agent、MCP、统计、运维与日志分析等同进程同端口。
 
-### 技术栈
+启用 `app.management.enabled=true` 时，同一进程内 **8088 / 8089 物理隔离**：
 
-| 层级 | 技术 |
-|------|------|
-| 后端 | Spring Boot 3.5、MyBatis、Spring AI 1.1.0、WebSocket |
-| 前端 | Vue 3、Vite 4、Element Plus、ECharts、markdown-it |
-| 关系库 | **本地/Windows 默认 MySQL 8**；麒麟生产 **MariaDB 10.6+**（双 JDBC 驱动，环境变量切换） |
-| 向量库 | **Qdrant**（本机 Docker 或 Cloud + `api-key`）；运维知识库 RAG |
-| 可选 | Redis、Kafka、Elasticsearch（默认不加载） |
-| 观测 | Actuator、Prometheus |
-| 文档 | Knife4j 4.5、Springdoc |
+- `ManagementPortFilter` + `ManagementAccessPaths`：管理路径**仅** 8089；业务路径**仅** 8088。
+- 前端 `api/index.js` 封装 `request` 与 `managementRequest`；Vite 可通过 `VITE_DEV_MANAGEMENT_PROXY_TARGET` 指向 8089。
+- **prod-kylin** 生产默认关闭第二端口，由 Nginx 统一反代 8088（见 [配置参考](#配置参考)）。
+
+### 三条主要执行路径
+
+| 路径 | 入口 | 特点 |
+|------|------|------|
+| HTTP MCP | `McpExecuteController` | 直接执行单个工具，统一走安全门与确认逻辑 |
+| 对话 Playbook | `UnifiedAssistantService` -> `OpsRuntimeService` | 命中特定意图后，走规则编排，不依赖模型自由推理 |
+| 对话 LLM | `ChatClient` / `Spring AI` | 在意图未命中特定 Playbook 时，走自然语言对话与工具调用 |
+
+### 后端关键包
+
+| 包 | 作用 |
+|----|------|
+| `controller` | 所有对外 REST / SSE 接口 |
+| `agent` | Agent 编排、意图识别、运行时、报告格式 |
+| `agent.awm` | AWM、Reflexion、Workflow 诱导与执行 |
+| `mcp` | 工具注册、调度、返回包装、缓存与工具元数据 |
+| `mcp.tools` | 实际 MCP 工具实现 |
+| `security` | 认证、鉴权、路径策略、管理端口控制、写操作协调 |
+| `service` | 巡检、知识库、日志分析、AI 审计等业务服务 |
+| `service.*SchemaService` | 启动时旧库补列（如 `log_analysis_task.user_id`） |
+| `collector` | 文件、网络等日志采集器 |
+| `decision` | 规则引擎、随机森林、决策解释 |
+| `rule.dsl` | 告警规则 DSL 解析与执行 |
 
 ---
 
-## Agent 运行时（核心）
+## Agent 运行时与编排
 
-### OpsIntentRouter — 意图 → Playbook
+### 核心入口
 
-实现：`com.award.log.agent.OpsIntentRouter`
+- `UnifiedAssistantService`
+- `OpsRuntimeService`
+- `OpsIntentRouter`
+- `AssistantOrchestrator`
+- `AutonomousOpsOrchestrator`
+- `OpsReportFormat`
 
-| Playbook | 触发示例 | 执行器 |
-|----------|----------|--------|
-| `FULL_AUTONOMOUS` | 自动运维、一键巡检、**服务挂了 / systemd failed** | `AutonomousOpsOrchestrator` |
-| `DISK_CLEANUP` | **磁盘满了**、清理临时、预览清理、根分区告警 | `AssistantOrchestrator` |
-| `CPU_PRESSURE` | **CPU占用过高**、负载过高、系统慢 | `AssistantOrchestrator` |
-| `PATROL_CONTINUATION` | 继续处理巡检、待确认方案 | `AssistantOrchestrator` |
-| `NONE` | 其它 | 走 LLM + `@Tool` |
+### 意图到 Playbook 的分流
 
-**路由优先级**（2026-06-07）：`PATROL_CONTINUATION` → **磁盘/CPU 短 Playbook** → 服务失败 → 宽泛「自动运维」话术。例如「自动修复磁盘空间」走 `DISK_CLEANUP`，不会误进全栈 `FULL_AUTONOMOUS`。
+当前核心短路由意图包括：
 
-`forceRemediate(message)`：匹配「确认执行」「执行修复」等时，Playbook 内跳过 dry-run 预览；服务重启在治理 `CONFIRM_ONLY` 下**必须**命中此话术才真执行。
+| Playbook | 典型话术 |
+|----------|----------|
+| `DISK_CLEANUP` | `磁盘满了`、`清理临时文件`、`预览清理` |
+| `CPU_PRESSURE` | `CPU占用过高`、`系统负载过高` |
+| `PATROL_CONTINUATION` | `继续处理巡检待办` |
+| `PATROL_AUTOMATION` | `一键巡检`、`自动运维`、`服务挂了` |
+| `NONE` | 其他开放对话 |
 
-**答辩推荐话术（稳定走 Playbook，不赌 ChatClient 多步）**：
+### 路由优先级
 
-| 目的 | 建议输入 |
-|------|----------|
-| 磁盘 Playbook | `磁盘满了` / `帮我预览清理临时文件` / `自动修复磁盘空间` |
-| CPU Playbook | `CPU占用过高` / `系统负载过高` |
-| 服务 / 全栈 | `服务挂了` / `一键巡检` |
-| 巡检续办 | `继续处理巡检待办` |
-| 服务重启（须确认） | 先说「重启 nginx」→ 再「确认执行」 |
+项目当前策略是：
 
-### LLM 输出稳定性（项目策略）
+1. 巡检续办优先
+2. 磁盘 / CPU 专项 Playbook 优先
+3. 服务异常与巡检自动化次之
+4. 剩余请求才走更开放的 LLM 路径
 
-| 层级 | 做法 |
+这样做的目标是：把高价值、可预期、可控的运维场景尽量固定在规则编排里，不把它们交给自由生成。
+
+### `OpsRuntimeService`
+
+这个类提供统一的运行时调度入口：
+
+- `shouldOrchestrate(msg)`：判断是否应该进入编排路径
+- `run(msg, surface, risk)`：根据意图调用对应编排器
+- `runScheduledAutonomous(surface, force)`：兼容命名，实际执行巡检自动化闭环
+
+### 两条自动化路径
+
+| 路径 | 说明 |
 |------|------|
-| **路由** | `OpsIntentRouter` 正则优先 → 命中则 **不经过** ChatClient 多步 |
-| **执行** | 写操作由 MCP Bean + 安全门 + dry-run/confirm，非模型生成 shell |
-| **采样** | `spring.ai.openai.chat.options.temperature` 默认 **0.1**（`AI_CHAT_TEMPERATURE`） |
-| **兜底** | 流式 `timeout` + `retry(1)`；LLM 归纳失败回退 rule-based；ChatClient 不可用回退关键词 |
+| 巡检自动修复 | `OpsPatrolService` -> `OpsAutoRemediationService` |
+| 兼容自主运维入口 | `AutonomousOpsOrchestrator` 保留旧命名，实际收敛到巡检自动化/感知 |
 
-开放对话（`Playbook.NONE`）仍可能有措辞差异；答辩主路径请用上表固定话术。
+当前实现已收敛为巡检自动修复主路径，历史“全栈自主运维”仅保留兼容命名。
 
-### OpsRuntimeService — 统一 `run` API
+### `AutonomousOpsOrchestrator`
 
-实现：`com.award.log.agent.OpsRuntimeService`
+这个类当前主要承担兼容编排与感知聚合职责，保留旧的 `autonomous` 命名用于老接口、老测试和历史调用方；运行时主路径已经收敛到巡检自动化。
 
-```java
-// 对话入口（UnifiedAssistantService 在编排前调用）
-if (opsRuntimeService.shouldOrchestrate(userMessage)) {
-    RunResult r = opsRuntimeService.run(userMessage, surface, intentRisk);
-    // 返回 markdown + traceId + report（自主运维时有 report）
-}
-```
+巡检自动化闭环仍然包含四个阶段：
 
-| 方法 | 用途 |
-|------|------|
-| `shouldOrchestrate(msg)` | `agent.runtime.enabled` 且意图非 `NONE` |
-| `run(msg, surface, risk)` | 按 Playbook 分发 |
-| `runScheduledAutonomous(surface, force)` | HTTP / 手动触发全栈闭环（**默认不在巡检后自动调用**） |
+1. 感知：磁盘、CPU、进程、网络、服务、端口、日志、安全信号
+2. 诊断：生成 `findings`
+3. 处置：通过 `OpsRemediationGate` 和治理策略决定是否预览 / 执行
+4. 验证：复采关键指标并计算效果
 
-开关：`agent.runtime.enabled`（默认 `true`）。
+### 报告格式
 
-### 两条 Auto 修复路径（勿混用）
+统一由 `OpsReportFormat` 管理，主要章节通常包括：
 
-| 路径 | 触发 | 实现 | 默认 |
-|------|------|------|------|
-| **巡检 HYBRID Auto** | 定时巡检 `OpsPatrolService` | `OpsAutoRemediationService` → `OpsRemediationGate` | **开**（`ops.auto-remediation.enabled=true`） |
-| **全栈自主编排** | Tab1 话术 / `POST /api/ops/autonomous/run` | `AutonomousOpsOrchestrator` → `OpsRemediationGate` | 开（`agent.autonomous.enabled=true`） |
-| **巡检后串联全栈** | 同上巡检轮次末尾 | `agent.autonomous.run-after-patrol` | **关**（避免与 HYBRID 重复清盘/重启） |
-
-生产/答辩建议：**仅开巡检 HYBRID**；需要演示全栈时再手动调 `/api/ops/autonomous/run` 或工作台「一键巡检」。
-
-### AutonomousOpsOrchestrator — 全工具融合闭环
-
-实现：`com.award.log.agent.AutonomousOpsOrchestrator`
-
-**阶段**：
-
-1. **感知**（并行，最多 12 线程）：磁盘、负载、进程、systemd、网络、端口、Docker、防火墙、Cron、日志、journalctl/ss/lsof 等  
-2. **诊断**：规则引擎生成 `findings`（磁盘压力、失败 unit、证书临期、僵尸进程提示等）  
-3. **处置**：`OpsRemediationGate`（治理准入 **优先于** `OpsTrustPolicy` 风险分）→ 临时/日志清理、白名单服务重启；`FAILED_SERVICE` 从 systemd 感知解析 failed unit（`ServiceRestartCandidateResolver`），不再固定重启白名单第一项  
-4. **验证**：再次采集关键指标写入 `report`
-
-感知快照字段含 **`failedUnitNames`**（从 `SystemdTool` 输出解析），Markdown 摘要会列出具体 unit 名。
-
-**感知快照 API**（只读，带 TTL 缓存）：
-
-```http
-GET /award-log/api/ops/perception/snapshot?useCache=true
-```
-
-缓存：`OpsPerceptionCache` + `agent.perception.cache-ttl-ms`（默认 60000 ms）。写操作成功或 `useCache=false` 会失效缓存。
-
-自主编排执行修复后写入 **`remediationEffect`**（磁盘/CPU 前后对比与 0–100 自愈评分）。
-
-**自主运维 API**：
-
-```http
-POST /award-log/api/ops/autonomous/run?forceRemediate=false&readOnly=false
-GET  /award-log/api/ops/autonomous/supports?message=全自动运维
-```
-
-### 操作审计（六步）
-
-常量：`com.award.log.agent.audit.OpsAuditPhases`
-
-| 步 | 英文 key | 中文 |
-|----|----------|------|
-| 1 | `receive` | 接收 |
-| 2 | `perceive` | 感知 |
-| 3 | `reason` | 推理 |
-| 4 | `security` | 安全校验 |
-| 5 | `execute` | 执行 |
-| 6 | `verify` | 验证 |
-
-Playbook 路径写入 `ops_audit_trace`；HTTP 工具调用在界面「操作追踪」中展示执行步骤。
-
-### AssistantOrchestrator — 单场景 Playbook
-
-保留磁盘清理、CPU 压力、巡检续办等**短路径**闭环（预览 → 确认 → 执行），与全工具自主编排互补。
-
-**已接入 AWM（Agent Workflow Memory）**：
-
-| Playbook | 命中 workflow（seed） | 编排行为 |
-|----------|----------------------|----------|
-| `DISK_CLEANUP` | `disk-pressure-diagnose` / `disk-pressure-remediation` | 报告展示套路；成功执行后在线诱导/累计 `utility_count` |
-| `CPU_PRESSURE` | `cpu-pressure-diagnose` / `cpu-pressure-whitelist-restart` | 展示套路 + `SystemLoadTool` + `ProcessTool`；白名单内才 `ServiceRestartTool` |
-| `FULL_AUTONOMOUS` | `failed-service-*` 等（按 findings） | `AutonomousOpsOrchestrator` 报告展示 AWM；`FAILED_SERVICE` 白名单内可重启 |
-
-审计 `steps_json` 中可含 `phase=workflow` 记录命中的 `workflowId`。
+- `结论`
+- `追踪信息`
+- `环境感知`
+- `问题诊断`
+- `自动处置`
+- `验证`
 
 ---
 
-## Agent Workflow Memory（AWM）
+## AWM 与 Reflexion 记忆层
 
-对齐论文 *Agent Workflow Memory*（ICML 2025）思路：**从成功轨迹沉淀可复用子流程（workflow）**，抽象参数后注入 Agent 记忆；**失败轨迹不诱导动作**，改走 Reflexion 教训层。
+### AWM 是什么
+
+AWM 即 `Agent Workflow Memory`，核心目标是把“成功处置链路”沉淀为未来可复用的套路，而不是每次都临时让模型现想。
 
 ### 双层记忆
 
-| 层 | 模块 | 存什么 | 不存什么 |
-|----|------|--------|----------|
-| **Workflow Memory（AWM）** | `WorkflowMemoryService` | 成功处置套路：`(title, steps[env+reason+tool])` | REJECT / PREVIEW 轨迹 |
-| **Failure Insight（Reflexion）** | `FailureInsightService` | 安全拦截后的自然语言教训 | 可执行命令序列 |
-
-### 包与表
-
-```
-src/main/java/com/award/log/agent/awm/
-├── OpsWorkflow / OpsWorkflowStep      # workflow 模型
-├── WorkflowMemoryService              # ops_workflow_memory 持久化 + 缓存
-├── WorkflowSeedData                   # 冷启动 seed（disk×2 + cpu×2 + service×2）
-├── WorkflowRetriever                  # 按 domain / finding / 话术检索 Top-K
-├── WorkflowInductionService           # 在线/离线诱导（LLM 优先，rule-based 兜底）
-├── LlmWorkflowInductor                # Spring AI 归纳 workflow JSON
-├── TrajectoryEvaluator                # 仅 EXECUTED/REMEDIATED 且非 REJECT 才入库
-├── OpsExperienceLoader                # 从 ops_audit_trace 加载经验
-├── FailureInsightService              # ops_failure_insight
-└── FailureInsightReflections          # 规则化 Reflexion 文案
-```
-
-| 表 | 说明 |
+| 层 | 作用 |
 |----|------|
-| `ops_workflow_memory` | workflow 定义、`utility_count`；来源 `seed` / `online` / `llm` |
-| `ops_failure_insight` | `security_code + tool + intent_hint` 去重；`hit_count` 累计 |
+| Workflow Memory | 存成功处置套路 |
+| Failure Insight | 存安全拦截教训 |
 
-### Seed workflow（启动自动写入）
+### 关键表
 
-| workflowId | domain | 工具链概要 |
-|------------|--------|------------|
-| `disk-pressure-diagnose` | disk | `DiskTool` → `DiskAnalyzeTool` |
-| `disk-pressure-remediation` | disk | 诊断 → `CleanTempTool` / `LogCleanupTool`（dryRun）→ 验证 `DiskTool` |
-| `cpu-pressure-diagnose` | cpu | `SystemLoadTool` → `ProcessTool`（只读） |
-| `cpu-pressure-whitelist-restart` | cpu | 负载 → 白名单 `ServiceRestartTool` 预览/执行 |
-| `failed-service-diagnose` | service | `SystemdTool` → 白名单内 `ServiceRestartTool`（dryRun 预览） |
-| `failed-service-whitelist-restart` | service | 预览 → 确认执行 → 复采 `SystemdTool` |
+| 表名 | 作用 |
+|------|------|
+| `ops_workflow_memory` | AWM 成功工作流 |
+| `ops_failure_insight` | Reflexion 教训 |
+| `ops_audit_trace` | 运维链路审计 |
 
-已有库若缺 CPU / service seed，启动时 `seedMissingDomains()` 会自动补种。
+### 相关服务
+
+- `WorkflowMemoryService`
+- `WorkflowExecutionService`
+- `WorkflowInductionService`
+- `LlmWorkflowInductor`
+- `FailureInsightService`
+- `OpsExperienceLoader`
 
 ### 注入点
 
-| 位置 | 行为 |
-|------|------|
-| `AssistantOrchestrator` | Playbook 报告展示 AWM；磁盘/CPU 成功执行后 `afterSuccessfulRun()` |
-| `AutonomousOpsOrchestrator` | 全栈自主：按 findings 展示 AWM；`FAILED_SERVICE` 白名单内可 `ServiceRestartTool`；结束后在线诱导 |
-| `MultiAgentContextBuilder.buildForUser(msg)` | JSON 字段 `workflowMemory` + `failureInsightMemory` |
-| `UnifiedAssistantService.getAssistantContext(msg)` | 多 Agent 上下文带相关 workflow / 教训 |
-| `ChatAnalysisServiceImpl` | 对话 prompt 追加 `【历史安全教训 Reflexion】` |
+AWM 会被注入到：
 
-**偏离规则**（写入 context）：环境感知与 workflow `[envDesc]` 不一致时，Agent 应偏离套路并说明理由；写操作仍受 `OpsRemediationGate` / 安全门约束。
+- `AssistantOrchestrator`
+- `AutonomousOpsOrchestrator`
+- 链路审计视图
+- Agent 记忆展示界面
 
-### Reflexion 写入点（仅教训）
+### Reflexion 写入原则
 
-| 入口 | 典型 securityCode |
-|------|-------------------|
-| `McpExecuteController` | `INTENT_TOOL_MISMATCH`、`INJECTION`、`RISK_SCORE_HIGH` 等 |
-| `ChatController` | `REJECT_INJECTION` / `REJECT_HIGH_INTENT` / `REJECT_HIGH_RISK_COMMAND` |
-| `UnifiedAssistantService` | 流式工具链前置拦截 |
+- 只从安全门拦截轨迹中归纳
+- 只沉淀“为什么不该这么做”
+- 不沉淀可直接执行的危险动作
 
-### HTTP API
+### 相关 API
 
-```http
-GET  /award-log/api/ops/workflow/memory?domain=all
-GET  /award-log/api/ops/workflow/memory?domain=disk&q=清理
-GET  /award-log/api/ops/workflow/failure-insights
-POST /award-log/api/ops/workflow/induce-from-audit?limit=20
-```
+| API | 说明 |
+|-----|------|
+| `GET /api/ops/workflow/memory` | 查看 AWM |
+| `GET /api/ops/workflow/failure-insights` | 查看教训 |
+| `POST /api/ops/workflow/induce-from-audit` | 从审计记录诱导 workflow |
 
-`GET .../memory` 响应含 `llmInductionAvailable`（是否已配 `AI_API_KEY` 且开启 LLM 归纳）。
+### 配置项
 
-实现：`OpsWorkflowController`。
+位于 `application.yml` 的 `agent.awm` 下，常用包括：
 
-### 配置（`application.yml` → `agent.awm`）
-
-| 键 | 默认 | 含义 |
-|----|------|------|
-| `enabled` | `true` | 总开关 |
-| `seed-on-startup` | `true` | 空表写入 seed |
-| `max-workflows-per-domain` | `12` | 每域 workflow 上限 |
-| `failure-insight-enabled` | `true` | Reflexion 教训层 |
-| `failure-insight-max` | `24` | 内存/查询缓存条数上限 |
-| `llm-induction-enabled` | `false` | 开启后成功轨迹用 **LLM 归纳** workflow；需 `AI_API_KEY`；失败回退 rule-based |
-
-环境变量：`AGENT_AWM_ENABLED`、`AGENT_AWM_SEED`、`AGENT_AWM_FAILURE_INSIGHT`、`AGENT_AWM_LLM_INDUCTION` 等（见 `application.yml`）。
-
-**LLM 归纳流程**：`LlmWorkflowInductor` 读取审计 steps → 通义输出 JSON（title/steps/envDesc/reason/toolName/占位符参数）→ 白名单工具校验 → 写入 `ops_workflow_memory`（`source_type=llm`）。在线（Playbook/自主编排成功后）与离线（`POST .../induce-from-audit`）共用同一路径。
-
-### 答辩话术（建议）
-
-> 成功处置沉淀 **AWM 套路**（步数更少、可审计）；安全拦截沉淀 **Reflexion 教训**（只学原因、不学危险动作）。可选开启 **LLM 归纳**（`AGENT_AWM_LLM_INDUCTION=true`）对齐论文 workflow 抽象；执行仍由安全门与白名单兜底。
+- `enabled`
+- `seed-on-startup`
+- `max-workflows-per-domain`
+- `failure-insight-enabled`
+- `llm-induction-enabled`
 
 ---
 
@@ -429,981 +690,1172 @@ POST /award-log/api/ops/workflow/induce-from-audit?limit=20
 
 ### 实现形态
 
-- **进程内 Spring Bean**，非独立 stdio MCP Server。  
-- **元数据**：`McpToolCatalog`（`@PostConstruct` 扫描 `mcp.tools.*Tool`，可选 `@McpTool` 注解）。  
-- 对话注册：`McpToolRegistry`（`@Tool` 注入 LLM）。  
-- HTTP 分发：`McpToolDispatcher`（按 toolName `switch` 调用具体 Bean）。  
-- HTTP 门控：`McpInvocationSecurityGate` → `mcpToolCatalog.isHttpAllowed()` / `isReadOnlyObservation()`。  
-- HTTP 控制器：`McpExecuteController` 委托 `McpSecurityService`、`McpExecutionService`、`McpAuditService`。
+本项目中的 MCP 不是独立外部 Server，而是进程内 Java 工具体系：
 
-### 工具清单
+- 工具在 `src/main/java/com/award/log/mcp/tools/`
+- 工具由 `McpToolCatalog` 启动扫描
+- 请求由 `McpToolDispatcher` 调度
+- 写操作由统一安全门和写执行协调器处理
 
-HTTP / 对话调用时 `toolName` 须与 **Bean 短名**一致。
+### 当前主要工具（共 26 个，与 `McpKnownTools.DISPATCHABLE` 一致）
 
-**读写合一（推荐，一个 toolName + `operation`）**
+| 工具 | 作用 |
+|------|------|
+| `DiskTool` / `DiskInsightTool` / `DiskAnalyzeTool` | 磁盘空间、洞察、热点分析 |
+| `SystemLoadTool` / `ProcessTool` / `ProcessOpsTool` | 负载与进程 |
+| `OsInsightTool` | journalctl、ss、lsof（赛题 OS 感知） |
+| `NetworkTool` / `PortHealthTool` / `SslCertTool` | 网络、端口、证书 |
+| `SystemdTool` / `ServiceRestartTool` / `ServiceOpsTool` | 服务状态与受控重启 |
+| `DockerTool` / `ContainerOpsTool` | 容器信息 |
+| `CronJobTool` / `FirewallTool` | 计划任务、防火墙只读 |
+| `ConfigCheckTool` / `ConfigDriftTool` | 配置检查与漂移 |
+| `LogAnalysisTool` / `LogCleanupTool` / `LogOpsTool` | 日志读取与受控清理 |
+| `CleanTempTool` / `DiskOpsTool` | 临时文件与磁盘写操作 |
+| `PrivilegeTool` | 权限检查 |
+| `AutonomousOpsTool` | 综合巡检 / 自主运维兼容入口 |
 
-| toolName | operation 示例 | 读 | 写 |
-|----------|----------------|----|----|
-| `DiskOpsTool` | `df` / `hotspots` / `analyze` / `clean-temp` | df、热点排行、综合诊断（`overview` + `hotspotsRank`） | 清临时目录（dry-run） |
-| `LogOpsTool` | `analyze` / `cleanup` | 日志分析 | 日志清理（dry-run） |
-| `ServiceOpsTool` | `failed` / `status` / `restart` | systemd 状态 | 白名单服务重启 |
-| `ContainerOpsTool` | `list` / `inspect` / `restart` / `stop` | docker ps | 容器重启/停止 |
-| `ProcessOpsTool` | `list` / `kill` | 进程列表（Linux `ps -eo`；Windows CPU 归一化） | 结束进程（PID>10） |
+### HTTP 接口
 
-**细粒度工具（兼容保留）**
+| API | 说明 |
+|-----|------|
+| `GET /api/mcp/tools` | 列出工具 |
+| `POST /api/mcp/execute` | 发起执行 |
+| `POST /api/mcp/confirmExecute` | 二次确认执行 |
 
-| toolName | 源文件 | 能力 | 写操作 |
-|----------|--------|------|--------|
-| `DiskTool` | `mcp/tools/DiskTool.java` | 磁盘占用（Linux `df`；Windows `Get-PSDrive`） | 否 |
-| `DiskInsightTool` | `DiskTool` | du 热点排行（白名单路径） | 否 |
-| `DiskAnalyzeTool` | `mcp/tools/DiskAnalyzeTool.java` | 磁盘压力综合诊断（结构化 `overview` + 可选 `hotspotsRank`） | 否 |
-| `ProcessTool` | `mcp/tools/ProcessTool.java` | 进程列表；Linux 稳定列格式，Windows `PercentProcessorTime / ProcessorCount` 归一化；可选 `kill`（PID>10） | **可选写** |
-| `SystemLoadTool` | `mcp/tools/SystemLoadTool.java` | 负载 | 否 |
-| `LogAnalysisTool` | `mcp/tools/LogAnalysisTool.java` | 读主机日志并分析 | 否 |
-| `NetworkTool` | `mcp/tools/NetworkTool.java` | ping / traceroute | 否 |
-| `OsInsightTool` | `mcp/tools/OsInsightTool.java` | journalctl / ss / lsof | 否 |
-| `ConfigCheckTool` | `mcp/tools/ConfigCheckTool.java` | 配置语法只读检查 | 否 |
-| `ConfigDriftTool` | `mcp/tools/ConfigDriftTool.java` | 配置 checksum 漂移（两次快照对比） | 否 |
-| `PrivilegeTool` | `mcp/tools/PrivilegeTool.java` | 权限探测 | 否 |
-| `PortHealthTool` | `mcp/tools/PortHealthTool.java` | TCP 端口探测 | 否 |
-| `DockerTool` | `mcp/tools/DockerTool.java` | docker ps / inspect；`restart` / `stop` | **可选写** |
-| `CronJobTool` | `mcp/tools/CronJobTool.java` | crontab / schtasks | 否 |
-| `FirewallTool` | `mcp/tools/FirewallTool.java` | ufw / firewalld / netsh | 否 |
-| `SslCertTool` | `mcp/tools/SslCertTool.java` | TLS 证书过期 | 否 |
-| `SystemdTool` | `mcp/tools/SystemdTool.java` | failed units / 服务状态；`operation=restart` | **可选写** |
-| `CleanTempTool` | `mcp/tools/CleanTempTool.java` | 清临时目录 | **是** |
-| `LogCleanupTool` | `mcp/tools/LogCleanupTool.java` | 清陈旧日志 | **是** |
-| `ServiceRestartTool` | `mcp/tools/ServiceRestartTool.java` | 重启白名单服务 | **是** |
-| `AutonomousOpsTool` | `mcp/tools/AutonomousOpsTool.java` | 一键全工具自主运维 | 策略内写 |
-| `FirstMcpTools` | `mcp/FirstMcpTools.java` | 示例（对话实验） | — |
+### 写操作原则
 
-### 写操作参数
+- 默认优先 `dry-run`
+- 中风险需要确认口令 `确认执行`
+- 高风险直接拒绝或要求更严格门控
+- 受路径策略、资产分级、治理策略和工具级安全判断共同影响
 
-| 工具 / 操作 | 真实执行条件 |
-|-------------|----------------|
-| `CleanTempTool` / `LogCleanupTool` / `*OpsTool` 清理类 | `dryRun=false` **且** `confirmDelete=true` |
-| `ServiceRestartTool` / `ServiceOpsTool` restart | `dryRun=false` **且** `confirmRestart=true` |
-| `ProcessTool` / `ProcessOpsTool` kill | `dryRun=false` **且** `confirmKill=true` |
-| `DockerTool` / `ContainerOpsTool` restart / stop | `dryRun=false` **且** `confirmRestart` / `confirmStop=true` |
+### 前端统一执行入口
 
-**默认**：写类工具首次调用 `dryRun=true`（只预览命令）。HTTP 与工作台在 `needConfirm` 后走 `POST /api/mcp/confirmExecute`。
+前端统一通过：
 
-**二次确认不会自动把预览变真删**：`McpToolParamReader.applyConfirmedWriteToolParams(tool, params, userMessage)` 与前端 `applyMcpWriteConfirmParams` 仅在下列情况关闭 `dryRun`：
+- `runMcpToolExecute`
+- `mcpWriteParams.js`
+- `mcpHumanReadable.js`
+- `mcpToolsMeta.js`
 
-- 参数已带 `confirmDelete` / `confirmRestart` / `confirmKill` / `confirmStop`，或 `dryRun=false`；或  
-- `userMessage` 含「真实删除」「立即重启」等明确执行话术（见 `userRequestedRealWrite`）。
+来处理参数规范化、确认流和结果展示。
 
-请求体建议始终传 **`userMessage`**（用户原话），供 `IntentRiskFilter` 与 **`INTENT_TOOL_MISMATCH`**（破坏性话术 + 只读工具）判定。
+### 扩展 MCP 工具的基本步骤
 
-### MCP 返回与前端展示契约
-
-HTTP 与对话工具统一返回 **`ToolResult`** JSON（`success` / `data` / `error` / `durationMs`）。前端经两层解析后展示**人话摘要**，避免评委看到嵌套 JSON 或 `undefined` 字段。
-
-| 层级 | 模块 | 作用 |
-|------|------|------|
-| 后端 | `McpDurationSupport` | 纠正误将 `startTime` 当作 `durationMs` 的历史写法；`ToolResult.error()` 统一归一化 |
-| 后端 | `McpNestedResultSupport` | 组合工具（如 `DiskAnalyzeTool`）解包子工具 `ToolResult` 字符串 |
-| 后端 | `ProcessTool` | Linux `ps -eo` 稳定列；Windows `PercentProcessorTime / ProcessorCount` 归一化到 0–100% |
-| 后端 | `DiskAnalyzeTool` | 输出结构化 `overview` + 可选 `hotspotsRank`（非原始 JSON 字符串） |
-| 前端 | `mcpToolResult.js` | `normalizeMcpToolResponse`：解包 HTTP 外层 + 内层 `ToolResult` |
-| 前端 | `mcpHumanReadable.js` | `generateHumanReadableResponse`：工作台 Tab1 与工具台 Tab2 **共用**摘要逻辑 |
-
-**开发注意**：新增工具若返回嵌套 `ToolResult`，组合类工具应使用 `McpNestedResultSupport`；前端在 `mcpHumanReadable.js` 的 `switch(toolName)` 增加分支（或回落到 `formatObjectAsNaturalLanguage`）。
-
-**示例（日志真实删除）**：
-
-```json
-{
-  "toolName": "LogCleanupTool",
-  "parameters": {
-    "path": "/var/log",
-    "days": 30,
-    "dryRun": false,
-    "confirmDelete": true
-  }
-}
-```
-
-### HTTP MCP 接口
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/mcp/tools` | 工具元数据（`McpToolCatalog.listToolsForApi()`，供前端动态同步） |
-| POST | `/api/mcp/execute` | 执行（body 含 `userMessage`；可能返回 `needConfirm`） |
-| POST | `/api/mcp/confirmExecute` | 二次确认后执行（`confirmCode=确认执行`，`userMessage` 同上） |
-
-### 风险评分
-
-`AgenticRiskScoreEngine`：0–10 分；工具基线分来自 `McpToolCatalog.defaultRiskScore()`。
-
-| 配置项 | 默认 | 含义 |
-|--------|------|------|
-| `agent.security.risk-score-auto-max` | 3 | 低于此分倾向自动 |
-| `agent.security.risk-score-confirm-max` | 7 | 高于此分拒绝；中间需确认 |
+1. 在 `mcp/tools` 下新增工具类
+2. 接入 `McpToolCatalog` / 调度体系
+3. 为前端增加元数据与展示文案
+4. 视需要补充路径与风控策略
+5. 编写对应测试：只读工具可加入 `McpDispatchIntegrationTest`；写操作 / 安全边界加入 `SecurityMcpIntegrationTest`
 
 ---
 
-## 扩展 MCP 工具（开发指南）
+## Markdown 输出规范
 
-新增工具（以只读 `ExampleProbeTool` 为例）的**最小清单**：
+### 目的
 
-### 1. 实现 Tool Bean
+项目里很多结果不是直接返回原始 JSON，而是会被整理成适合前端展示和对外演示的 Markdown。  
+这部分格式需要稳定，否则 Agent 页面、链路审计、导出和答辩展示都会出现视觉不一致。
 
-```java
-@McpTool(httpAllowed = true, readOnlyObservation = true, defaultRiskScore = 1.0)
-@Component
-public class ExampleProbeTool {
-    @Tool(name = "probeExample", description = "示例探测")
-    public String probeExample(@ToolParam(description = "目标") String target) {
-        // 使用 MinPrivilegeExecutor，勿 Runtime.exec 裸调
-        return "...";
-    }
-}
-```
+### 统一来源
 
-未加 `@McpTool` 时，`McpToolCatalog` 仍按 `*Tool` 类名与约定推断白名单/只读/风险分。
+核心由以下模块共同约束：
 
-### 2. 必改（分发与对话）
+- `OpsReportFormat`
+- `assistantMarkdown.js`
+- `mcpHumanReadable.js`
+- `mcpToolResult.js`
 
-| 位置 | 操作 |
-|------|------|
-| `McpToolDispatcher` | `switch` 增加 `case "ExampleProbeTool"` |
-| `McpToolRegistry` | 构造器注入 Bean（供 LLM `@Tool`） |
+### 适用范围
 
-白名单与默认风险分：**无需**再改 `ALLOWED_TOOLS` 静态集合（已废弃），由 `McpToolCatalog` 统一维护。
+| 输出类型 | 说明 |
+|----------|------|
+| Playbook 报告 | `AssistantOrchestrator`、`AutonomousOpsOrchestrator` |
+| Agent 对话正文 | `OpsChatInterface` 中的 Markdown 渲染 |
+| MCP 人类可读摘要 | 工具结果转译 |
+| 审计链路详情 | 步骤与结果摘要 |
+| 导出报告 | 看板、链路、表格导出 |
 
-### 3. 前端
+### 建议规则
 
-| 位置 | 操作 |
-|------|------|
-| `mcpToolsMeta.js` | `MCP_TOOL_DEFINITIONS` 增加表单项（控制台表单） |
-| 启动后 | `GET /api/mcp/tools` 自动带回 `description` / `commandHint`（`mergeToolRegistry` 合并） |
-
-### 4. 可选
-
-- 自主运维：在 `AutonomousOpsOrchestrator.perceiveAll` 中 `safeCall`  
-- 写操作成功：确认 `McpToolDispatcher` 会 `OpsPerceptionCache.invalidate()`（非只读且非 dryRun）
-
-### 5. 测试
-
-单元测试 + 安全回归（只读面、破坏性话术 + 只读工具 → `INTENT_TOOL_MISMATCH`）。
+| 项 | 规范 |
+|----|------|
+| 标题 | 用 `##`、`###` 分层 |
+| 表格 | 使用标准 Markdown 表格，避免混杂伪表格 |
+| 级别 | 风险或发现项统一使用 `HIGH` / `WARN` / `INFO` |
+| 路径 / 命令 / 服务名 | 用反引号包裹 |
+| 装饰线 | 避免无意义重复分隔线 |
+| 备注 | 用引用块 `>`，避免正文里混杂提示语 |
 
 ---
 
 ## 安全与审计
 
-### 多层护栏
+### 安全目标
 
-| 层 | 组件 | 说明 |
-|----|------|------|
-| 认证 | `AuthInterceptor` | 除登录、Swagger、部分只读 API 外需会话 |
-| 工具白名单 | `McpInvocationSecurityGate` | 仅允许登记的 `toolName` |
-| 路径白名单 | `OpsPathPolicy` | 读/清/配置检查路径 |
-| 日志删除保护 | `LogSafetyClassifier` | 识别 DB/中间件日志路径 |
-| 注入 / 意图 | `PromptInjectionGuard`、`IntentRiskFilter` | 自然语言过滤 |
-| 高危命令 | `HighRiskCommandDetector` | rm -rf 等模式 |
-| Agentic 风险分 | `AgenticRiskScoreEngine` | 与确认流、巡检修复联动 |
-| 信任策略 | `OpsTrustPolicy` | 风险分 → AUTO/NOTIFY/APPROVE/BLOCK 档位 |
-| **生产治理** | `OpsGovernanceService` | 资产分级 + 动作准入矩阵 |
-| **写操作统一门禁** | `OpsRemediationGate` | 治理 **先于** 风险分；Playbook / 自主编排 / 巡检 Auto **共用** |
-| **重启目标解析** | `ServiceRestartCandidateResolver` | failed unit × 白名单 × 治理，避免误重启 allowlist[0] |
-| 最小权限 | `MinPrivilegeExecutor` | `sudo -u award-agent`；Windows 跳过 sudo |
-| 全局演练 | `OpsDryRunProperties` | `ops.dry-run.global=true` 时写类命令仅返回 `[DRY-RUN]` |
-| 门面 | `OpsSecurityKernel` | 安全能力聚合（供编排层调用） |
-| 审计 | `OpsAuditTraceService`、`AssistantAuditRecorder` | `ops_audit_trace`；`audit.retention-days` 定时清理 |
-| **AWM** | `WorkflowMemoryService` | 成功轨迹 → 可复用 workflow（`ops_workflow_memory`） |
-| **Reflexion** | `FailureInsightService` | REJECT 轨迹 → 教训（`ops_failure_insight`），**不**写入 workflow |
+项目重点不是“把工具做多”，而是“让可执行 Agent 可控”。
 
-### 工作台本地风控（助手页）
+### 当前主要护栏
 
-实现：`frontend/src/utils/opsIntentSafety.js`，与后端 `IntentRiskFilter` 口径对齐。
+| 护栏 | 说明 |
+|------|------|
+| 鉴权 | 用户登录、角色区分、管理员接口隔离 |
+| 管理面隔离 | 管理类接口与业务接口可走不同端口 |
+| 路径策略 | `OpsPathPolicy` 限制可读、可清理、可保护目录 |
+| 风险评分 | 根据工具、参数、语义风险计算自动 / 确认 / 拒绝 |
+| 二次确认 | 写操作要求确认口令 |
+| 执行协调 | `WriteExecutionCoordinator` 防止助手文本和实际执行不一致 |
+| 审计留痕 | `ops_audit_trace`、AI 审计、访问轨迹 |
+| WebSocket 源校验 | 握手阶段校验允许来源 |
+| CSRF / 同源约束 | 请求头与来源校验 |
 
-- 破坏性话术（如「删除整个系统」）**不**走本地工具快捷路由。  
-- 延时任务创建前同样拦截；延时白名单与 `OpsDeferredTaskService` 一致（只读/清理类，**不含**服务重启等写操作）。
+### 关键类
+
+- `McpInvocationSecurityGate`
+- `WriteExecutionCoordinator`
+- `McpToolSecurityAspect`
+- `ManagementPortFilter`
+- `SessionCsrfGuardFilter`
+- `WebSocketAuthHandshakeInterceptor`
+- `OpsPathPolicy`
+- `OpsGovernanceService`
+- `OpsRemediationGate`
 
 ### 安全自检
 
-| 项 | 说明 |
-|----|------|
-| **入口** | 顶栏 **安全自检** |
-| **接口** | `GET /api/security/self-check` |
-| **实现** | `SecuritySelfCheckService`：固定用例调用真实安全校验逻辑，**不执行系统命令** |
-| **展示** | 配置快照 + 检查项表（预期 vs 实际：放行 / 须确认 / 拒绝） |
-
-### 两条工具入口
-
-| 入口 | 门控 | 二次确认 |
-|------|------|----------|
-| HTTP `/api/mcp` | `evaluate` + `userMessage` | NEED_CONFIRM + `confirmExecute`（预览保持 dryRun） |
-| 对话 `@Tool` | `McpToolSecurityAspect` → `evaluateChatToolInvocation` | 写工具默认 dry-run；BLOCK 直接拒绝 |
-
-### 生产检查项
-
-- `app.security.ai-audit-relaxed-read=false`  
-- `agent.min-privilege.enabled=true`  
-- `agent.run-as-user=award-agent` + sudoers  
-- Profile `prod-kylin` 时 `ProductionProfileValidator` 拒绝放宽审计  
-- 限制 Knife4j / Actuator 公网暴露  
-
----
-
-## 生产治理改造路线
-
-> **交付主场**：麒麟 V11 + LoongArch（`prod-kylin`）。Windows 仅作本地开发联调，不作为生产对等目标。
-
-目标形态：**只自动处理低风险、可回滚、幂等动作**（过期日志/临时目录清理、非关键无状态服务重启）；核心资产与关键写操作一律 **确认/审批**；AI 只做归因与候选编排，执行必须落到 **Runbook + 白名单工具**。
-
-### 改造阶段（渐进式）
-
-| 阶段 | 主题 | 状态 |
-|------|------|------|
-| **P1-①** | 资产四级 + 动作准入；巡检/Playbook/自主编排写操作统一门禁 | ✅ 已落地（见下） |
-| P1-② | Runbook 注册表；Chat 路径禁止直执写工具 | 待做 |
-| P1-③ | 验证契约 + 审计字段（policyId / runbookId / verifyResult） | 待做 |
-| P2 | 审批流、证据链导出、失败率熔断 → dry-run only | 待做 |
-| P3 | 控制面 + 主机执行代理（签名任务） | 待做 |
-| P4 | 灰度发布、平台 HA | 待做 |
-
-### P1-① 已落地（2026-06-06，2026-06-07 增强）
-
-**包**：`com.award.log.governance`（`OpsGovernanceService`、`OpsRemediationGate`）  
-**Agent**：`com.award.log.agent.ServiceRestartCandidateResolver`
-
-| 概念 | 说明 |
-|------|------|
-| **资产分级** | `CORE_STATEFUL` / `CORE_STATELESS` / `NON_CORE` / `FORBIDDEN_AUTO` |
-| **动作类型** | `temp-cleanup` / `log-cleanup` / `service-restart` |
-| **准入结论** | `ALLOW_AUTO`（可进 HYBRID 低分自动车道）/ `CONFIRM_ONLY` / `FORBIDDEN` |
-| **写操作决策** | `OpsRemediationGate`：`FORBIDDEN` → 拒绝；`CONFIRM_ONLY` → 仅 `forceRemediate`/「确认执行」后执行；`ALLOW_AUTO` → 再按风险分 AUTO/NOTIFY |
-
-**默认策略（麒麟）**：
-
-- `/tmp`、`/var/log` 等 **NON_CORE** → 临时/日志清理可 `ALLOW_AUTO`（仍受 dry-run、风险分、冷却约束）
-- `nginx` 等白名单服务 restart → **CONFIRM_ONLY**（须「确认执行」；**不会**因 NOTIFY 档自动重启）
-- `mysqld`、`sshd` 等 → **FORBIDDEN**（不进入自动/待确认方案）
-
-**接入点**：
-
-- `OpsAutoRemediationService.buildPlanSteps` → `OpsGovernanceService.filterPlanSteps` → 执行前 `OpsRemediationGate` 同口径
-- `AutonomousOpsOrchestrator` / `AssistantOrchestrator` 全部写步骤 → **`OpsRemediationGate`**
-- HYBRID 拆分时：`CONFIRM_ONLY` 强制进入待确认桶
-- IMMEDIATE：仅执行 `ALLOW_AUTO` 步骤
-- `FAILED_SERVICE`：`ServiceRestartCandidateResolver.pickFromFailedUnits`
-- `GET /api/platform/info` → `governance` 字段（动作矩阵摘要）
-
-**配置**：`ops.governance.enabled`（默认 `true`）；`agent.autonomous.run-after-patrol`（默认 **`false`**）；完整矩阵见 `OpsGovernanceProperties`。
-
----
-
-### 平台 API
-
-**公开验收（无需登录）** — 仅 OS/架构/`deliveryTargetMatch`，不含运行用户与自动化开关：
+系统提供：
 
 ```http
-GET /award-log/api/platform/acceptance
-GET /award-log/api/ops/perception/snapshot
+GET /api/security/self-check
 ```
 
-**完整快照（需登录）** — 含 `governance`、最小权限用户、profile 等：
+该接口用于验证关键安全门是否按预期工作，而不是简单返回静态配置。
 
-```http
-GET /award-log/api/platform/info
-```
+### 运维链路审计
+
+核心表：`ops_audit_trace`
+
+常见阶段：
+
+1. `receive`
+2. `perceive`
+3. `reason`
+4. `security`
+5. `execute`
+6. `verify`
+
+### 最近安全加固点
+
+- `/api/agent/path-policy` 已限制为管理员读写
+- `/api/ops-schedule/tasks` 延时运维任务创建限制为管理员
+- `/log/**` 与任务访问已按 owner / admin 隔离
+- WebSocket 来源不再允许 `*`
+- 全局异常响应不再返回原始后端异常内容
+- 告警配置、告警历史、Elasticsearch 浏览接口进一步按权限收敛
+- Runbook execute 不再返回虚假的 “已执行成功”
 
 ---
 
-## 后端 API 索引
+## 生产治理路线
 
-**约定**：完整 URL = `http(s)://主机:端口/award-log` + 路径。除注明外需登录 Cookie。
+### 为什么要有治理层
 
-### 智能运维（Agent）
+仅靠“风险分数”并不能覆盖所有真实运维场景。  
+例如某个服务允许重启，不代表所有环境、所有资产级别、所有路径下都应该自动执行。
 
-| 方法 | 路径 | 控制器 |
-|------|------|--------|
-| POST | `/api/assistant/chat/stream` | `UnifiedAssistantController` — 工作台 SSE |
-| GET | `/api/assistant/context` | 会话上下文 |
-| POST | `/api/ops/autonomous/run` | `AutonomousOpsController` |
-| GET | `/api/ops/autonomous/supports` | 意图是否走自主运维 |
-| GET | `/api/ops/perception/snapshot` | `PerceptionController` — 只读感知 |
-| GET | `/api/platform/acceptance` | `PlatformInfoController` — 公开验收（架构/麒麟） |
-| GET | `/api/platform/info` | `PlatformInfoController` — 完整平台快照（需登录） |
-| GET/POST | `/api/mcp/*` | `McpExecuteController` |
-| GET | `/api/ops-trace/**` | `OpsTraceController` — 链路审计 |
-| GET/POST | `/api/ops/patrol/**` | `OpsPatrolController` — 巡检与修复提案 |
-| GET | `/api/security/self-check` | `SecuritySelfCheckController` — 安全护栏探针（只读） |
-| GET | `/api/ops/effect/dashboard?days=7` | `OpsEffectDashboardController` — 运维效果评分聚合 |
-| GET | `/api/ops/workflow/memory` | `OpsWorkflowController` — AWM 已沉淀套路 |
-| GET | `/api/ops/workflow/failure-insights` | Reflexion 失败教训 |
-| POST | `/api/ops/workflow/induce-from-audit` | 从近期成功审计诱导（LLM 或 rule-based） |
+所以当前项目把治理层放在风险分层之前或并列位置，用于做更接近生产要求的动作准入。
 
-**巡检补充接口**：
+### 关键组件
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/ops/patrol/alerts/recent` | 内存环形最近告警 |
-| GET | `/api/ops/patrol/correlation/latest` | 最近一轮关联快照 |
-| GET | `/api/ops/patrol/history?days=7&limit=50` | 持久化历史（`ops_patrol_history`） |
-| GET | `/api/ops/patrol/history/trend?days=7` | 按日告警/巡检次数（顶栏趋势图） |
+- `OpsGovernanceService`
+- `OpsGovernanceProperties`
+- `OpsRemediationGate`
+- `AssetTier`
+- `GovernanceAdmissionVerdict`
+- `OpsActionType`
 
-### 配置中心与个人中心
+### 当前治理目标
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/system-config/effective` | 统一系统配置有效视图；所有登录用户可查看 |
-| PUT | `/api/system-config/effective` | 保存统一系统配置；仅管理员（`role == 1`）可写 |
-| GET | `/api/profile/user-info` | 当前登录用户资料；不再回落到管理员或首个用户 |
-| PUT | `/api/profile/user-info` | 仅更新当前用户自己的资料字段（如 `email`、`wechat_userid`） |
-| POST | `/api/profile/change-password` | 基于 BCrypt 校验旧密码后修改 |
-| GET/PUT | `/api/profile/notification-settings` | 通知偏好持久化读写 |
-| GET | `/api/profile/access-trail` | 当前用户访问足迹；`/api/profile/login-history` 保留兼容别名 |
-| GET | `/api/profile/user-stats` | 当前用户个人统计 |
-| GET | `/api/profile/api-keys` | 当前用户 API Key 列表（仅返回前缀/状态/时间） |
-| POST | `/api/profile/api-keys` | 创建 API Key；完整明文仅返回一次 |
-| POST | `/api/profile/api-keys/{id}/rotate` | 轮换 API Key；旧 Key 立即失效 |
-| POST | `/api/profile/api-keys/{id}/revoke` | 停用 API Key |
-
-**API Key 约定**：
-- 请求头使用 `X-API-Key`
-- v1 固定为“个人资料只读 + 只读查询”权限包
-- 可访问当前用户资料、通知设置、统计、访问足迹、运维效果评分、巡检历史/趋势/最新关联快照、安全自检、平台信息
-- 不允许写系统配置、不允许执行运维动作、不允许修改密码
-- 失败错误码包括 `API_KEY_INVALID`、`API_KEY_REVOKED`、`API_KEY_SCOPE_DENIED`
-
-### 日志与业务
-
-| 前缀 | 用途 |
+| 目标 | 说明 |
 |------|------|
-| `/log/**` | 上传、任务、报告、下载；`GET /log/history` 支持 `fileName`、`status`、`startTime`、`endTime`（`YYYY-MM-DD`，服务端转 `LocalDateTime` 闭区间） |
-| `/log/diagnose/**` | AI 全盘/单行诊断 |
-| `/admin/user`、`/admin/role`、`/admin/permission` | RBAC |
-| `/admin/audit/ai` | 执行审计列表 |
-| `/api/alarm*` | 告警配置与历史 |
-| `/admin/statistics/*` | 仪表盘汇总、性能、任务状态（`log-summary`、`task-status` 等） |
-| `/api/performance` | 性能 REST（若单独暴露） |
-| `/api/agent/path-policy` | 路径白名单读写 |
+| 资产分级 | 区分核心与非核心路径 / 服务 / 操作对象 |
+| 动作准入 | 对清理、重启、写配置等动作做细粒度准入 |
+| 与风险分解耦 | 风险评分只做一层判断，治理层可进一步提升或收紧要求 |
+| 统一写门禁 | 巡检自动修复、兼容自主运维入口、Playbook 写操作都走同一门禁模型 |
 
-### WebSocket
+### 当前结论类型
 
-| 路径 | 说明 |
-|------|------|
-| `/ws/performance` | ~5s 推送性能；`patrol_alert` / `patrol_remediation`；客户端重连发 `sync` 补发缓冲消息 |
-| `/ws/logs` | 日志流（可选） |
+| Verdict | 含义 |
+|---------|------|
+| `ALLOW` | 可以继续按风险分流 |
+| `CONFIRM_ONLY` | 必须显式确认 |
+| `DENY` | 直接禁止 |
 
-### 对话入口区别（易混淆）
+### 平台可观测入口
 
-| 接口 | 用途 |
-|------|------|
-| `POST /api/assistant/chat/stream` | 主机运维主入口（编排 + LLM） |
-| `POST /api/chat/analyze*` | 针对**已选日志内容**的问答，不执行主机写操作 |
+平台摘要中已经暴露治理概要：
 
----
-
-## 知识库 RAG
-
-实现：`KnowledgeBaseServiceImpl` + `KnowledgeController`；对话侧由 `MultiAgentContextBuilder` / `UnifiedAssistantService` 在编排前检索并随 SSE 返回引用元数据（`ASSISTANT_META:`）。
-
-| 能力 | 说明 |
-|------|------|
-| 入库 | 文本 JSON 上传；文件支持 **txt / md / pdf / log** |
-| 分块 | 可配置 `chunk-size` / `chunk-overlap`，写入 Qdrant 集合 `ops_knowledge` |
-| 向量 | 优先 DashScope Embedding（Spring AI）；不可用时可选本地降级向量 |
-| 检索 | `GET /api/v1/knowledge/search?query=&topK=` |
-| 对话 | 助手自动检索 Top-K，前端展示依据条与引用摘要 |
-| 集合创建 | **惰性创建**：`getStatus` / `search` 不自动 POST；**首次上传**时进程内仅发起一次创建请求 |
-| 状态缓存 | 集合探测与文档数缓存 120s，降低 Qdrant scroll / GET 频率 |
-
-**Qdrant 部署方式**（二选一）：
-
-```bash
-# 本机 Docker（无需 API Key）
-docker compose up -d qdrant
-# QDRANT_URL=http://localhost:6333
-
-# Qdrant Cloud：控制台复制 Cluster URL + API Key，写入 application-local.yml 或环境变量
-# QDRANT_URL=https://<cluster>.region.gcp.cloud.qdrant.io
-# QDRANT_API_KEY=...
-```
-
-首次空库：**环境页**显示「集群已连接，集合将在首次上传时创建」；文档列表返回空表；检索返回空结果。上传文档后自动建集合并向量化入库。
-
----
-
-## 前端开发
-
-### 目录
-
-```
-frontend/
-├── src/App.vue                    # 9 个主导航页 + 快捷键 1–9 + 右上角个人中心
-├── src/api/index.js               # Axios（含 securityCode 统一提示）
-├── src/components/
-│   ├── OpsChatInterface.vue       # Tab1 工作台
-│   ├── McpToolsDemo.vue           # Tab2 工具台
-│   ├── AiAuditCenter.vue          # Tab3 执行审计（可导出 PNG/PDF）
-│   ├── OpsTraceCenter.vue         # Tab4 链路审计 + CoT + Agent 记忆层面板
-│   ├── LogAnalysis.vue            # Tab5 日志分析
-│   ├── HistoryList.vue            # Tab6 任务记录
-│   ├── LogAnalysisDashboard.vue   # Tab7 日志分析仪表盘（导出 PNG/PDF）
-│   ├── OpsMemoryPanel.vue         # AWM 套路 / Reflexion 教训展示
-│   ├── OpsEffectDashboard.vue     # Tab8 运维效果评分（综合分 + 五维雷达）
-│   ├── SystemConfigCenter.vue     # Tab9 系统配置与效果
-│   ├── UserProfileCenter.vue      # 右上角用户菜单进入的个人中心
-│   ├── SecuritySelfCheckDialog.vue # 顶栏安全自检弹窗
-│   └── TopPerformanceBar.vue      # 顶栏性能 + 巡检趋势 + 安全自检入口
-└── src/utils/
-    ├── mcpToolsMeta.js            # 工具表单；mergeToolRegistry 对接 /api/mcp/tools
-    ├── mcpToolResult.js           # MCP HTTP 响应解包 + duration 纠正
-    ├── mcpHumanReadable.js        # 工具结果人话摘要（Tab1/Tab2 共用）
-    ├── opsIntentSafety.js         # 工作台高危话术拦截
-    ├── formatDate.js              # 本地日期（避免 UTC 错位）
-    ├── apiError.js                # 错误文案 + securityCode
-    ├── tableExport.js             # 表格/CoT 截图导出
-    └── dashboardExport.js         # 图表 PDF（jspdf）
-```
-
-### 导航分组
-
-| 分组 | 页面 | 快捷键 |
-|------|------|--------|
-| **工作台** | 对话 · 工具箱 · 溯源 · 知识库 · 环境 | 1–5 |
-| **洞察** | 态势 · 诊断 · 报告 · 看板 | 6–9 |
-
-### 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `VITE_AWARD_LOG_BASE_URL` | **必须**含 `/award-log`，无尾斜杠；开发推荐 `http://localhost:3000/award-log`（Vite 代理到 8088） |
-| `VITE_DEV_PROXY_TARGET` | Vite dev 代理目标，默认 `http://127.0.0.1:8088` |
-| `VITE_AWARD_LOG_WS_URL` | 跨域时指定 wss |
-| `VITE_API_TIMEOUT_MS` | 大文件上传可调大（默认 600000） |
-
-### 控制台 Tab（主导航 9 项，快捷键 1–9）
-
-| 键 | Tab | 说明 |
-|----|-----|------|
-| 1 | 工作台对话 | SSE；Playbook / 自主运维 / LLM；`mcpHumanReadable.js` 人话摘要 |
-| 2 | 工具控制台 | 直连 `/api/mcp`；与工作台共用 `formatMcpResultPreview` |
-| 3 | 执行审计 | AI/HTTP 访问记录；支持导出 PNG/PDF |
-| 4 | 运维链路审计 | traceId + CoT（**AWM 步骤高亮**）；顶栏 **Agent 记忆层**（套路 + Reflexion + 离线诱导） |
-| 5 | 日志分析 | 上传、Drain、AI 诊断 |
-| 6 | 任务记录 | 文件名/状态/日期筛选 |
-| 7 | 日志分析仪表盘 | 近 7 日汇总；导出 PNG / PDF |
-| 8 | 运维效果评分 | 综合分 + 五维雷达（安全拦截 / 成功执行 / 巡检 / 释放空间 GB / 自愈） |
-| 9 | 系统配置与效果 | 左侧“设置与治理”分组；统一配置、效果联动、JSON/PDF 导出 |
-
-**顶栏**：本机负载、巡检趋势、**安全自检**（`SecuritySelfCheckDialog`）。
-**个人中心**：通过右上角用户下拉进入，不混入左侧主工作流；包含基础资料、账号安全、通知偏好、API Key 管理、访问足迹与个人统计。
-**顶部“安全白名单”按钮**：不再弹旧对话框，直接跳转到 Tab9 的安全白名单分组。
-
-**Tab8 五维口径**（`OpsEffectDashboardService`）：
-
-1. **安全拦截** — 审计中 `REJECT_*` 次数  
-2. **成功执行** — `execution_ok=1` 次数  
-3. **巡检闭环** — `ops_patrol_history` 巡检轮次  
-4. **资源优化** — 清理类工具摘要中的 MiB/GiB + 自愈磁盘降幅，折合 **释放空间 X GB**  
-5. **自愈效果** — `effect` 步骤中 `healingScore` 均分  
-
-顶栏价值 KPI：**安全拦截 N 次 · 成功执行 M 次 · 巡检闭环 · 释放空间 X GB**。支持 7 / 14 / 30 日窗口。
-
-```bash
-cd frontend
-cp .env.example .env.development   # 可选，仓库已含 .env.development
-npm install && npm run dev
-```
+- `GET /api/platform/info`
 
 ---
 
 ## 日志分析流水线
 
-实现：`LogAnalysisServiceImpl#startAnalysisAsync`
+### 核心流程
 
-| 阶段 | 说明 |
+1. 上传日志文件
+2. 创建 `log_analysis_task`
+3. 解析并抽取结构化明细写入 `log_analysis_detail`
+4. 执行模板挖掘、异常识别、规则判断、智能诊断
+5. 输出报告、统计、历史记录与可下载结果
+
+### 核心表
+
+| 表名 | 说明 |
 |------|------|
-| 分片读取 | `shardSize` 控制内存 |
-| Drain-Plus | `log.pipeline.analyzer.drain` |
-| 异常检测 | 启发式 + 综合评分 + IntelligentRouter（按模板去重，上限 400 条；大任务可 `skipLlm` 跳过逐条 LLM） |
-| 进度 | 89% 后为综合评分与智能决策阶段（映射至 90%–97%）；前端轮询可显示细粒度步骤 |
-| 导出 | `target/output/<taskId>/` |
-| 取消 | `cancelAnalysis` |
+| `log_analysis_task` | 任务主表 |
+| `log_analysis_detail` | 任务明细 |
+| `log_alarm` | 告警记录 |
+| `alarm_rule` | 告警规则 |
+| `decision_log` | 决策留痕 |
+| `decision_feedback` | 人工反馈 |
+| `model_evaluation` | 模型评估 |
 
-解析原则：`LinuxLogParseSupport` 等失败时**不伪造时间戳**。
+### 关键能力
 
-### 仪表盘统计口径
+- `DrainPlusParser` 模板抽取
+- 规则引擎与机器学习联合判断
+- 任务去重
+- 暂停 / 恢复 / 取消
+- ES 关闭时回退 MySQL 明细
+- 支持报告下载与聊天式诊断
 
-`GET /admin/statistics/log-summary?days=7`（实现：`StatisticsServiceImpl#getRecentLogSummary`）：
+### 主要接口
 
-| 字段 | 含义 |
+| API | 说明 |
+|-----|------|
+| `POST /log/upload` | 单文件上传 |
+| `POST /log/upload/multi` | 多文件上传 |
+| `GET /log/task/{taskId}` | 查看任务状态 |
+| `GET /log/history` | 历史任务 |
+| `GET /log/report/{taskId}` | 获取报告 |
+| `GET /log/download/{taskId}/{type}` | 下载产物 |
+| `POST /log/diagnose/{taskId}` | 执行诊断 |
+| `POST /log/pause/{taskId}` | 暂停 |
+| `POST /log/resume/{taskId}` | 恢复 |
+| `POST /log/cancel/{taskId}` | 取消 |
+| `DELETE /log/delete/{taskId}` | 删除 |
+
+---
+
+## 知识库 RAG
+
+### 作用
+
+知识库用于让 Agent 或对话分析引用已有 Runbook、经验文档和运维说明，而不是完全脱离上下文自由回答。
+
+### 当前实现
+
+- 向量库默认使用 `Qdrant`
+- 支持文本与文件上传
+- 支持 `txt`、`md`、`pdf` 等文档入库
+- 支持搜索与文档级删除
+- 在无真实 embedding 能力时可回退到本地降级模式
+
+### 关键配置
+
+位于：
+
+- `qdrant.*`
+- `knowledge.*`
+
+### 主要接口
+
+| API | 说明 |
+|-----|------|
+| `GET /api/v1/knowledge/status` | 知识库状态 |
+| `GET /api/v1/knowledge/documents` | 文档列表 |
+| `POST /api/v1/knowledge/upload` | 文本上传 |
+| `POST /api/v1/knowledge/upload/file` | 文件上传 |
+| `GET /api/v1/knowledge/search` | 检索 |
+| `DELETE /api/v1/knowledge/document/{documentId}` | 删除文档 |
+
+---
+
+## 后端 API 索引
+
+以下只列当前项目中最核心、最常用的一批接口分组，完整细节以 Knife4j 为准。
+
+### 用户与认证
+
+| 前缀 | 说明 |
 |------|------|
-| `summaryDays` | 统计窗口天数（与 `days` 参数一致） |
-| `totalTasks` / `totalLogs` | **窗口内**任务数、明细条数（`countSinceDays`） |
-| `anomalyLogs` / `anomalyRate` | 窗口内异常条数；异常率 = 异常 / 窗口内总日志 × 100% |
-| `taskTrend` / `anomalyDistribution` | 近 N 日趋势与分布 |
+| `/admin/user/*` | 登录、注册、用户管理、重置密码、角色修改 |
+| `/api/profile/*` | 当前用户信息、密码、通知、访问轨迹、API Key |
 
-前端趋势图使用 `formatLocalDateKey`，避免 `toISOString()` 在 UTC+8 下日期错位。
+### Agent 与运维
 
-实时分析写 ES 时优先走 **`LogDocumentAsyncIndexer`**（`log.elasticsearch.async.*`），避免阻塞分析线程。
+| 前缀 | 说明 |
+|------|------|
+| `/api/assistant/*` | 统一 Agent 对话、上下文 |
+| `/api/mcp/*` | MCP 工具列表、执行、确认执行 |
+| `/api/ops/autonomous/*` | 巡检自动化兼容接口 |
+| `/api/ops/patrol/*` | 巡检历史、告警、待确认修复 |
+| `/api/ops/workflow/*` | AWM / Reflexion |
+| `/api/ops-trace/*` | 运维链路审计 |
+| `/api/ops/effect/*` | 运维效果评分 |
+| `/api/ops/perception/*` | 感知快照 |
+| `/api/ops-schedule/*` | 延时执行任务 |
 
-### 后台日志采集（可选）
+### 安全与系统
 
-实现：`LogCollectorConfig` + `FileLogCollector` + `LogCollectorPathResolver`
+| 前缀 | 说明 |
+|------|------|
+| `/api/security/*` | 安全自检 |
+| `/api/security/signals/*` | 安全信号接入与摘要 |
+| `/api/audit/*` | 统一审计 Feed 与详情 |
+| `/api/system-config/*` | 系统配置中心 |
+| `/api/agent/path-policy` | 路径策略 |
+| `/api/platform/*` | 平台信息、readiness、backend probe、acceptance |
 
-| 配置 | 默认 | 说明 |
-|------|------|------|
-| `log.collector.enabled` | `true` | 关闭可显著降低开发机磁盘 I/O |
-| `LOG_COLLECTOR_ROOT` / `log.collector.file.path` | `auto` | `auto` 时按 OS 扫描常见日志目录（非整盘） |
-| `LOG_COLLECTOR_MAX_DEPTH` | `4` | 目录递归深度上限 |
-| `LOG_COLLECTOR_POLL_MS` | `5000` | 文件轮询间隔（毫秒） |
-| `log.pipeline.collector.dispatch-interval-ms` | `5000` | 采集批次派发间隔 |
+### 日志分析与数据
 
-开发机若 CPU/磁盘压力大，可在 `application-local.yml` 设 `log.collector.enabled: false`，或 `LOG_COLLECTOR_ROOT=./logs` 缩小范围。
+| 前缀 | 说明 |
+|------|------|
+| `/log/*` | 日志分析主流程 |
+| `/api/assistant/*` | 统一助手对话与运维编排 |
+| `/log/diagnose/*` | 诊断 SSE |
+| `/api/alarm/*` | 告警配置与历史 |
+| `/api/alarm-rule/*` | 告警规则兼容接口 |
+| `/api/v1/alarm/lifecycle/*` | 告警生命周期 |
+| `/api/elasticsearch/*` | ES 相关接口 |
+| `/api/decision-feedback/*` | 决策反馈 |
+| `/api/v1/decision/*` | 决策解释与统计 |
+| `/api/v1/model/*` | 模型健康与评估 |
+
+### WebSocket
+
+当前主要包括：
+
+- `/award-log/ws/performance`
+- `/award-log/ws/logs`
+
+实际是否开放、是否允许来源访问，受当前配置与安全拦截器约束。
+
+---
+
+## 前端说明
+
+### 壳层结构
+
+前端主入口位于：
+
+- `frontend/src/App.vue`
+
+当前整体采用一个统一控制台壳层，顶部是状态栏与用户菜单，左侧是导航 / 会话区，中间是工作台主体，Agent 页面还有单独的上下文侧栏。
+
+### 主要页面组件
+
+| 组件 | 作用 |
+|------|------|
+| `OpsChatInterface.vue` | Agent 对话主页面 |
+| `agent/AgentSidebar.vue` | Agent 多会话侧栏 |
+| `agent/OpsContextPanel.vue` | Agent 上下文面板 |
+| `RuntimeModeBar.vue` | 运行模式 / 环境提示条 |
+| `ToolConsole.vue` | MCP 工具控制台 |
+| `AuditCenter.vue` | 审计中心 |
+| `AiAuditCenter.vue` | AI 执行审计 |
+| `OpsTraceCenter.vue` | 运维链路与 AWM 展示 |
+| `EnvironmentStatus.vue` | 环境状态 |
+| `OpsLiveWall.vue` | 运行态势 |
+| `LogAnalysis.vue` | 日志分析 |
+| `HistoryList.vue` | 任务历史 |
+| `LogAnalysisDashboard.vue` | 日志分析统计看板 |
+| `SystemConfigCenter.vue` | 系统配置中心 |
+| `UserProfileCenter.vue` | 个人中心 |
+
+### Agent 页面
+
+相关目录：
+
+- `frontend/src/components/agent/`
+- `frontend/src/styles/agent-workspace.css`
+- `frontend/src/styles/assistant-prose.css`
+
+当前支持：
+
+- 多会话侧边栏
+- 对话上下文面板
+- Markdown 输出规范化渲染
+- 工具执行结果嵌入展示
+- 运行模式提示
+
+### API 基址策略
+
+前端 `frontend/src/api/index.js` 中区分了：
+
+- 业务面基址
+- 管理面基址
+
+常用环境变量：
+
+- `VITE_AWARD_LOG_BASE_URL`
+- `VITE_AWARD_LOG_MANAGEMENT_BASE_URL`
+- `VITE_AWARD_LOG_MANAGEMENT_PORT`
+- `VITE_DEV_PROXY_TARGET`
+- `VITE_DEV_MANAGEMENT_PROXY_TARGET`
+
+开发模式下通常走 Vite 代理到 **8088**；管理面基址默认同源。仅当后端显式开启 **8089** 双端口时，才需设置 `VITE_DEV_MANAGEMENT_PROXY_TARGET`。
+
+- `VITE_AWARD_LOG_BASE_URL=http(s)://<域名>/award-log`
+- `VITE_AWARD_LOG_MANAGEMENT_BASE_URL=http(s)://<域名>/award-log`（`prod-kylin` 管理面默认关闭，两行应相同）
+
+详见 [`docs/deployment/部署文档.md`](./docs/deployment/部署文档.md) §5.0。
+
+### 构建
+
+```bash
+cd frontend
+npm run build
+```
 
 ---
 
 ## 配置参考
 
-### 环境变量（常用）
+### 配置文件
 
-| 变量 | 必填 | 含义 |
-|------|------|------|
-| `DB_URL` | 否 | JDBC；默认 **MySQL** `jdbc:mysql://localhost:3306/log_analysis?...` |
-| `DB_DRIVER` | 否 | 默认 `com.mysql.cj.jdbc.Driver`；麒麟改为 `org.mariadb.jdbc.Driver` |
-| `DB_PASSWORD` | **是** | 数据库密码 |
-| `AI_API_KEY` | 助手需要 | 大模型密钥（DashScope 等） |
-| `AI_BASE_URL` | 否 | 兼容网关 |
-| `AI_CHAT_TEMPERATURE` | 否 | 对话采样温度，默认 **0.1**（答辩建议 0～0.2） |
-| `AI_CHAT_TOP_P` | 否 | 默认 0.85 |
-| `AGENT_MIN_PRIVILEGE` | 否 | 生产建议 `true` |
-| `AGENT_RUN_AS_USER` | 否 | 默认 `award-agent` |
-| `AGENT_RUNTIME_ENABLED` | 否 | Playbook 总开关 |
-| `AGENT_AUTONOMOUS_ENABLED` | 否 | 自主运维 |
-| `AGENT_AUTONOMOUS_AFTER_PATROL` | 否 | 巡检后是否再跑全栈编排；默认 **`false`**（与 `ops.auto-remediation` 二选一） |
-| `AGENT_AWM_ENABLED` | 否 | AWM 总开关（默认 true） |
-| `AGENT_AWM_LLM_INDUCTION` | 否 | LLM workflow 归纳（默认 false；需 `AI_API_KEY`） |
-| `AGENT_PERCEPTION_CACHE_TTL_MS` | 否 | 感知缓存 |
-| `APP_CONFIG_SECRET` | 配置中心敏感项必需 | 用于加密 `system-config-secrets.json` 中的 AI Key 等敏感配置 |
-| `RF_FORCE_HEURISTIC_LOONGARCH` | 龙芯 | ONNX 不可用时启发式 |
-| `SPRING_PROFILES_ACTIVE` | 环境 | `dev` / `prod` / `prod-kylin` / `test-kylin` |
-| `APP_AI_AUDIT_RELAXED_READ` | 否 | **生产必须 false** |
-
-本地密钥：复制 `application-local.example.yml` → `application-local.yml`（已 gitignore）。麒麟联调密钥见 `application-test-kylin.yml`。
-
-### 统一配置中心补充
-
-- 系统配置页统一展示“当前有效值 + 生效方式（HOT / RESTART）+ 风险提示”
-- 敏感项不回显明文；未设置 `APP_CONFIG_SECRET` 时前端只能查看状态，不能保存新的敏感配置
-- `system-config-overrides.json`：非敏感覆盖项
-- `system-config-secrets.json`：敏感项密文（需 `APP_CONFIG_SECRET`）
-- `agent-path-policy-overrides.json`：路径白名单兼容文件
-- 旧路径白名单接口 `/api/agent/path-policy` 仍保留兼容，但主流程已迁移到系统配置页
-- `ping` 默认目标不再写死，统一从运行时配置读取
-
-### application.yml 关键块
-
-| 路径 | 含义 |
+| 文件 | 作用 |
 |------|------|
-| `server.servlet.context-path` | `/award-log` |
-| `spring.sql.init.mode` | **`never`** — 不自动跑 `schema.sql`，需手动建表 |
-| `spring.profiles.group.prod-kylin` | `prod` + `kylin` |
-| `spring.ai.openai.chat.options.temperature` | LLM 低温（默认 0.1） |
-| `agent.runtime.enabled` | OpsRuntimeService / Playbook 路由 |
-| `agent.perception.cache-ttl-ms` | 感知快照缓存 |
-| `agent.autonomous.*` | 自主运维阈值与端口探测 |
-| `agent.autonomous.run-after-patrol` | 巡检后触发 `AutonomousOpsOrchestrator`；默认 **`false`** |
-| `agent.security.risk-score-*` | 风险分阈值 |
-| `agent.paths.*` | 路径策略版本 `path-policy-v2-kylin` |
-| `agent.service-restart.allowlist` | 可重启服务 |
-| `agent.awm.enabled` | AWM 总开关 |
-| `agent.awm.seed-on-startup` | 冷启动 seed workflow |
-| `agent.awm.max-workflows-per-domain` | 每域 workflow 上限 |
-| `agent.awm.failure-insight-enabled` | Reflexion 教训层 |
-| `agent.awm.failure-insight-max` | 教训条数上限 |
-| `agent.awm.llm-induction-enabled` | LLM 归纳（默认 false；失败回退 rule-based） |
-| `ops.patrol.*` | 巡检 Cron；历史落库 `ops_patrol_history` |
-| `ops.auto-remediation.*` | 有界自动修复 HYBRID/CONFIRM_FIRST |
-| `ops.governance.enabled` | 资产分级 + 动作准入矩阵（P1-①，默认开） |
-| `ops.governance.delivery-profile` | 交付 profile 标识（默认 `prod-kylin`） |
-| `ops.dry-run.global` | 全局演练，写命令不落地 |
-| `ops.websocket.replay-buffer-size` | WS 断线重连消息缓冲条数 |
-| `audit.retention-days` / `audit.cleanup-cron` | 审计表自动清理 |
-| `log.elasticsearch.async.*` | ES 异步批量索引 |
-| `log.collector.*` | 后台文件日志采集（path / max-depth / poll-interval） |
-| `log.pipeline.decision.rf.force-heuristic-on-loongarch` | 龙芯 ONNX 降级 |
+| `application.yml` | 主配置 |
+| `application-dev.yml` | 本地开发覆盖 |
+| `application-kylin.yml` | 麒麟 / LoongArch 生产覆盖 |
+| `application-test-kylin.yml` | 麒麟联调覆盖 |
+| `application-local.example.yml` | 本地敏感配置模板 |
+| `system-config-overrides.json` | 可选运行期配置覆盖 |
 
-路径白名单也可通过控制台「路径白名单」写入 `agent-path-policy-overrides.json`（工作目录，已 gitignore）。
+### 常用环境变量
 
----
+| 变量 | 说明 |
+|------|------|
+| `SPRING_PROFILES_ACTIVE` | 激活配置，如 `dev`、`prod-kylin`、`test-kylin` |
+| `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | 数据库连接 |
+| `DB_DRIVER` | 默认 MariaDB 10.11，可兼容切回 MySQL 8 |
+| `AI_API_KEY` | 模型 API Key |
+| `AI_BASE_URL` | OpenAI 兼容接口基址 |
+| `ELASTIC_ENABLED` | 是否启用 Elasticsearch |
+| `AWARD_MIDDLEWARE_KAFKA` | 是否启用 Kafka |
+| `AWARD_MIDDLEWARE_REDIS` | 是否启用 Redis |
+| `QDRANT_URL` / `QDRANT_API_KEY` | Qdrant 配置 |
+| `AGENT_RUN_AS_USER` | 最小权限执行用户 |
+| `AGENT_MIN_PRIVILEGE` | 是否启用最小权限执行 |
+| `OPS_DRY_RUN_GLOBAL` | 是否全局仅预览 |
+| `OPS_AUTO_REMEDIATION_ENABLED` | 是否启用巡检自动修复 |
 
-## 快速开始
+### 关键配置块
 
-### 环境
+#### `agent.*`
 
-JDK 17 · Maven 3.8+ · MySQL 8 · **Node.js 18+**（推荐 18 LTS 或 20+；`frontend/package.json` 声明 `engines.node >= 18`）
+控制：
 
-### 开发者一条龙（Windows / 本地 MySQL）
+- 运行时开关
+- MCP 缓存
+- 风险分档
+- 最小权限执行
+- AWM
+- 巡检自动化（兼容自主运维命名）
 
-```bash
-# 1. 数据库（任选其一）
-#    A) 本机 MySQL
-mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS log_analysis DEFAULT CHARSET utf8mb4;"
-mysql -u root -p log_analysis < src/main/resources/schema.sql
+#### `ops.*`
 
-#    B) Docker MySQL
-docker compose up -d mysql
-# 等待 healthy 后对容器执行 schema.sql（见 docker-compose.yml 注释）
+控制：
 
-# 2. 密钥：application-local.yml（见 application-local.example.yml）或 .env 导出 DB_PASSWORD、AI_API_KEY
+- 巡检
+- 自动修复
+- dry-run
+- WebSocket 缓冲
+- 数据保留策略
 
-# 3. 可选向量库
-docker compose up -d qdrant
-# 或使用 Qdrant Cloud：在 application-local.yml 填写 qdrant.url / api-key
+#### `knowledge.*`
 
-# 4. 后端
-mvn spring-boot:run
+控制：
 
-# 5. 前端（Vite 3000 → 代理 8088）
-cd frontend && npm install && npm run dev
-```
+- 分块大小
+- 重叠
+- topK
+- 本地降级 embedding
+- 启动 seed
 
-- 接口文档：http://localhost:8088/award-log/doc.html  
-- 前端控制台：http://localhost:3000  
-- Windows 开发可将 `application-dev.yml` 或 `application-local.yml` 中 `agent.min-privilege.enabled` 设为 `false`  
-- 演练环境可设 `ops.dry-run.global=true`，验证写工具而不改机器
+#### `log.*`
 
-### 麒麟 / MariaDB 联调
+控制：
 
-```bash
-# Profile test-kylin（MariaDB + 麒麟路径策略），密钥见 application-test-kylin.yml
-export SPRING_PROFILES_ACTIVE=test-kylin
-# 或 docker compose --profile mariadb up -d mariadb
-```
-
----
-
-## 本地开发与测试
-
-```bash
-mvn test                    # 单元测试（~40+ 用例）
-mvn -DskipTests package     # 打包
-```
-
-| 测试类 | 覆盖 |
-|--------|------|
-| `LinuxLogParseSupportTest` | 日志解析 |
-| `LogSafetyClassifierTest` | 日志删除安全 |
-| `DiskToolTest` | 磁盘工具 |
-| `McpDurationSupportTest` | MCP 耗时字段（兼容误传 startTime） |
-| `WorkflowSeedDataTest` / `TrajectoryEvaluatorTest` / `FailureInsightReflectionsTest` / `LlmWorkflowInductorTest` | AWM seed、轨迹评估、Reflexion、LLM JSON 校验 |
-| `OpsIntentRouterTest` | Playbook 答辩话术路由（含磁盘优先于「自动运维」） |
-| `OpsGovernanceServiceTest` / `OpsRemediationGateTest` | 资产分级、服务重启 CONFIRM_ONLY、统一写门禁 |
-| `ServiceRestartCandidateResolverTest` | systemd failed unit 解析与白名单/治理交叉 |
-| `OsRuntimeTest` | 麒麟/龙芯检测 |
-| `ProductionProfileValidatorKylinTest` | prod-kylin 校验 |
-| `HistoryFilterTimeTest` | 历史列表日期边界 |
-| `McpToolParamReaderTest` | 二次确认是否升级真实写入 |
-
-**安全回归建议**（发版前手测）：
-
-1. 「删除整个系统」→ 工作台拦截，不执行只读工具  
-2. 「预览清理 /tmp」→ 二次确认后仍为 `dryRun`  
-3. 「真实删除」+ 参数 `confirmDelete` → 才真删  
-4. 历史任务按日期筛选与列表 `createTime` 一致  
-5. 仪表盘近 7 日卡片与趋势图日期对齐  
-6. Tab4 记忆层可见 **6 条 seed**；MCP 拦截后 **Reflexion** 有新增  
-7. （可选）`AGENT_AWM_LLM_INDUCTION=true` 后离线诱导出现 `source_type=llm` 条目  
-8. 「自动修复磁盘空间」→ 走磁盘 Playbook，非全栈；nginx 重启须「确认执行」后才真跑  
-9. 生产默认 `run-after-patrol=false`，避免巡检双轨重复清理  
-
-CI：`.github/workflows/ci.yml`（`mvn test` + `frontend` build）。
+- 文件采集
+- 网络采集
+- 决策阈值
+- Drain 参数
+- ONNX 模型路径
 
 ---
 
 ## 构建与部署
 
-### Fat Jar
+### 本地构建
+
+发布或答辩材料整理前，建议先执行：
 
 ```bash
-mvn -DskipTests package
-java -jar target/award-log-*.jar --spring.profiles.active=prod
+mvn verify
 ```
 
-### 前端静态资源
+确认测试与 JaCoCo 门禁通过后再打包。
+
+#### Windows
+
+```powershell
+.\scripts\deploy\deploy.ps1
+```
+
+可选变量：
+
+- `SKIP_FRONTEND=1`
+- `SKIP_BACKEND=1`
+- `SKIP_TESTS=0`
+
+#### Linux / macOS
 
 ```bash
-cd frontend && npm ci && npm run build
-# dist/ 由 Nginx 托管；/award-log 反代到 8088
+PROD_BUILD=1 bash scripts/deploy/deploy.sh
 ```
 
-Windows 说明：
-- PowerShell 若禁用了脚本执行，可改用 `npm.cmd --prefix frontend run build`
-- 若系统自带 Node 在中文路径下构建异常，可在 `frontend/` 目录直接执行 `node node_modules/vite/bin/vite.js build`
+### 构建产物
 
-参考：`scripts/deploy/nginx.sample.conf`、`deploy.sh`、`deploy.ps1`。
+默认会输出到：
 
-### Docker Compose（可选依赖）
+- `deploy/release/award-log.jar`
+- `deploy/release/dist/`
+
+麒麟龙芯：`bash scripts/deploy/deploy_kylin_loongarch.sh` → `deploy/release-kylin/`
+
+### 生产部署建议
+
+推荐方式（与 [`docs/deployment/部署文档.md`](./docs/deployment/部署文档.md) 一致）：
+
+- 后端：`Fat Jar + systemd`（`award-log.service`，User=root）
+- 前端：`dist + Nginx`；构建前配置 `VITE_AWARD_LOG_*` 双 Base URL
+- 对外统一入口：Nginx `:80/:443`
+- **dev / prod-kylin** 默认均仅 **8088**（`APP_MANAGEMENT_ENABLED=false`）
+- 数据库默认 **MariaDB 10.11**；本地 Docker：`docker compose up -d mariadb`
+
+### 参考文件
+
+| 文件 | 用途 |
+|------|------|
+| `scripts/deploy/award-log.service` | systemd 服务 |
+| `scripts/deploy/nginx.sample.conf` | Nginx 配置 |
+| `scripts/deploy/nginx.kylin.sample.conf` | 麒麟 Nginx 配置 |
+| `scripts/deploy/env.kylin.prod.example` | 生产环境变量模板 |
+| `docs/deployment/部署文档.md` | 更详细的部署说明 |
+| `docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` | 麒麟上线清单 |
+
+### 可选依赖容器化
+
+如果只需要本地依赖，不需要容器化整个应用，可使用：
 
 ```bash
-# MySQL（本地默认）
-docker compose up -d mysql
-# 首次：对库执行 src/main/resources/schema.sql
-
-# Qdrant（知识库向量）
-docker compose up -d qdrant
-
-# MariaDB（麒麟联调 profile）
-docker compose --profile mariadb up -d mariadb
+docker compose up -d mariadb qdrant
 ```
 
-应用进程建议仍本机 `mvn spring-boot:run` 或 jar，便于 MCP 访问宿主路径。
+项目明确不建议为了 MCP 宿主机探测能力而把整个应用强行放入容器运行。
 
 ---
 
 ## 麒麟 V11 + LoongArch
 
-**Profile**：`prod-kylin`（= `prod` + `kylin`）；联调 **`test-kylin`**（= `prod` + `kylin` + `application-test-kylin.yml`）  
-**数据库**：系统 MariaDB（`jdbc:mariadb://…`，见 `env.kylin.prod.example` / `application-test-kylin.yml`）
+### 当前支持情况
 
-```bash
-# 首次：目标机环境（MariaDB / award-agent / /opt/threshcore）
-sudo bash scripts/deploy/setup_kylin_host.sh
+项目已针对麒麟 / LoongArch 场景提供专门兼容：
 
-bash scripts/deploy/deploy_kylin_loongarch.sh
-sudo cp deploy/release-kylin/award-log.jar /opt/threshcore/
-sudo cp -r deploy/release-kylin/dist /opt/threshcore/
-sudo cp deploy/release-kylin/award-log.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now award-log
+- `prod-kylin` Profile
+- 路径白名单与清理策略覆盖
+- `RF_FORCE_HEURISTIC_LOONGARCH=true` 的启发式回退
+- Nginx / systemd / 验收脚本模板
 
-# 验收（无需登录）
-curl -s http://127.0.0.1:8088/award-log/api/platform/acceptance
-bash scripts/deploy/smoke_kylin_acceptance.sh
-curl -s http://127.0.0.1:8088/award-log/api/platform/info
-```
+### 关键文件
 
-| 资源 | 路径 |
-|------|------|
-| 环境变量模板 | `scripts/deploy/env.kylin.prod.example` |
-| 目标机初始化 | `scripts/deploy/setup_kylin_host.sh` |
-| 最小权限 sudoers | `scripts/deploy/sudoers.award-agent.example` |
-| systemd 单元 | `scripts/deploy/award-log.service` |
-| Nginx 样例 | `scripts/deploy/nginx.kylin.sample.conf` |
-| 检查清单 | `docs/deployment/麒麟V11-LoongArch生产上线检查清单.md` |
+- [`src/main/resources/application-kylin.yml`](./src/main/resources/application-kylin.yml)
+- [`src/main/resources/application-test-kylin.yml`](./src/main/resources/application-test-kylin.yml)
+- [`scripts/deploy/env.kylin.prod.example`](./scripts/deploy/env.kylin.prod.example)
+- [`scripts/deploy/deploy_kylin_loongarch.sh`](./scripts/deploy/deploy_kylin_loongarch.sh)
+- [`scripts/deploy/smoke_kylin_acceptance.sh`](./scripts/deploy/smoke_kylin_acceptance.sh)
 
-`OsRuntime.isKylin()` / `isLoongArch()`；`deliveryTargetMatch` 仅在目标机为 `true`。
+### 典型建议
+
+- 首轮验收使用 `prod-kylin`
+- ONNX Runtime 在 LoongArch 上不可用时走启发式回退
+- 是否启用 `AGENT_MIN_PRIVILEGE=true` 取决于现场权限授权情况
+- 根目录、日志目录、缓存目录需根据实际机器权限确认
 
 ---
 
-## 赛题对照
+## 实际使用与演示模式
 
-摘要（完整映射见代码与 Knife4j）：
+### 常见运行模式
 
-| 赛题要求 | 实现 |
-|----------|------|
-| OS 深度感知 | `OsInsightTool`、`ProcessTool`、`DiskTool`、自主编排并行感知 |
-| MCP 插件化 | `mcp/tools/*`、`McpToolDispatcher`、`McpToolRegistry` |
-| 安全意图校验 | `IntentRiskFilter`、`PromptInjectionGuard`、`McpInvocationSecurityGate` |
-| 最小权限 | `MinPrivilegeExecutor`、`GET /api/platform/info` |
-| 推理链路溯源 | 六步 `OpsAuditPhases` + `ops_audit_trace` |
-| 配置防篡改 | `ConfigDriftTool`（checksum 漂移，只读） |
-| 巡检历史 | `ops_patrol_history` + `/api/ops/patrol/history/trend` |
-| Agent 记忆 / 进化 | AWM（`ops_workflow_memory`）+ Reflexion（`ops_failure_insight`）；可选 LLM 归纳 |
-| B/S | Vue + Spring Boot |
-| 龙芯 + 麒麟 | `prod-kylin` + 交付实测报告 |
+| 模式 | 典型配置 | 行为特征 |
+|------|----------|----------|
+| 无 AI Key | 不配置 `AI_API_KEY` | 规则编排、MCP 工具、巡检仍可工作，开放对话能力受限 |
+| 有 AI Key | 配置 `AI_API_KEY` | 开放对话、RAG、LLM 诱导等能力完整可用 |
+| 无 Elasticsearch | `ELASTIC_ENABLED=false` | 聊天分析回退到 MySQL 明细 |
+| 演练模式 | `OPS_DRY_RUN_GLOBAL=true` | 写操作仅预览 |
+| Windows 本地开发 | `dev` | 最小权限关闭，自动修复默认关闭 |
+| 麒麟生产 | `prod-kylin` | 路径策略、LoongArch 回退、生产治理更严格 |
 
-## 答辩演示路径（8 步）
+### 推荐自检路径
 
-按下列顺序演示，**不必读配置**，评委可直观看到安全设计与量化价值。建议总时长约 5–7 分钟。
-
-| 步 | 名称 | 操作入口 | 向评委说明的要点 |
-|----|------|----------|------------------|
-| 1 | **平台信息** | `GET /api/platform/acceptance` 或麒麟验收脚本 | 实机架构/麒麟/LoongArch/`deliveryTargetMatch` |
-| 2 | **安全自检** | 顶栏 **安全自检** → 弹窗 | 真实探针调用安全门：未注册工具、注入、高危意图、只读 vs 写 四类全部 PASS |
-| 3 | **效果评分** | Tab **8** 运维效果评分 | 综合分 + 五维雷达；强调「安全拦截 N 次」「释放空间 X GB」 |
-| 4 | **日志仪表盘** | Tab **7** 日志分析仪表盘 | 近 7 日日志量、异常率、任务趋势（日志分析主线） |
-| 5 | **工作台对话** | Tab **1** | 「磁盘满了」或「CPU 高」→ 报告含 **AWM 处置套路** + 审计 traceId |
-| 6 | **安全拦截 + 教训** | Tab **2** MCP → Tab **4** 记忆层「安全教训」 | 破坏性话术 + 只读工具 → `INTENT_TOOL_MISMATCH`；Tab4 可见 Reflexion 卡片 |
-| 7 | **二次确认预览** | Tab **1** 或 Tab **2** | 「帮我预览清理临时文件」→ 须确认 → 仍为 dry-run |
-| 8 | **审计六步** | Tab **4** 运维链路审计 | traceId：接收→感知→推理→校验→执行→验证；CoT 中 **AWM** 步骤高亮；顶栏可查看记忆层 |
-
-**答辩前 10 分钟预热**：
-
-1. Tab **2**：跑 1 次正常 MCP + 1 次必拦请求（沉淀 Reflexion）  
-2. Tab **1**：磁盘 / CPU Playbook 各 1 次（产生 AWM 命中与审计 trace）  
-3. Tab **4**：记忆层确认 **6 条 seed**；CoT 可见 **AWM** 高亮  
-4. Tab **8**：效果评分有非零 KPI  
-5. （可选）开启 `AGENT_AWM_LLM_INDUCTION=true` → Tab4「离线诱导」  
-
----
-
-
-## 近期更新
-
-| 日期 | 变更 |
-|------|------|
-| 2026-05-23 | **McpToolCatalog**：HTTP 白名单/只读集/风险分启动扫描；`GET /api/mcp/tools` 动态元数据 |
-| 2026-05-23 | **MCP 分层**：`McpSecurityService` / `McpExecutionService` / `McpAuditService` |
-| 2026-05-23 | **巡检持久化**：`ops_patrol_history`；`GET /api/ops/patrol/history`、`/history/trend`；顶栏趋势图 |
-| 2026-05-23 | **感知缓存**：`OpsPerceptionCache`；写操作后失效；`useCache=false` 强制刷新 |
-| 2026-05-23 | **ES 异步索引**：`LogDocumentAsyncIndexer`；`log.elasticsearch.async.*` |
-| 2026-05-23 | **全局 dry-run**：`ops.dry-run.global`；**审计清理**：`audit.retention-days` |
-| 2026-05-23 | **自愈评分**：`RemediationEffectEvaluator` 写入自主编排 report/审计 |
-| 2026-05-23 | **WS**：消息缓冲 + 客户端 `sync`；**Prometheus**：`PatrolMetricsExporter` + `docs/deployment/prometheus-alerts.yml` |
-| 2026-05-23 | **前端导出**：仪表盘 PDF（jspdf）；审计表 PNG/PDF；CoT 弹窗 PNG/PDF；`apiError` 统一安全码提示 |
-| 2026-05-24 | MCP 二次确认与 `INTENT_TOOL_MISMATCH`；读写合一 Gateway 工具；仪表盘/历史筛选修复 |
-| 2026-05-24 | **一键安全自检**：`GET /api/security/self-check`；顶栏弹窗 + `SecuritySelfCheckService` 探针 |
-| 2026-05-24 | **运维效果评分仪表板**：Tab8 + `GET /api/ops/effect/dashboard`；`OpsEffectDashboardService` 聚合审计/巡检/自愈 |
-| 2026-05-24 | **答辩对齐**：五维改名（含资源优化/释放空间 GB）；安全自检四类评委标签 |
-| 2026-05-27 | **MCP 展示契约**：`McpDurationSupport`、`McpNestedResultSupport`；`mcpHumanReadable.js` + `mcpToolResult.js` |
-| 2026-05-27 | **工具数据口径**：Windows CPU 归一化；`DiskAnalyzeTool` 结构化 overview/hotspots |
-| 2026-05-27 | **前端**：Node `>=18`；主导航 **8 Tab**（含效果评分） |
-| 2026-06-05 | **AWM MVP**：`agent/awm/*` + 6 条 seed；Playbook + 自主编排注入 + 在线诱导 |
-| 2026-06-05 | **Reflexion**：`ops_failure_insight`；MCP/Chat/助手流拦截写入；注入 LLM 上下文 |
-| 2026-06-05 | **前端记忆层**：Tab4 `OpsMemoryPanel` + CoT AWM 高亮；Tab8 效果评分入导航 |
-| 2026-06-05 | **LLM 归纳**：`LlmWorkflowInductor` + `agent.awm.llm-induction-enabled`（默认关；rule-based 兜底） |
-| 2026-06-05 | **LLM 稳定性**：`temperature=0.1`；扩展 `OpsIntentRouter` 答辩话术（磁盘/CPU/服务） |
-| 2026-06-06 | **配置中心 + 个人中心**：新增 Tab9 系统配置与效果页、右上角独立个人中心、通知偏好持久化、真实 API Key 生命周期与 `X-API-Key` 只读鉴权 |
-| 2026-06-06 | **生产治理 P1-①**：`ops.governance` 资产分级 + 动作准入矩阵；巡检自动修复接入；`GET /api/platform/info` 返回 `governance` 摘要 |
-| 2026-06-07 | **Auto 治理统一**：`OpsRemediationGate` 接入 `AutonomousOpsOrchestrator` + `AssistantOrchestrator`；治理 `CONFIRM_ONLY` 与风险分 NOTIFY 解耦 |
-| 2026-06-07 | **巡检单轨**：`agent.autonomous.run-after-patrol` 默认 **`false`**；避免 HYBRID 与全栈编排重复写操作 |
-| 2026-06-07 | **服务重启目标**：`ServiceRestartCandidateResolver` 从 systemd 感知解析 failed unit；感知快照含 `failedUnitNames` |
-| 2026-06-07 | **意图路由**：磁盘/CPU Playbook 优先于宽泛「自动运维」话术（如「自动修复磁盘空间」） |
-| 2026-06-07 | **安全加固**：仓库移除 DB/AI 默认密钥；注入/高危命令 **正则优先**；MEDIUM 意图须二次确认；MCP 写工具默认不开放 HTTP（`AGENT_MCP_HTTP_ALLOW_ALL=false`）；`/api/platform/acceptance` 公开验收 |
-
----
-
-## 监控与排障
-
-### Actuator
-
-`health`、`metrics`、`prometheus`（见 `management.endpoints`）。指标示例：`threshcore_patrol_zombie_processes`、`threshcore_disk_usage_percent`。告警规则样例：`docs/deployment/prometheus-alerts.yml`。生产勿公网裸暴露。
-
-### 常见问题
-
-| 现象 | 处理 |
-|------|------|
-| prod 启动退出 | 检查 `DB_PASSWORD`、`AI_API_KEY`；本地复制 `application-local.example.yml` → `application-local.yml` |
-| 前端 401 | 登录、`VITE_AWARD_LOG_BASE_URL`、Cookie credentials |
-| AI 无回复 | `AI_API_KEY`、`AI_BASE_URL` |
-| 助手不调工具 | `agent.assistant.use-tool-agent-default` |
-| MCP 权限错误（Windows） | `agent.min-privilege.enabled=false`（仅 dev） |
-| ONNX 龙芯加载失败 | `RF_FORCE_HEURISTIC_LOONGARCH=true` |
-| 感知快照过旧 | `useCache=false` 或调小 `cache-ttl-ms` |
-| 历史筛选无结果 | 确认 `startTime`/`endTime` 为 `YYYY-MM-DD` |
-| 二次确认仍真删 | 检查是否传了「真实删除」或 `confirmDelete=true` |
-| 工作台显示执行成功但应为拦截 | 确认请求带 `userMessage`；升级后 destructive+只读工具应返回 `securityCode` |
-| MCP 失败却显示超大「耗时」 | 升级 `McpDurationSupport` / `mcpToolResult.normalizeDurationMs`；勿把 `startTime` 当 duration |
-| 工具失败却显示 `路径/候选 undefined` | 使用 `mcpHumanReadable` 失败分支；检查是否未解包内层 `ToolResult` |
-| Windows 多个进程均 ~99% CPU | 应已按 `ProcessorCount` 归一化；确认拉取最新 `ProcessTool` |
-| 磁盘综合诊断显示 JSON | 确认 `DiskAnalyzeTool` 使用 `McpNestedResultSupport` 且前端走 `generateHumanReadableResponse` |
-| AWM 套路为空 | 确认 `agent.awm.enabled=true` 且 MySQL 有 `ops_workflow_memory`；或 `POST .../induce-from-audit` |
-| 拦截后无 Reflexion | 确认 `agent.awm.failure-insight-enabled=true`；查 `ops_failure_insight` 或 failure-insights API |
-| LLM 归纳无新 workflow | 设 `AGENT_AWM_LLM_INDUCTION=true` 且配 `AI_API_KEY`；查 `memory` 的 `llmInductionAvailable`；失败会自动 rule-based |
-| workflow 与 env 不符仍盲跟 | 偏离规则在 context 中说明；写操作仍走安全门 |
-| 巡检后重复清理 / 双 trace | 确认 `agent.autonomous.run-after-patrol=false`；勿与 `ops.auto-remediation` 同时全开 |
-| 全栈编排未确认就重启 nginx | 升级后走 `OpsRemediationGate`；服务 restart 为 `CONFIRM_ONLY`，须 Playbook「确认执行」 |
-| 「自动修复磁盘」走了全栈 | 2026-06-07 起路由到 `DISK_CLEANUP`；拉最新 `OpsIntentRouter` |
+1. 登录
+2. 打开环境状态确认 DB / AI / Qdrant / MCP 状态
+3. 在工具控制台执行只读探测
+4. 在 Agent 对话页执行固定话术
+5. 查看链路审计与 AWM
+6. 最后再验证日志分析与导出
 
 ---
 
 ## 仓库结构
 
-```
-项目根目录/
+```text
+.
+├── README.md
+├── 部署指南.md                 # 麒麟目标机 Jar+Dist 交付速查
+├── 版权声明与使用限制声明.md
 ├── pom.xml
-├── README.md                     # 本文
-├── docker-compose.yml
+├── docker-compose.yml          # 本地 MariaDB + Qdrant（可选）
 ├── .env.example
-├── docs/deployment/              # 麒麟上线清单、生产配置示例
-├── frontend/                     # Vue 控制台（唯一前端主线）
-├── scripts/deploy/               # 部署与验收脚本
-├── src/main/java/com/award/log/
-│   ├── AwardWinningLogApplication.java
-│   ├── controller/               # REST（含 AutonomousOps、OpsWorkflow、SecuritySelfCheck…）
-│   ├── agent/                    # OpsRuntimeService、编排器、OpsIntentRouter
-│   │   ├── awm/                  # AWM + Reflexion + LlmWorkflowInductor
-│   │   ├── ServiceRestartCandidateResolver.java
-│   │   └── audit/OpsAuditPhases.java
-│   ├── governance/               # OpsGovernanceService、OpsRemediationGate、资产分级
-│   ├── util/HistoryFilterTime.java  # 历史列表日期解析
-│   ├── mcp/
-│   │   ├── McpToolCatalog.java / McpTool.java
-│   │   ├── McpDurationSupport.java / McpNestedResultSupport.java
-│   │   ├── ToolResult.java
-│   │   ├── dispatch/             # McpToolDispatcher、McpToolParamReader
-│   │   └── tools/                # 全部 @Tool
-│   ├── service/mcp/              # McpSecurity/Execution/AuditService
-│   ├── security/                 # Gate、OpsPathPolicy、OpsSecurityKernel
-│   ├── service/                  # 业务、KnowledgeBase、PatrolHistory、LogDocumentAsyncIndexer、SecuritySelfCheck
-│   ├── metrics/                  # PatrolMetricsExporter
-│   ├── analyzer/ / analysis/     # Drain、日志解析
-│   ├── collector/                # FileLogCollector、LogCollectorPathResolver
-│   ├── decision/                 # RF ONNX、规则融合
-│   ├── platform/                 # KylinCommandProbe、OsRuntime
-│   └── config/                   # WebMvc、ProductionProfileValidator
-├── src/main/resources/
-│   ├── application.yml
-│   ├── application-dev.yml
-│   ├── application-kylin.yml     # 麒麟路径/命令探测
-│   ├── application-local.example.yml
-│   ├── application-test-kylin.yml  # 麒麟/MariaDB 联调
-│   └── schema.sql
-└── src/test/java/
+├── docs/
+│   ├── deployment/
+│   ├── review/
+│   ├── softreg/
+│   ├── archive/
+│   └── competition/
+├── frontend/
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── AGENT_UI_REDESIGN.md
+│   └── src/
+├── perf/                       # 压测脚本与报告（可选）
+├── scripts/
+│   ├── deploy/
+│   ├── ml/
+│   ├── gen_schema_test.py      # 生成 H2 集成测试 schema / mapper-h2
+│   ├── jacoco_rank.py          # 按包统计 JaCoCo 未覆盖指令
+│   └── jacoco_pkg_pct.py       # 查看指定包的覆盖率百分比
+├── src/
+│   ├── main/
+│   │   ├── java/com/award/log/
+│   │   └── resources/
+│   └── test/
+│       ├── java/com/award/log/
+│       │   ├── integration/    # H2 + @SpringBootTest 集成测试
+│       │   ├── controller/     # Controller 冒烟 / MockMvc
+│       │   ├── service/        # Service 单测
+│       │   └── ...
+│       └── resources/
+│           ├── application-test.yml
+│           ├── schema-test.sql
+│           └── mapper-h2/        # MySQL 方言 → H2 兼容 Mapper
+├── rules/
+├── logs/                       # 运行时日志（.gitignore）
+└── storage/                    # 运行时数据（.gitignore）
 ```
 
-### 名词速查
+### 后端目录重点
 
-| 术语 | 说明 |
+| 目录 | 说明 |
 |------|------|
-| **AWM** | Agent Workflow Memory：从**成功**轨迹沉淀可复用处置套路（`ops_workflow_memory`） |
-| **Reflexion** | 从**安全拦截**轨迹沉淀自然语言教训，不诱导可执行动作（`ops_failure_insight`） |
-| **LLM 归纳** | `LlmWorkflowInductor` 用通义从审计 steps 抽象 workflow JSON；默认关闭 |
-| **MCP** | 进程内 Java `@Tool`，非独立 MCP Server |
-| **Playbook** | `OpsIntentRouter` 决定的规则编排路径 |
-| **traceId** | 一次运维操作的审计流水号 |
-| **dry-run** | 写工具默认只预览命令 |
-| **RAG** | 知识库向量检索增强对话（Qdrant + Embedding） |
-| **prod-kylin** | 生产 + 麒麟安全与路径策略 |
-| **McpToolCatalog** | 启动时扫描工具 Bean，替代手写 ALLOWED_TOOLS |
-| **OpsRemediationGate** | 写操作统一门禁：治理准入 → 风险分档位 → PREVIEW / EXECUTE |
-| **ServiceRestartCandidateResolver** | 从 systemd failed unit + 白名单 + 治理选取重启目标 |
+| `src/main/java/com/award/log/controller` | 接口层 |
+| `src/main/java/com/award/log/agent` | Agent 主逻辑 |
+| `src/main/java/com/award/log/agent/awm` | AWM / Reflexion |
+| `src/main/java/com/award/log/mcp/tools` | MCP 工具 |
+| `src/main/java/com/award/log/security` | 安全与风控 |
+| `src/main/java/com/award/log/service` | 业务服务 |
+| `src/main/resources/mapper` | MyBatis XML |
+| `src/main/resources/schema.sql` | 建表脚本 |
+| `src/test/resources/application-test.yml` | 集成测试 Profile：H2、关闭 ES/Kafka/巡检调度 |
+| `src/test/resources/schema-test.sql` | H2 用表结构（由 `scripts/gen_schema_test.py` 生成） |
+| `src/test/resources/mapper-h2/` | 测试专用 Mapper（`DATE_SUB` → H2 `DATEADD` 等） |
 
-### 答辩一页纸（5–7 分钟）
+### 前端目录重点
 
-| 顺序 | 说啥 | 点哪 |
-|------|------|------|
-| 1 | 最小权限 + 麒麟/龙芯实机 | 平台信息 / 验收脚本 |
-| 2 | 四层安全护栏真在工作 | 顶栏 **安全自检** |
-| 3 | 量化价值：拦截 N 次、释放 X GB | Tab **8** |
-| 4 | 日志分析主线 | Tab **7** |
-| 5 | Agent 会处置 + 有套路 | Tab **1**「磁盘满了」 |
-| 6 | 拦截会学教训、不会学坏动作 | Tab **2** 故意拦 → Tab **4** 记忆层 |
-| 7 | 写操作须确认、默认预览 | Tab **1/2** dry-run |
-| 8 | 六步审计 + AWM 高亮 | Tab **4** CoT |
-
-**一句话收尾**：可控 Agent = 白名单工具 + 安全门 + 全链路审计 + **成功学套路（AWM）/ 失败学教训（Reflexion）**。
+| 目录 | 说明 |
+|------|------|
+| `frontend/src/components` | 主要页面组件 |
+| `frontend/src/components/agent` | Agent 区域组件 |
+| `frontend/src/api` | API 封装 |
+| `frontend/src/utils` | MCP、人类可读摘要、图表、Markdown 等工具 |
+| `frontend/src/composables` | 组合式逻辑 |
+| `frontend/src/styles` | 全局与 Agent 页面样式 |
 
 ---
 
-## 报表导出（前端）
+## 近期更新与当前边界
 
-| 页面 | PNG | PDF | 说明 |
+### 2026-07 交付态与联调收敛
+
+| 项 | 说明 |
+|----|------|
+| 单端口默认 | `dev` / `prod-kylin` 均默认 **仅 8088**；`application-dev.yml` 中 `app.management.enabled: false` |
+| Agent 工作台 | `frontend/src/components/agent/` 多会话侧栏、上下文面板、运行模式条（`RuntimeModeBar`） |
+| 平台组件快照 | `/api/platform/info` 返回 DB/MCP/AI/中间件就绪态与 `components` 提示 |
+| 统一审计 Feed | `AuditController` + `/api/audit/feed`、`/api/audit/detail` |
+| 系统 Bootstrap | `SystemBootstrapSupport` / `SystemConfigRuntimeBootstrap` 启动自检与能力快照 |
+| 交付文档 | 根目录 [`部署指南.md`](./部署指南.md)；仓库已清理构建产物、内部 docx 脚本与临时 `outputs/` |
+| 配置模板 | 敏感项仅保留 `.env.example`、`application-local.example.yml`；真实密钥勿提交 Git |
+
+### 2026-06 本地联调与架构修正
+
+| 项 | 说明 |
+|----|------|
+| 管理面路由收口 | `ManagementPortFilter` + `AdminAccessPaths`；后续已收敛为 dev 默认单端口 |
+| 循环依赖消除 | 抽出 `OpsPatrolAutomationService`，`AutonomousOpsTool` 不再直接依赖 `OpsRuntimeService` ↔ `AssistantOrchestrator` 环 |
+| 旧库 schema 补列 | `LogAnalysisTaskSchemaService` 启动时补 `log_analysis_task.user_id`，修复 `/log/history` 500 |
+| 统计接口权限 | `/admin/statistics/**` 放宽为**登录可读**（`AdminAccessPaths`），用户管理仍须管理员 |
+| ES 可选注入 | `ElasticsearchController` 在本地未启 ES 时不强依赖 Bean |
+
+### 2026-06 测试与质量保障（最新）
+
+后端测试体系已从「少量单测 + 手工验收」升级为 **可门禁、可回归、可量化** 的状态：
+
+| 项 | 当前值 / 说明 |
+|----|----------------|
+| 测试类 | **171** 个（`src/test/java`） |
+| 测试方法 | **646** 个 `@Test`（Surefire 全绿） |
+| 指令覆盖率 | **≥60%**（JaCoCo，`mvn verify` 门禁 `minimum=0.60`） |
+| 分支覆盖率 | 约 **39%**（复杂 Agent / MCP 写路径仍偏低，见下文） |
+| 集成测试 | H2 内存库 + `@SpringBootTest`，不依赖 MariaDB / ES / Kafka |
+| 报告路径 | `target/site/jacoco/index.html` |
+
+**新增 / 强化的测试类型：**
+
+- **Controller 冒烟**：44 个 Controller 中绝大多数已有 `*SmokeTest` / `MockMvc` 覆盖
+- **Service 单测**：`service.impl` 下主要实现类均有对应 `*Test`
+- **H2 集成测试**（`src/test/java/com/award/log/integration/`）：
+  - `MainFlowIntegrationTest` — 注册登录、平台就绪、MCP、巡检、统计
+  - `ApiSurfaceIntegrationTest` — 已登录态下批量 GET 探活
+  - `McpDispatchIntegrationTest` — 13 个只读 MCP 工具 HTTP 分发
+  - `SecurityMcpIntegrationTest` — **真实安全门** 拦截 `rm -rf` / 注入 / 高危路径参数；`CleanTempTool` dry-run 预览；未知工具拒绝
+- **安全 / MCP / 决策 / 治理**：`McpToolDispatcherCoverageTest`、`DecisionPackageCoverageTest`、`OpsGovernanceServiceTest` 等
+- **AI 诊断健壮性**：`AiDiagnosisServiceImpl` 空响应兜底；`AiDiagnosisController` 空 body / 无任务 / 未完成分析
+
+**集成测试基础设施：**
+
+- Profile：`test`（`application-test.yml`）
+- Schema：`schema-test.sql`（`python scripts/gen_schema_test.py` 从生产 schema 生成）
+- Mapper：`mapper-h2/` 处理 H2 与 MySQL 方言差异
+- 基类：`IntegrationTestBase`（`@MockBean ElasticsearchService`，本地/CI 不启 ES 时仍可跑集成测试）
+- 辅助：`IntegrationTestSupport`（注册登录、管理员提权、CSRF 头）
+
+**覆盖率怎么理解：**
+
+- **60% 指令覆盖率** = 主流程、API 面、配置类、大量 Service 已有回归兜底，适合 CI 门禁
+- **不能** 单独证明 Agent 推理质量、生产 MySQL 方言、或 MCP 真实写操作在生产环境的绝对安全
+- 分支覆盖率提升的性价比：优先加深 `security`、`mcp.dispatch`、`agent` 集成场景，而非刷 POJO getter
+
+### 2026-06 安全加固
+
+当前仓库已完成一批与权限边界直接相关的修正：
+
+- 管理员接口进一步收口
+- 日志任务、告警历史、Elasticsearch 查询增加 owner / admin 范围控制
+- WebSocket 来源校验强化
+- 上传文件名与临时路径校验强化
+- 全局异常输出收口，避免泄露内部错误信息
+
+### 2026-06-17 安全信号接入
+
+已接入实际的安全信号归一化链路，而不是纯 UI 展示：
+
+- `SecuritySignal`
+- `SecuritySignalNormalizer`
+- `SecuritySignalService`
+- `POST /api/security/signals/ingest`
+- `POST /api/security/signals/ingest-batch`
+- `GET /api/security/signals/recent`
+- `GET /api/security/signals/summary`
+
+当前支持归一化的来源风格包括：
+
+- Suricata / EVE 风格网络告警 -> `NIDS`
+- Wazuh / Sysmon / 主机进程风格告警 -> `HIDS` / `PIDS`
+- 通用 IDS 风格 payload -> fallback record
+
+这些信号已接入：
+
+- `NetworkLogCollectorV2`
+- `OpsPatrolService`
+- `MultiAgentContextBuilder`
+- `AutonomousOpsOrchestrator`
+
+### 当前仍然存在的边界
+
+- Runbook 审批 / 执行已落库到 `ops_runbook_approval`，真实执行仍受门禁与 MCP 工具链约束
+- 部分历史数据如果缺少 owner 字段，需要一次性治理才能实现更严格的数据隔离
+- 安全信号当前主要是接入、归一化、关联与摘要层，不是完整独立 IDS 产品
+- 安全信号当前存储窗口以内存为主，服务重启后会清空近期信号
+- TCP 网络采集路径仍与 UDP V2 安全信号路径存在差异
+- H2 集成测试与 MariaDB 生产库存在 SQL 方言差异；修改 `schema.sql` 或 Mapper 后需重新运行 `scripts/gen_schema_test.py`
+- JaCoCo **分支覆盖率**（约 39%）尚未设门禁；整体 80%+ 性价比低，建议对赛题核心包做深测而非全库刷分
+
+---
+
+## 测试与质量保障
+
+### 常用命令
+
+```bash
+# 推荐：单测 + 集成测试 + JaCoCo 报告 + 覆盖率门禁
+mvn verify
+
+# 仅跑测试（不生成覆盖率报告、不跑门禁）
+mvn test
+
+# 跳过测试打包（发布应急用，不建议作为常规流程）
+mvn -DskipTests package
+
+# 只跑集成测试
+mvn test -Dtest=MainFlowIntegrationTest,ApiSurfaceIntegrationTest,McpDispatchIntegrationTest,SecurityMcpIntegrationTest
+
+# 只跑某一测试类
+mvn test -Dtest=SecurityMcpIntegrationTest
+```
+
+Windows 一键构建（含可选测试）：
+
+```powershell
+.\scripts\deploy\deploy.ps1
+# 可选：$env:SKIP_TESTS="0"
+```
+
+### JaCoCo 配置要点
+
+| 配置 | 说明 |
+|------|------|
+| exec 文件 | `${java.io.tmpdir}/award-log-jacoco.exec`（规避中文路径导致采集失败） |
+| Surefire | 必须透传 `@{argLine}`，否则覆盖率为 0 |
+| 报告生成 | `verify` 阶段生成 `target/site/jacoco/index.html` |
+| 门禁 | 指令覆盖率 `COVEREDRATIO ≥ 0.60`（见 `pom.xml`） |
+
+辅助脚本：
+
+```bash
+python scripts/jacoco_rank.py      # 按包列出未覆盖指令 Top N
+python scripts/jacoco_pkg_pct.py com.award.log.security com.award.log.mcp.dispatch
+python scripts/gen_schema_test.py    # 变更 schema/mapper 后重新生成 H2 测试资源
+```
+
+### 测试分层
+
+| 层级 | 位置 / 命名 | 作用 |
+|------|-------------|------|
+| 单元测试 | `src/test/java/**/**Test.java` | Mock 依赖，覆盖 Service / 工具 / 安全规则 |
+| Controller 冒烟 | `*ControllerSmokeTest` | `MockMvc` 验证路由与基本响应 |
+| 集成测试 | `integration/*IntegrationTest` | 真实 Spring 上下文 + H2，走 HTTP / 安全门 / MCP 分发 |
+| 编排深测 | `*Orchestrator*Test`、`*DeepTest` | Agent 编排、Playbook、写操作确认流 |
+
+### 集成测试说明
+
+集成测试使用 `@ActiveProfiles("test")`，**不需要**本地 MariaDB：
+
+- 数据库：H2 内存库（MySQL 兼容模式）
+- 关闭：Elasticsearch、Kafka、巡检定时任务、知识库 seed
+- 全局 dry-run：`ops.dry-run.global=true`（写类 MCP 默认预览）
+- CSRF：POST 需带 `X-Requested-With: XMLHttpRequest`（`IntegrationTestSupport` 已封装）
+
+典型集成用例：
+
+| 测试类 | 验证内容 |
+|--------|----------|
+| `MainFlowIntegrationTest` | 登录、平台信息、MCP 执行、巡检快照、统计 |
+| `ApiSurfaceIntegrationTest` | 登录后批量访问核心 GET API |
+| `McpDispatchIntegrationTest` | 13 个只读 MCP 工具经 HTTP 真实 dispatch |
+| `SecurityMcpIntegrationTest` | 注入 / `rm -rf` / 高危路径 / dry-run / 未知工具 |
+
+### 测试覆盖重点（按业务价值）
+
+当前测试投入优先覆盖：
+
+1. **MCP 安全门 + 分发器** — 拦截、确认、dry-run、审计落库
+2. **Controller API 面** — 路由可达、权限码、基本参数校验
+3. **决策引擎 + 治理** — `decision.*`、`OpsGovernanceService`、`OpsRemediationGate`
+4. **日志分析 + AI 诊断** — 空输入、模型不可用、SSE 异常参数
+5. **巡检 / 审计 / AWM** — 编排器、记忆层、失败教训
+
+尚未深度自动化、建议手测或 staging 验证：
+
+- 大模型真实推理质量与幻觉率
+- 麒麟 / LoongArch 生产环境系统命令与 systemd
+- MCP 真实删除 / 重启在生产资产上的端到端效果
+
+---
+
+## 验收与回归建议
+
+**自动化（CI / 发布前必跑）：**
+
+```bash
+mvn verify
+```
+
+**业务手测（答辩 / 上线前建议）：**
+
+1. `磁盘满了`、`CPU占用过高`、`一键巡检` 是否走对 Playbook
+2. `确认执行` 之前写操作是否仍停留在预览态
+3. 管理员与普通用户访问同一类接口时权限是否符合预期
+4. 安全自检是否四类探针都 PASS
+5. AWM 是否能看到 seed 与新增记忆
+6. 安全信号接入后，巡检摘要与 Agent 上下文是否包含相关信息
+7. 关闭 ES、关闭 AI Key、关闭 Qdrant 时是否仍能优雅退化
+8. MCP 控制台对 `rm -rf`、注入话术是否被安全门拦截（可对照 `SecurityMcpIntegrationTest`）
+
+### 适合发布前手测的页面
+
+- `Agent 对话`
+- `MCP 工具控制台`
+- `运维链路审计`
+- `环境状态`
+- `日志分析`
+- `运维效果评分`
+
+---
+
+## 监控与排障
+
+### Actuator 与指标
+
+当前已接入：
+
+- `health`
+- `info`
+- `metrics`
+- `prometheus`
+- `engine-health`
+
+管理端点默认通过 `management.*` 配置暴露。
+
+### 建议关注
+
+| 维度 | 入口 |
+|------|------|
+| 应用健康 | `/award-log/actuator/health` |
+| 指标导出 | `/award-log/actuator/prometheus` |
+| 平台摘要 | `/api/platform/info` |
+| 平台就绪 | `/api/platform/readiness` |
+| 后端探针 | `/api/platform/backend-probe` |
+| 巡检历史趋势 | `/api/ops/patrol/history/trend` |
+
+### 常见排障顺序
+
+1. 看应用是否启动成功
+2. 看数据库是否联通
+3. 看管理端口与业务端口是否被混用
+4. 看 Agent 是否被权限或风险门拒绝
+5. 看巡检 / 安全信号 / RAG 是否因为依赖缺失退化
+
+### 日志与导出
+
+出现复杂问题时，建议同时结合：
+
+- 后端日志
+- `ops_audit_trace`
+- AI 审计列表
+- 前端导出的链路或看板 PDF
+
+---
+
+## 答辩与演示建议
+
+### 与软件杯赛题对齐（Agent + MCP + 安全护栏）
+
+| 赛题要点 | 本项目对应 |
+|----------|------------|
+| OS 感知 / 国产化 | 麒麟 V11 + LoongArch 探针与部署清单；巡检、磁盘、systemd 等 MCP 工具 |
+| MCP 插件化工具 | **26** 个白名单工具，`McpToolCatalog` + `McpToolDispatcher` 统一注册与调度 |
+| 意图识别与编排 | `OpsIntentRouter` Playbook + `AssistantOrchestrator` / `AutonomousOpsOrchestrator` |
+| 安全护栏 | `McpInvocationSecurityGate`、风险评分、路径策略、写操作二次确认、`WriteExecutionCoordinator` |
+| 审计留痕 | `AssistantAuditRecorder`、`OpsAuditTraceService` 六步链路 trace |
+| 经验沉淀 | AWM 成功工作流 + Reflexion 失败教训 |
+
+答辩建议：**选 2～3 条固定话术现场演示**（磁盘满 / CPU 高 / 一键巡检），重点讲「为什么不是开放 shell」和「拦截 + 确认 + 审计」闭环，避免铺陈全部 26 个工具。
+
+### 推荐主线
+
+1. 平台是什么
+2. 为什么不是“开放终端给 AI”
+3. 用固定话术演示可控执行
+4. 展示安全自检与链路审计
+5. 展示 AWM 和记忆闭环
+6. 展示量化效果
+
+### 推荐页面顺序
+
+| 顺序 | 页面 / 接口 | 想表达什么 |
+|------|-------------|------------|
+| 1 | `/api/platform/acceptance` 或平台信息 | 实机、平台、适配能力 |
+| 2 | 安全自检 | 四层护栏真实生效 |
+| 3 | 运维效果评分 | 不只是“能做”，而且“有效果” |
+| 4 | 日志分析仪表盘 | 回到赛题主线 |
+| 5 | Agent 对话 | 中文运维、可控编排 |
+| 6 | MCP 工具控制台 | 非对话路径下也同样受控 |
+| 7 | 运维链路审计 | 六步审计、traceId、AWM 高亮 |
+| 8 | 记忆层 | 成功沉淀与失败教训 |
+
+### 建议使用的话术
+
+- `磁盘满了`
+- `CPU占用过高`
+- `一键巡检`
+- `继续处理巡检待办`
+- `帮我预览清理临时文件`
+- `确认执行`
+
+### 工程质量补充（可选）
+
+若评委关注测试与质量，可简要说明：
+
+- 发布前标准流程为 `mvn verify`（单测 + H2 集成测试 + JaCoCo **≥60%** 门禁）
+- MCP 安全门已有自动化用例（`SecurityMcpIntegrationTest`：注入、`rm -rf`、高危路径、dry-run 等）
+- 覆盖率报告路径：`target/site/jacoco/index.html`（需先执行 `mvn verify`）
+- 当前自动化规模：**646** 个 `@Test` / **171** 个测试类
+
+---
+
+## 报表导出
+
+### 当前已支持
+
+| 页面 | PNG | PDF | 备注 |
 |------|-----|-----|------|
-| 看板 | 分图导出 | jspdf 多图 A4 横向 | `dashboardExport.js` |
-| 溯源 · 访问记录 | 表格截图 | 多页 PDF | `tableExport.js` |
-| 溯源 · 执行链路 | 列表截图 | 多页 PDF | 同上 |
-| 执行链路 · 详情 | 详情截图 | 多页 PDF | 含执行步骤与结果摘要 |
+| 日志分析看板 | 支持 | 支持 | 通过 `dashboardExport.js` |
+| 审计表格 | 支持 | 支持 | 通过 `tableExport.js` |
+| 运维链路详情 | 支持 | 支持 | 适合答辩留档 |
 
-导出前会临时展开表格/摘要滚动区域，尽量包含当前已加载的全部行。
+### 相关前端模块
+
+- `frontend/src/utils/dashboardExport.js`
+- `frontend/src/utils/tableExport.js`
+- `frontend/src/components/LogAnalysisDashboard.vue`
+- `frontend/src/components/OpsTraceCenter.vue`
+
+### 使用价值
+
+- 方便留档
+- 方便测试或答辩汇报
+- 方便把链路问题带给后端定位
 
 ---
 
-## Git 与发布
+## 常见问题
 
-- 勿提交：`.env`、`application-local.yml`、`application-prod.yml`、`alarm-config.json`（含真实密钥）  
-- CI：`.github/workflows/ci.yml`；`PROD_BUILD=1` 时 `deploy.sh` 强制跑测试  
+### 1. 前端能打开但接口全失败 / 登录 Connection refused
+
+优先检查：
+
+- 后端是否启动，且 **8088** 在监听（见 [端口与管理面必读](#端口与管理面必读)）
+- 是否已配置 `DB_PASSWORD` 或 `application-local.yml`
+- 前端 dev 模式是否走了 Vite 代理（访问 `http://localhost:3000`，不要只开静态页）
+- 生产模式下 `VITE_AWARD_LOG_BASE_URL` 是否含 `/award-log` 后缀
+
+### 2. 启动报 Port 8088 was already in use
+
+表示**已有 Java 进程占用 8088**（通常是上次 `spring-boot:run` 未退出）：
+
+```powershell
+netstat -ano | findstr :8088
+taskkill /PID <上一步最后一列 PID> /F
+```
+
+若旧进程仍占用端口，结束该 Java 进程即可。**也可直接使用已在跑的后端**，只启动前端 `npm run dev`。
+
+### 3. 登录后很多页面 403
+
+请区分场景：
+
+- **用户管理、角色权限**等 `/admin/user/*`（除 login/register）：需要 **管理员**（`sys_user.role = 1`）
+- **仪表盘统计** `/admin/statistics/*`：当前为**登录即可**（普通用户可读）
+- **按用户隔离的数据**（如历史任务）：普通用户只能看 `user_id` 匹配自己的任务；旧数据 `user_id` 为空则列表可能为空
+
+### 4. 加载历史任务 500 / Business processing failed
+
+常见为数据库表结构落后于代码，例如 `log_analysis_task` 缺少 `user_id` 列。处理：按最新 `schema.sql` 建库，或重启后端触发 `LogAnalysisTaskSchemaService` 自动补列。
+
+### 5. Agent 能对话，但写操作一直不执行
+
+常见原因：
+
+- 当前处于 `dry-run`
+- 没有发送 `确认执行`
+- 风险评分超过允许阈值
+- 路径命中保护策略
+- 管理面端口或权限不足
+
+### 6. 知识库不可用
+
+请检查：
+
+- `QDRANT_URL`
+- Qdrant 是否启动
+- `knowledge.enabled`
+- 当前 embedding 是否可用
+
+### 7. Elasticsearch 未启用，聊天分析是不是就不能用了
+
+不是。当前设计已支持在 ES 关闭时回退到 MySQL 已分析明细，只要先完成过日志分析任务，聊天式分析仍可工作。
+
+### 8. Runbook 列表重启后丢失
+
+Runbook 审批 / 执行已持久化到 `ops_runbook_approval`。若仍看到空列表，请检查数据库迁移与 owner 字段。
+
+### 9. `mvn verify` 覆盖率门禁失败
+
+常见原因：
+
+- 未使用 `verify` 而只用了 `test`（报告在 verify 阶段生成）
+- 中文路径导致 exec 未写入 — 当前已配置写到 `%TEMP%/award-log-jacoco.exec`
+- 新增代码未补测试 — 查看 `target/site/jacoco/index.html` 定位低覆盖包
+
+本地排查：
+
+```bash
+mvn verify
+python scripts/jacoco_rank.py
+```
+
+### 10. 集成测试在 Windows 通过、CI Linux 失败
+
+检查 H2 方言：是否修改了 `schema.sql` 或 `mapper/*.xml` 但未运行 `python scripts/gen_schema_test.py` 重新生成 `schema-test.sql` 与 `mapper-h2/`。
 
 ---
 
-## 许可协议
+## Git 与发布注意事项
 
-本项目采用 **Apache License, Version 2.0**，全文见 `LICENSE`。
+- 不要提交 `outputs/`、`target/`、`frontend/dist/`、`node_modules/` 等构建/运行时产物
+- 不要提交真实 `.env`
+- 不要提交 `application-local.yml`
+- 不要提交生产密钥、数据库密码、Qdrant API Key
+- 不要在 README 中写死真实管理员账号密码
+- 若修改了接口权限、路由或安全边界，README 与部署文档应同步更新
 
-Copyright 2026 zhaowenkai（见 `LICENSE` 与 `NOTICE`）。欢迎 Issue 与 Pull Request。
+---
+
+## 补充文档
+
+| 文档 | 说明 |
+|------|------|
+| [`docs/deployment/部署文档.md`](./docs/deployment/部署文档.md) | 详细部署说明 |
+| [`部署指南.md`](./部署指南.md) | 麒麟目标机 Jar+Dist 交付速查 |
+| [`docs/deployment/麒麟Jar+Dist部署速查.md`](./docs/deployment/麒麟Jar+Dist部署速查.md) | 部署速查补充 |
+| [`docs/deployment/麒麟V11-LoongArch生产上线检查清单.md`](./docs/deployment/麒麟V11-LoongArch生产上线检查清单.md) | 麒麟生产上线清单 |
+| [`frontend/AGENT_UI_REDESIGN.md`](./frontend/AGENT_UI_REDESIGN.md) | Agent UI 改版说明 |
+| [`版权声明与使用限制声明.md`](./版权声明与使用限制声明.md) | 版权与使用限制 |
+| [`docs/deployment/ssh-remote-ops.md`](./docs/deployment/ssh-remote-ops.md) | 远程运维 SSH 说明 |
+
+---

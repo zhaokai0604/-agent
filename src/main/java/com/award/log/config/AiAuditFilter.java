@@ -19,7 +19,6 @@ import java.util.List;
 public class AiAuditFilter extends OncePerRequestFilter {
 
     private static final List<String> AUDIT_PREFIXES = List.of(
-            "/api/chat/",
             "/log/diagnose/",
             "/api/assistant/",
             "/api/mcp/",

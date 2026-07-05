@@ -1,7 +1,7 @@
 package com.award.log.agent.awm;
 
-import com.award.log.mcp.McpKnownTools;
 import com.award.log.util.AiChatResponseSupport;
+import com.award.log.util.TraceIdGenerator;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -35,13 +34,15 @@ public class LlmWorkflowInductor {
     private static final Pattern JSON_FENCE = Pattern.compile("```(?:json)?\\s*([\\s\\S]*?)```", Pattern.CASE_INSENSITIVE);
 
     private final ObjectMapper objectMapper;
+    private final TraceIdGenerator traceIdGenerator;
     private ChatModel chatModel;
 
     @Value("${agent.awm.llm-induction-enabled:false}")
     private boolean enabled;
 
-    public LlmWorkflowInductor(ObjectMapper objectMapper) {
+    public LlmWorkflowInductor(ObjectMapper objectMapper, TraceIdGenerator traceIdGenerator) {
         this.objectMapper = objectMapper;
+        this.traceIdGenerator = traceIdGenerator;
     }
 
     @Autowired(required = false)
@@ -122,7 +123,7 @@ public class LlmWorkflowInductor {
                 }
                 steps.add(step);
             }
-            String id = "llm-" + domainTag + "-" + UUID.randomUUID().toString().substring(0, 8);
+            String id = "llm-" + domainTag + "-" + shortId();
             List<String> kinds = findingKinds == null || findingKinds.isEmpty()
                     ? defaultFindingKinds(domainTag)
                     : findingKinds;
@@ -163,7 +164,7 @@ public class LlmWorkflowInductor {
 
     private OpsWorkflowStep parseStep(Map<?, ?> stepMap) {
         String toolName = str(stepMap.get("toolName")).trim();
-        if (!McpKnownTools.isDispatchable(toolName)) {
+        if (!AwmToolProfile.isInductionAllowed(toolName)) {
             return null;
         }
         String envDesc = str(stepMap.get("envDesc"));
@@ -218,8 +219,7 @@ public class LlmWorkflowInductor {
     }
 
     private String buildUserPrompt(OpsExperience exp, String domainTag, String trajectory) {
-        String tools = McpKnownTools.DISPATCHABLE.stream()
-                .filter(t -> !t.endsWith("OpsTool") && !"AutonomousOpsTool".equals(t))
+        String tools = AwmToolProfile.supportedTools().stream()
                 .sorted()
                 .collect(Collectors.joining(", "));
         StringBuilder sb = new StringBuilder();
@@ -240,12 +240,16 @@ public class LlmWorkflowInductor {
         StringBuilder sb = new StringBuilder();
         int i = 1;
         for (Map<String, Object> step : exp.steps()) {
+            String toolName = step.get("toolName") != null ? String.valueOf(step.get("toolName")) : "";
+            Object parameters = step.get("parameters");
             sb.append(i++).append(". phase=")
                     .append(step.getOrDefault("phase", "?"))
-                    .append(" title=")
-                    .append(step.getOrDefault("title", ""))
+                    .append(" tool=")
+                    .append(toolName)
                     .append("\n   detail=")
                     .append(step.getOrDefault("detail", ""))
+                    .append("\n   params=")
+                    .append(parameters == null ? "{}" : parameters)
                     .append("\n");
         }
         return sb.toString().trim();
@@ -261,5 +265,14 @@ public class LlmWorkflowInductor {
 
     private static String str(Object o) {
         return o == null ? "" : String.valueOf(o).trim();
+    }
+
+    private String shortId() {
+        String id = traceIdGenerator.nextId();
+        if (id == null || id.isBlank()) {
+            return "generated";
+        }
+        String normalized = id.replace("-", "");
+        return normalized.length() <= 8 ? normalized : normalized.substring(0, 8);
     }
 }

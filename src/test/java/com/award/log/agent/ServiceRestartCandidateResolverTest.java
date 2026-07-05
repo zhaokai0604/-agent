@@ -34,6 +34,15 @@ class ServiceRestartCandidateResolverTest {
     }
 
     @Test
+    void parseFailedUnitsSkipsWindowsTableHeader() {
+        String json = """
+                {"success":true,"data":{"output":"Name Status StartType\\n---- ------ ---------\\nW32Time Stopped Automatic\\n"}}
+                """;
+        List<String> names = ServiceRestartCandidateResolver.parseFailedUnitsFromToolJson(json, new ObjectMapper());
+        assertEquals(List.of("w32time"), names);
+    }
+
+    @Test
     void parseFailedUnitsFromSystemctlOutput() {
         String json = """
                 {"success":true,"data":{"output":"nginx.service loaded failed failed A high performance web server\\n"}}

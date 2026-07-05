@@ -8,6 +8,7 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import com.award.log.config.AppCorsProperties;
 import com.award.log.security.AuthInterceptor;
 
 import java.nio.charset.StandardCharsets;
@@ -20,9 +21,11 @@ import java.util.List;
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final AuthInterceptor authInterceptor;
+    private final AppCorsProperties corsProperties;
 
-    public WebMvcConfig(AuthInterceptor authInterceptor) {
+    public WebMvcConfig(AuthInterceptor authInterceptor, AppCorsProperties corsProperties) {
         this.authInterceptor = authInterceptor;
+        this.corsProperties = corsProperties;
     }
 
     @Override
@@ -37,18 +40,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        // 全局跨域配置
         registry.addMapping("/**")
-                .allowedOriginPatterns(
-                        "http://localhost:*",
-                        "http://127.0.0.1:*",
-                        "http://*",
-                        "https://*"
-                )
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                .allowedOriginPatterns(corsProperties.getAllowedOriginPatterns().toArray(String[]::new))
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
                 .allowedHeaders("*")
                 .maxAge(3600)
-                .allowCredentials(true);
+                .allowCredentials(corsProperties.isAllowCredentials());
     }
 
     @Override
@@ -59,14 +56,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/admin/user/login",
                         "/admin/user/register",
                         "/admin/user/check-user",
-                        "/admin/user/reset-password",
                         "/doc.html",
                         "/webjars/**",
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
                         "/error",
-                        "/api/platform/acceptance",
-                        "/api/ops/perception/snapshot"
+                        "/api/platform/acceptance"
                 );
     }
 

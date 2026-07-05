@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpsGovernanceServiceTest {
@@ -68,5 +70,35 @@ class OpsGovernanceServiceTest {
         step.put("path", "/etc/nginx/logs");
         step.put("days", 30);
         assertEquals(GovernanceAdmissionVerdict.FORBIDDEN, service.evaluateStep(step).verdict());
+    }
+
+    @Test
+    void summaryAndTierResolutionHelpers() {
+        Map<String, Object> summary = service.summaryForPlatform();
+        assertTrue((Boolean) summary.get("enabled"));
+        assertNotNull(summary.get("actionMatrix"));
+
+        assertEquals(AssetTier.NON_CORE, service.resolvePathTier("/var/log/nginx"));
+        assertEquals(AssetTier.FORBIDDEN_AUTO, service.resolvePathTier("/etc/passwd"));
+        assertEquals(AssetTier.NON_CORE, service.resolveServiceTier("nginx.service"));
+        assertEquals(AssetTier.CORE_STATEFUL, service.resolveServiceTier("mysqld"));
+    }
+
+    @Test
+    void disabledGovernanceAllowsAllKnownSteps() {
+        OpsGovernanceProperties props = new OpsGovernanceProperties();
+        props.setEnabled(false);
+        OpsGovernanceService disabled = new OpsGovernanceService(props);
+
+        OpsGovernanceService.GovernanceEvaluation eval = disabled.evaluateStep(
+                Map.of("kind", "RESTART_SERVICE", "serviceName", "sshd"));
+        assertEquals(GovernanceAdmissionVerdict.ALLOW_AUTO, eval.verdict());
+        assertFalse(disabled.isEnabled());
+    }
+
+    @Test
+    void unknownStepKindIsForbidden() {
+        assertEquals(GovernanceAdmissionVerdict.FORBIDDEN,
+                service.evaluateStep(Map.of("kind", "UNKNOWN")).verdict());
     }
 }

@@ -38,7 +38,7 @@ public class OpsExperienceLoader {
     public List<OpsExperience> loadRecentSuccessful(int limit) {
         List<OpsExperience> out = new ArrayList<>();
         try {
-            for (Map<String, Object> row : opsAuditTraceService.listRecent(Math.max(1, limit * 3))) {
+            for (Map<String, Object> row : opsAuditTraceService.listRecentWithSteps(Math.max(1, limit * 3))) {
                 OpsExperience exp = fromRow(row);
                 if (exp != null && exp.executionOk()) {
                     out.add(exp);

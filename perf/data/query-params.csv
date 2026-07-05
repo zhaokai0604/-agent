@@ -1,0 +1,8 @@
+scenario,dataType,startTime,endTime,interval,days,pageNum,pageSize,level,taskId,query,topK,limit
+performance_trend,cpu,2026-06-20T00:00:00,2026-06-25T23:59:59,5,7,1,10,,,database connection timeout root cause,5,20
+performance_statistics,memory,2026-06-20T00:00:00,2026-06-25T23:59:59,5,7,1,10,,,database connection timeout root cause,5,20
+performance_multi,cpu,2026-06-20T00:00:00,2026-06-25T23:59:59,10,7,1,10,,,database connection timeout root cause,5,20
+alarm_list,,2026-06-20T00:00:00,2026-06-25T23:59:59,5,7,1,10,ERROR,,database connection timeout root cause,5,20
+alarm_statistics,,2026-06-20T00:00:00,2026-06-25T23:59:59,5,7,1,10,ERROR,,database connection timeout root cause,5,20
+knowledge_search,,2026-06-20T00:00:00,2026-06-25T23:59:59,5,7,1,10,,,database connection timeout root cause,5,20
+ops_patrol,,2026-06-20T00:00:00,2026-06-25T23:59:59,5,7,1,10,,,database connection timeout root cause,5,20

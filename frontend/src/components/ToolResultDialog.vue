@@ -1,34 +1,44 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="执行结果"
-    width="760px"
+    width="780px"
     destroy-on-close
     class="tool-result-dialog"
+    :show-close="true"
     @closed="onClosed"
   >
-    <div v-if="payload" class="result-body">
-      <div class="result-header">
-        <el-tag size="large" type="success">{{ displayName }}</el-tag>
-        <el-tag :type="payload.success ? 'success' : 'danger'">
-          {{ payload.success ? '成功' : '失败' }}
-        </el-tag>
-        <span v-if="payload.duration" class="duration">耗时 {{ payload.duration }}ms</span>
+    <template #header>
+      <div class="dialog-header">
+        <div v-if="payload" class="dialog-header__badge">{{ toolBadge }}</div>
+        <div>
+          <div class="dialog-header__title">{{ displayName }}</div>
+          <div class="dialog-header__meta">
+            <span class="status-chip" :class="payload.success ? 'ok' : 'fail'">
+              {{ payload.success ? '执行成功' : '执行失败' }}
+            </span>
+            <span v-if="payload.duration" class="meta-duration">{{ payload.duration }} ms</span>
+          </div>
+        </div>
       </div>
+    </template>
 
+    <div v-if="payload" class="result-body">
       <div class="result-structured">
         <StructuredResultView :data="viewPayload" />
       </div>
 
-      <p v-if="showTrace && payload.traceId" class="trace-line">
-        追踪 ID：<code>{{ payload.traceId }}</code>
-        <span class="trace-hint">可在「溯源 → 执行链路」中查看完整记录</span>
-      </p>
+      <div v-if="showTrace && payload.traceId" class="trace-bar">
+        <span class="trace-label">追踪 ID</span>
+        <code class="trace-id">{{ payload.traceId }}</code>
+        <span class="trace-hint">可在「溯源 → 执行链路」查看完整记录</span>
+      </div>
     </div>
 
     <template #footer>
-      <el-button @click="visible = false">关闭</el-button>
-      <el-button v-if="showTrace && payload?.traceId" type="primary" plain @click="goTrace">前往溯源</el-button>
+      <div class="dialog-footer">
+        <el-button @click="visible = false">关闭</el-button>
+        <el-button v-if="showTrace && payload?.traceId" type="primary" @click="goTrace">前往溯源</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -37,7 +47,7 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import StructuredResultView from './StructuredResultView.vue'
-import { mcpToolDisplayName } from '../utils/mcpToolsMeta'
+import { mcpToolDisplayName, mcpToolBadge } from '../utils/mcpToolsMeta'
 import { payloadForStructuredView } from '../utils/structuredDataView'
 
 const visible = ref(false)
@@ -46,6 +56,10 @@ const showTrace = ref(true)
 
 const displayName = computed(() =>
   payload.value?.toolName ? mcpToolDisplayName(payload.value.toolName) : '执行结果'
+)
+
+const toolBadge = computed(() =>
+  payload.value?.toolName ? mcpToolBadge(payload.value.toolName) : 'MCP'
 )
 
 const viewPayload = computed(() =>
@@ -73,7 +87,7 @@ function goTrace() {
   const tid = payload.value?.traceId
   visible.value = false
   window.dispatchEvent(
-    new CustomEvent('ops-navigate-tab', { detail: { tab: 'audit', auditPane: 'trace', traceId: tid } })
+    new CustomEvent('ops-navigate-tab', { detail: { tab: 'audit', traceId: tid } })
   )
   if (tid) {
     ElMessage.info('已打开「溯源」，可在执行链路中查看详情')
@@ -84,39 +98,123 @@ defineExpose({ open })
 </script>
 
 <style scoped>
-.result-header {
+.dialog-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 14px;
 }
 
-.duration {
-  color: var(--ops-text-subtle, #909399);
-  font-size: 13px;
+.dialog-header__badge {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  background: rgba(13, 148, 136, 0.12);
+  color: var(--ops-primary, #0d9488);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--ops-font-mono, monospace);
+}
+
+.dialog-header__title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ops-text, #0f172a);
+  line-height: 1.3;
+}
+
+.dialog-header__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-chip.ok {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.status-chip.fail {
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
+}
+
+.meta-duration {
+  font-size: 12px;
+  color: var(--ops-text-subtle, #64748b);
+  font-variant-numeric: tabular-nums;
+}
+
+.result-body {
+  padding-top: 4px;
 }
 
 .result-structured {
   max-height: min(56vh, 480px);
   overflow-y: auto;
-  padding: 4px 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--ops-border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--ops-panel-soft, #f8fafc);
 }
 
-.trace-line {
-  margin: 14px 0 0;
-  font-size: 12px;
-  color: var(--ops-text-subtle, #64748b);
-}
-
-.trace-line code {
-  font-family: var(--ops-font-mono, monospace);
+.trace-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
   background: var(--ops-panel-soft, #f1f5f9);
-  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.trace-label {
+  color: var(--ops-text-subtle, #64748b);
+  font-weight: 600;
+}
+
+.trace-id {
+  font-family: var(--ops-font-mono, monospace);
+  background: var(--ops-panel, #fff);
+  padding: 2px 8px;
   border-radius: 4px;
+  border: 1px solid var(--ops-border, #e2e8f0);
 }
 
 .trace-hint {
-  margin-left: 8px;
+  color: var(--ops-text-subtle, #64748b);
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+</style>
+
+<style>
+.tool-result-dialog .el-dialog__header {
+  padding-bottom: 8px;
+  margin-right: 0;
+}
+
+.tool-result-dialog .el-dialog__body {
+  padding-top: 8px;
 }
 </style>

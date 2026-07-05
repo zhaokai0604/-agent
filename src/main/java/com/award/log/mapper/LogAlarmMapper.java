@@ -82,6 +82,12 @@ public interface LogAlarmMapper {
     List<LogAlarm> selectPage(@Param("pageNum") int pageNum, @Param("pageSize") int pageSize, 
                              @Param("offset") int offset, @Param("level") String level, @Param("taskId") String taskId);
 
+    List<LogAlarm> selectPageByUserId(@Param("pageSize") int pageSize,
+                                      @Param("offset") int offset,
+                                      @Param("userId") Integer userId,
+                                      @Param("level") String level,
+                                      @Param("taskId") String taskId);
+
     /**
      * 查询告警总数
      * @param level 告警级别筛选
@@ -89,6 +95,10 @@ public interface LogAlarmMapper {
      * @return 告警总数
      */
     long count(@Param("level") String level, @Param("taskId") String taskId);
+
+    long countByUserId(@Param("userId") Integer userId,
+                       @Param("level") String level,
+                       @Param("taskId") String taskId);
 
     /**
      * 查询最近N天的告警趋势
@@ -98,6 +108,11 @@ public interface LogAlarmMapper {
     List<Map<String, Object>> selectAlarmTrend(@Param("days") int days,
                                                @Param("level") String level,
                                                @Param("taskId") String taskId);
+
+    List<Map<String, Object>> selectAlarmTrendByUserId(@Param("days") int days,
+                                                       @Param("userId") Integer userId,
+                                                       @Param("level") String level,
+                                                       @Param("taskId") String taskId);
 
     /**
      * 查询最近N天的告警级别分布
@@ -110,6 +125,11 @@ public interface LogAlarmMapper {
                                                            @Param("level") String level,
                                                            @Param("taskId") String taskId);
 
+    List<Map<String, Object>> selectAlarmLevelDistributionByUserId(@Param("days") int days,
+                                                                   @Param("userId") Integer userId,
+                                                                   @Param("level") String level,
+                                                                   @Param("taskId") String taskId);
+
     /**
      * 查询最近N天的告警根因分析统计
      */
@@ -117,10 +137,20 @@ public interface LogAlarmMapper {
                                                                @Param("level") String level,
                                                                @Param("taskId") String taskId);
 
+    List<Map<String, Object>> selectAlarmRootCauseStatisticsByUserId(@Param("days") int days,
+                                                                     @Param("userId") Integer userId,
+                                                                     @Param("level") String level,
+                                                                     @Param("taskId") String taskId);
+
     /**
      * 查询最近N天的告警统计
      */
     Map<String, Object> selectAlarmStatistics(@Param("days") int days,
                                                @Param("level") String level,
                                                @Param("taskId") String taskId);
+
+    Map<String, Object> selectAlarmStatisticsByUserId(@Param("days") int days,
+                                                      @Param("userId") Integer userId,
+                                                      @Param("level") String level,
+                                                      @Param("taskId") String taskId);
 }

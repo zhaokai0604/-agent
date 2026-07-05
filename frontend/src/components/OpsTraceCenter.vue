@@ -1,15 +1,26 @@
 <template>
   <div :class="embedded ? 'audit-pane' : 'ops-page'">
+    <OpsPageHeader
+      v-if="!embedded"
+      title="执行链路"
+      subtitle="工具调用全链路：安全校验、风险评分、执行结果与审计步骤"
+    >
+      <template #actions>
+        <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
+        <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
+        <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">
+          导出 CSV
+        </el-button>
+      </template>
+    </OpsPageHeader>
+
   <el-card shadow="never" class="ops-surface-card">
-    <template #header>
-      <div class="header">
-        <span v-if="!embedded">执行链路</span>
-        <div class="header-actions" :class="{ 'header-actions--solo': embedded }">
+    <template v-if="embedded" #header>
+        <div class="header-actions header-actions--solo">
           <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
           <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
           <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">导出 CSV</el-button>
         </div>
-      </div>
     </template>
 
     <OpsMemoryPanel ref="memoryPanelRef" />
@@ -25,6 +36,7 @@
           {{ mcpToolDisplayName(scope.row.toolName) }}
         </template>
       </el-table-column>
+      <el-table-column prop="targetHostLabel" label="目标主机" width="140" show-overflow-tooltip />
       <el-table-column prop="executionOk" label="成功" width="72">
         <template #default="scope">
           <el-tag :type="scope.row.executionOk ? 'success' : 'danger'" size="small">
@@ -122,6 +134,8 @@ import StructuredResultView from './StructuredResultView.vue'
 import OpsMemoryPanel from './OpsMemoryPanel.vue'
 import { formatLocalDateKey } from '../utils/formatDate.js'
 import { exportRowsAsCsv } from '../utils/tableExport.js'
+import { mcpToolDisplayName } from '../utils/mcpToolsMeta'
+import OpsPageHeader from './OpsPageHeader.vue'
 
 const TRACE_LIST_CSV_COLUMNS = [
   { key: 'traceId', label: 'traceId' },
@@ -330,7 +344,7 @@ defineExpose({ openTrace: openCot })
   box-shadow: none;
 }
 .audit-export-wrap {
-  background: #fff;
+  background: var(--ops-panel);
 }
 .cot-dialog-header {
   display: flex;

@@ -10,14 +10,16 @@ import java.util.Map;
 
 @Mapper
 public interface LogAnalysisTaskMapper {
-    /** 根据ID查询特定任务 */
     LogAnalysisTask selectById(String taskId);
 
-    /** 查询所有任务 (不分页) */
+    LogAnalysisTask selectByIdAndUserId(@Param("taskId") String taskId, @Param("userId") Integer userId);
+
     List<LogAnalysisTask> selectAll();
 
-    /** 分页查询任务列表 */
+    List<LogAnalysisTask> selectAllByUserId(@Param("userId") Integer userId);
+
     List<LogAnalysisTask> selectPage(@Param("offset") int offset, @Param("limit") int limit);
+
     List<LogAnalysisTask> selectPageWithFilter(@Param("offset") int offset,
                                                @Param("limit") int limit,
                                                @Param("fileName") String fileName,
@@ -25,34 +27,42 @@ public interface LogAnalysisTaskMapper {
                                                @Param("createTimeStart") LocalDateTime createTimeStart,
                                                @Param("createTimeEnd") LocalDateTime createTimeEnd);
 
-    /** 查询任务总数 */
+    List<LogAnalysisTask> selectPageWithFilterByUserId(@Param("offset") int offset,
+                                                       @Param("limit") int limit,
+                                                       @Param("userId") Integer userId,
+                                                       @Param("fileName") String fileName,
+                                                       @Param("status") String status,
+                                                       @Param("createTimeStart") LocalDateTime createTimeStart,
+                                                       @Param("createTimeEnd") LocalDateTime createTimeEnd);
+
     long countAll();
 
-    /** 近 N 日内创建的任务数 */
+    long countAllByUserId(@Param("userId") Integer userId);
+
     long countSinceDays(@Param("days") int days);
+
     long countWithFilter(@Param("fileName") String fileName,
                          @Param("status") String status,
                          @Param("createTimeStart") LocalDateTime createTimeStart,
                          @Param("createTimeEnd") LocalDateTime createTimeEnd);
 
-    /** 插入任务记录 */
+    long countWithFilterByUserId(@Param("userId") Integer userId,
+                                 @Param("fileName") String fileName,
+                                 @Param("status") String status,
+                                 @Param("createTimeStart") LocalDateTime createTimeStart,
+                                 @Param("createTimeEnd") LocalDateTime createTimeEnd);
+
     int insert(LogAnalysisTask record);
-    
-    /** 更新任务记录 */
+
     int updateById(LogAnalysisTask task);
-    
-    /** 获取最近几天的任务趋势 */
+
     List<Map<String, Object>> getTaskTrend(@Param("days") int days);
-    
-    /** 获取各状态任务数量 */
+
     List<Map<String, Object>> getTaskStatusCount();
-    
-    /** 获取任务完成情况统计 */
+
     List<Map<String, Object>> getTaskCompletionStatistics();
-    
-    /** 获取平均处理时间 */
+
     Double getAverageProcessingTime();
-    
-    /** 根据任务ID删除任务 */
+
     int deleteById(String taskId);
 }

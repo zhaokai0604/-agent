@@ -2,6 +2,7 @@ package com.award.log.mcp.dispatch;
 
 import com.award.log.agent.OpsPerceptionCache;
 import com.award.log.mcp.McpToolCatalog;
+import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.tools.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.RequiredArgsConstructor;
@@ -72,7 +73,8 @@ public class McpToolDispatcher {
                         getString(parameters, "path"),
                         getInteger(parameters, "days"),
                         getBoolean(parameters, "dryRun"),
-                        getBoolean(parameters, "confirmDelete")));
+                        getBoolean(parameters, "confirmDelete"),
+                        getBoolean(parameters, "removeDirectory")));
                 case "LogCleanupTool" -> McpToolDispatchResult.ok(logCleanupTool.cleanupOldLogs(
                         getString(parameters, "path"),
                         getInteger(parameters, "days"),
@@ -166,7 +168,7 @@ public class McpToolDispatcher {
                     yield McpToolDispatchResult.fail("未知的工具: " + toolName);
                 }
             };
-            if (result.success() && shouldInvalidatePerceptionCache(toolName, parameters)) {
+            if (result.success() && shouldInvalidatePerceptionCache(toolName, parameters, result.data())) {
                 opsPerceptionCache.invalidate();
                 log.debug("写操作工具 {} 执行成功，已失效感知缓存", toolName);
             }
@@ -180,15 +182,17 @@ public class McpToolDispatcher {
         }
     }
 
-    private boolean shouldInvalidatePerceptionCache(String toolName, Map<String, Object> parameters) {
+    private boolean shouldInvalidatePerceptionCache(String toolName, Map<String, Object> parameters, String toolResultJson) {
         if (ALWAYS_INVALIDATE.contains(toolName)) {
             return true;
         }
         if (mcpToolCatalog.isReadOnlyObservation(toolName)) {
             return false;
         }
-        Boolean dryRun = getBoolean(parameters, "dryRun");
-        return !Boolean.TRUE.equals(dryRun);
+        if (!WriteToolResultSupport.requestedRealWrite(parameters)) {
+            return false;
+        }
+        return WriteToolResultSupport.isConfirmedRealWrite(toolResultJson);
     }
 
     private String dispatchLogAnalysis(Map<String, Object> parameters) throws JsonProcessingException {

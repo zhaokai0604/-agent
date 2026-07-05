@@ -10,13 +10,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(RuntimeException.class)
     public Result<String> handleRuntimeException(RuntimeException e) {
-        log.error("运行时异常", e);
-        return Result.error(500, "业务处理异常: " + e.getMessage());
+        log.error("Runtime exception", e);
+        return Result.error(500, "Business processing failed");
     }
 
     @ExceptionHandler(Exception.class)
     public Result<String> handleException(Exception e) {
-        log.error("系统全局异常", e);
-        return Result.error(500, "系统未知错误: " + e.getMessage());
+        log.error("Unhandled exception", e);
+        return Result.error(500, "Internal server error");
     }
 }

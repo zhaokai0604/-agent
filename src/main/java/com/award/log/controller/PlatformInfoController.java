@@ -1,12 +1,15 @@
 package com.award.log.controller;
 
-import com.award.log.collector.LogCollectorPathResolver;
 import com.award.log.common.Result;
 import com.award.log.config.OpsDryRunProperties;
+import com.award.log.config.SystemBootstrapSupport;
 import com.award.log.decision.RandomForestDecisionEngine;
 import com.award.log.governance.OpsGovernanceService;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.platform.KylinCommandProbe;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import com.award.log.mcp.McpToolCatalog;
 import com.award.log.util.OsRuntime;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -20,13 +23,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Arrays;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
- * 平台与运行环境快照（不含密钥明文）。
- */
-@Tag(name = "平台信息")
+ * 骞冲彴涓庤繍琛岀幆澧冨揩鐓э紙涓嶅惈瀵嗛挜鏄庢枃锛夈€? */
+@Tag(name = "骞冲彴淇℃伅")
 @RestController
 @RequestMapping("/api/platform")
 public class PlatformInfoController {
@@ -35,9 +36,30 @@ public class PlatformInfoController {
     private final RandomForestDecisionEngine randomForestDecisionEngine;
     private final MinPrivilegeExecutor minPrivilegeExecutor;
     private final OpsGovernanceService opsGovernanceService;
+    private final OpsDryRunProperties opsDryRunProperties;
+    private final DataSource dataSource;
+    private final McpToolCatalog mcpToolCatalog;
+
+    @Autowired(required = false)
+    private ChatClient chatClient;
+
+    @Value("${spring.ai.openai.api-key:}")
+    private String aiApiKey;
 
     @Autowired(required = false)
     private KylinCommandProbe kylinCommandProbe;
+
+    @Value("${knowledge.enabled:true}")
+    private boolean knowledgeEnabled;
+
+    @Value("${award.middleware.redis:false}")
+    private boolean redisEnabled;
+
+    @Value("${award.middleware.kafka:false}")
+    private boolean kafkaEnabled;
+
+    @Value("${spring.elasticsearch.enabled:false}")
+    private boolean elasticsearchEnabled;
 
     @Value("${platform.kylin.expected-arch:loongarch64}")
     private String expectedArch;
@@ -46,14 +68,20 @@ public class PlatformInfoController {
             Environment environment,
             RandomForestDecisionEngine randomForestDecisionEngine,
             MinPrivilegeExecutor minPrivilegeExecutor,
-            OpsGovernanceService opsGovernanceService) {
+            OpsGovernanceService opsGovernanceService,
+            OpsDryRunProperties opsDryRunProperties,
+            DataSource dataSource,
+            McpToolCatalog mcpToolCatalog) {
         this.environment = environment;
         this.randomForestDecisionEngine = randomForestDecisionEngine;
         this.minPrivilegeExecutor = minPrivilegeExecutor;
         this.opsGovernanceService = opsGovernanceService;
+        this.opsDryRunProperties = opsDryRunProperties;
+        this.dataSource = dataSource;
+        this.mcpToolCatalog = mcpToolCatalog;
     }
 
-    @Operation(summary = "平台与生产就绪快照（需登录；含治理与最小权限详情）")
+    @Operation(summary = "骞冲彴涓庣敓浜у氨缁揩鐓э紙闇€鐧诲綍锛涘惈娌荤悊涓庢渶灏忔潈闄愯鎯咃級")
     @GetMapping("/info")
     public Result<Map<String, Object>> info() {
         Map<String, Object> body = buildAcceptanceBody();
@@ -80,11 +108,16 @@ public class PlatformInfoController {
         body.put("security", security);
 
         body.put("governance", opsGovernanceService.summaryForPlatform());
+        body.put("runtime", buildRuntimeSnapshot());
+        body.put("components", buildComponentSnapshot());
+        body.put("bootstrap", SystemBootstrapSupport.readBootstrapStatus());
+        body.put("capabilities", SystemBootstrapSupport.buildCapabilitySnapshot());
+        body.put("platformSupport", buildPlatformSupportSummary());
 
         return Result.success(body);
     }
 
-    @Operation(summary = "麒麟 V11 + LoongArch 公开验收快照（无需登录，不含运行用户与自动化开关）")
+    @Operation(summary = "楹掗簾 V11 + LoongArch 鍏紑楠屾敹蹇収锛堟棤闇€鐧诲綍锛屼笉鍚繍琛岀敤鎴蜂笌鑷姩鍖栧紑鍏筹級")
     @GetMapping("/acceptance")
     public Result<Map<String, Object>> acceptance() {
         return Result.success(buildAcceptanceBody());
@@ -103,5 +136,57 @@ public class PlatformInfoController {
         acceptance.put("deliveryTargetMatch", OsRuntime.isKylin() && OsRuntime.isLoongArch());
         body.put("acceptance", acceptance);
         return body;
+    }
+
+    private Map<String, Object> buildRuntimeSnapshot() {
+        Map<String, Object> runtime = new LinkedHashMap<>();
+        runtime.put("dbReachable", probeDatabase());
+        runtime.put("mcpRegisteredCount", mcpToolCatalog.getDescriptors().size());
+        runtime.put("mcpHttpAllowedCount", mcpToolCatalog.getHttpAllowedToolNames().size());
+        runtime.put("dataSource", "live");
+        return runtime;
+    }
+
+    private boolean probeDatabase() {
+        try (Connection conn = dataSource.getConnection()) {
+            return conn.isValid(2);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private Map<String, Object> buildComponentSnapshot() {
+        Map<String, Object> components = new LinkedHashMap<>();
+        components.put("ai", Map.of(
+                "enabled", chatClient != null && aiApiKey != null && !aiApiKey.isBlank(),
+                "hint", chatClient != null && aiApiKey != null && !aiApiKey.isBlank()
+                        ? "LLM 对话可用" : "未配置 AI_API_KEY，编排 MCP 仍可用"));
+        components.put("elasticsearch", Map.of(
+                "enabled", elasticsearchEnabled,
+                "hint", elasticsearchEnabled ? "已启用" : "默认关闭，Chat 工具回退 MariaDB 明细"));
+        components.put("redis", Map.of(
+                "enabled", redisEnabled,
+                "hint", redisEnabled ? "已启用" : "默认关闭，Statistics 使用进程内缓存"));
+        components.put("kafka", Map.of(
+                "enabled", kafkaEnabled,
+                "hint", kafkaEnabled ? "已启用" : "默认关闭"));
+        components.put("knowledge", Map.of(
+                "enabled", knowledgeEnabled,
+                "hint", knowledgeEnabled ? "需 Qdrant 才能语义检索" : "已关闭"));
+        return components;
+    }
+
+    private Map<String, Object> buildPlatformSupportSummary() {
+        Map<String, Object> support = new LinkedHashMap<>();
+        boolean windows = OsRuntime.isWindows();
+        Map<String, Object> capabilities = SystemBootstrapSupport.buildCapabilitySnapshot();
+        support.put("platformKey", windows ? "windows" : "linux");
+        support.put("currentPlatform", System.getProperty("os.name"));
+        support.put("capabilities", capabilities);
+        support.put("commandMismatchRisk",
+                Boolean.TRUE.equals(capabilities.get("windows"))
+                        ? Boolean.FALSE.equals(capabilities.get("powershell"))
+                        : Boolean.FALSE.equals(capabilities.get("systemctl")));
+        return support;
     }
 }

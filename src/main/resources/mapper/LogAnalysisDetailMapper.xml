@@ -101,4 +101,23 @@
         delete from log_analysis_detail
         where task_id = #{taskId,jdbcType=VARCHAR}
     </delete>
+
+    <select id="selectRecentDetails" resultMap="BaseResultMap">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM log_analysis_detail d
+        INNER JOIN log_analysis_task t ON d.task_id = t.task_id
+        WHERE t.create_time &gt;= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        <if test="severity != null and severity != ''">
+            AND UPPER(d.severity) LIKE CONCAT('%', UPPER(#{severity}), '%')
+        </if>
+        <if test="keyword != null and keyword != ''">
+            AND d.desensitized_log LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+        <if test="anomalyOnly != null and anomalyOnly">
+            AND d.is_anomaly = 1
+        </if>
+        ORDER BY t.create_time DESC, d.id DESC
+        LIMIT #{limit}
+    </select>
 </mapper>

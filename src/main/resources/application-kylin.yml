@@ -17,9 +17,50 @@ log:
 agent:
   run-as-user: ${AGENT_RUN_AS_USER:award-agent}
   min-privilege:
-    enabled: true
+    # Kylin acceptance needs confirmed cleanup to delete root-owned /var/log and /var/cache files.
+    # Writes are still guarded by ops.dry-run.global + dryRun=false + confirmDelete=true.
+    enabled: ${AGENT_MIN_PRIVILEGE:false}
   paths:
     policy-version: path-policy-v2-kylin-loongarch
+    read-prefixes:
+      - /var/log
+      - /var/log/journal
+      - /tmp
+      - /var/tmp
+      - /var/cache
+      - /opt/threshcore
+      - /run
+      - /srv
+      - /data
+    clean-roots:
+      - /tmp
+      - /var/tmp
+      - /var/cache
+      - /opt/threshcore/tmp
+    log-cleanup-roots:
+      - /var/log
+      - /var/log/journal
+      - /opt/threshcore/logs
+    denied-substrings:
+      - /etc/shadow
+      - /etc/gshadow
+      - /.ssh/
+      - /root/
+      - /boot/
+      - /etc/sudoers
+      - /etc/passwd
+    log-protected-substrings:
+      - /var/lib/mysql
+      - /var/lib/mariadb
+      - /var/lib/pgsql
+      - /var/lib/postgresql
+      - ib_logfile
+      - ibdata
+      - binlog
+      - slow.log
+      - relay-log
+      - /var/lib/redis
+      - /var/lib/mongodb
   autonomous:
     enabled: true
     disk-pressure-percent: 80
@@ -35,15 +76,17 @@ agent:
       - award-log
 
 ops:
+  dry-run:
+    # false means confirmed write tools can really mutate/delete; set true for rehearsal-only runs.
+    global: ${OPS_DRY_RUN_GLOBAL:false}
   auto-remediation:
     enabled: true
     run-mode: HYBRID
     risk-patrol-auto-max: 6.0
   patrol:
     enabled: true
-    inspect-roots: /var/log,/tmp,/var/cache
-  # 首轮上线不建议巡检后立即跑全栈自主运维（与 afterPatrol 自动修复二选一）
-  # agent.autonomous.run-after-patrol 保持 application.yml 默认 false
+    inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:/var/log,/tmp,/var/tmp,/var/cache,/opt/threshcore/logs}
+  # 巡检单轨仅保留 afterPatrol 自动修复，不再启用全栈自主运维双轨
 
 server:
   tomcat:

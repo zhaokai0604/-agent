@@ -1,6 +1,7 @@
 package com.award.log.controller;
 
 import com.award.log.common.Result;
+import com.award.log.security.RequestUserResolver;
 import com.award.log.service.KafkaMonitorService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,9 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import jakarta.servlet.http.HttpSession;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -31,15 +30,15 @@ public class PlatformReadinessController {
     @Autowired(required = false)
     private KafkaMonitorService kafkaMonitorService;
 
+    @Autowired
+    private RequestUserResolver requestUserResolver;
+
     @Value("${spring.ai.openai.api-key:}")
     private String aiApiKey;
 
     @GetMapping("/readiness")
-    public Result<Map<String, Object>> readiness() {
-        ServletRequestAttributes attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
-        HttpSession session = attrs == null ? null : attrs.getRequest().getSession(false);
-        Object role = session == null ? null : session.getAttribute(com.award.log.security.AuthInterceptor.SESSION_USER_ROLE);
-        if (!(role instanceof Number) || ((Number) role).intValue() != 1) {
+    public Result<Map<String, Object>> readiness(HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
             return Result.error(403, "仅管理员可访问平台就绪检查");
         }
         Map<String, Object> checks = new HashMap<>();

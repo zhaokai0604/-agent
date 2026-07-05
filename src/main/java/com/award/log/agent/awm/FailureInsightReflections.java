@@ -20,7 +20,7 @@ public final class FailureInsightReflections {
             case "INTENT_TOOL_MISMATCH", "REJECT_INTENT_MISMATCH" ->
                     "失败原因：破坏性话术与只读工具不匹配（如「删除」+ DiskTool）。下次改用 CleanTempTool/LogCleanupTool 并 dryRun，或先只做观测。";
             case "HIGH_RISK_COMMAND", "REJECT_HIGH_RISK_COMMAND" ->
-                    "失败原因：话术命中高危命令模式。下次避免 rm -rf、格式化、提权等表述；改用受控 MCP 工具与白名单路径。";
+                    "失败原因：话术命中高危命令模式。下次避免 rm -rf、格式化、提权等表述；改用受控运维工具与白名单路径。";
             case "RISK_SCORE_HIGH", "REJECT_RISK_SCORE" ->
                     "失败原因：Agentic 风险分超阈值。下次缩小路径范围、启用 dryRun，或在界面点击「确认执行」。";
             case "READ_ONLY_TOOL_SURFACE" ->
@@ -28,7 +28,7 @@ public final class FailureInsightReflections {
             case "REJECTED_HIGH_RISK", "REJECTED_HIGH_RISK_COMMAND", "REJECTED_INJECTION" ->
                     reflect(mapLegacyCode(code), toolName, userInput);
             default ->
-                    "失败原因：安全门拦截（" + code + "）。下次优先只读 MCP 工具验证环境，写操作需策略白名单与确认。";
+                    "失败原因：安全门拦截（" + code + "）。下次优先只读工具验证环境，写操作需策略白名单与确认。";
         };
     }
 

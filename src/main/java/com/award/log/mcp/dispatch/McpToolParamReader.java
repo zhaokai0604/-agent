@@ -6,7 +6,7 @@ import java.util.regex.Pattern;
 public final class McpToolParamReader {
 
     private static final Pattern REAL_WRITE_UTTERANCE = Pattern.compile(
-            "真实删除|彻底删除|真正删除|不要预览|不要dry-?run|执行删除|真实重启|立即重启|confirm\\s*[:=]\\s*true",
+            "真实删除|彻底删除|真正删除|不要预览|不要dry-?run|执行删除|真实重启|立即重启|直接删除|立即删除|马上删除|确认执行|开始清理|执行修复|删掉",
             Pattern.CASE_INSENSITIVE);
 
     private McpToolParamReader() {
@@ -56,6 +56,24 @@ public final class McpToolParamReader {
         }
     }
 
+    public static Long getLong(Map<String, Object> params, String key) {
+        if (params == null || !params.containsKey(key)) {
+            return null;
+        }
+        Object value = params.get(key);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(value.toString().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     public static Boolean getBoolean(Map<String, Object> params, String key) {
         if (params == null || !params.containsKey(key)) {
             return null;
@@ -70,22 +88,22 @@ public final class McpToolParamReader {
         return Boolean.parseBoolean(value.toString());
     }
 
-    public static void applyConfirmedWriteToolParams(String toolName, Map<String, Object> parameters) {
-        applyConfirmedWriteToolParams(toolName, parameters, null);
-    }
-
-    /**
-     * 二次确认后仅在用户已请求真实写入时关闭 dryRun；预览类请求保持 dryRun=true。
-     */
-    public static void applyConfirmedWriteToolParams(String toolName, Map<String, Object> parameters, String userMessage) {
+    /** 用户已在界面点击「确认执行」后强制开启写参数（不依赖 userMessage 关键词）。 */
+    public static void forceConfirmedWriteToolParams(String toolName, Map<String, Object> parameters) {
         if (toolName == null || parameters == null) {
             return;
         }
-        if (!shouldEscalateToRealWrite(parameters, userMessage)) {
-            return;
-        }
         switch (toolName) {
-            case "CleanTempTool", "LogCleanupTool" -> {
+            case "CleanTempTool" -> {
+                parameters.put("dryRun", false);
+                parameters.put("confirmDelete", true);
+                String path = getString(parameters, "path");
+                if (path != null && !path.isBlank() && isTempSubDirectoryPath(path)) {
+                    parameters.put("removeDirectory", true);
+                    parameters.put("days", 0);
+                }
+            }
+            case "LogCleanupTool" -> {
                 parameters.put("dryRun", false);
                 parameters.put("confirmDelete", true);
             }
@@ -118,6 +136,23 @@ public final class McpToolParamReader {
         }
     }
 
+    public static void applyConfirmedWriteToolParams(String toolName, Map<String, Object> parameters) {
+        applyConfirmedWriteToolParams(toolName, parameters, null);
+    }
+
+    /**
+     * 二次确认后仅在用户已请求真实写入时关闭 dryRun；预览类请求保持 dryRun=true。
+     */
+    public static void applyConfirmedWriteToolParams(String toolName, Map<String, Object> parameters, String userMessage) {
+        if (toolName == null || parameters == null) {
+            return;
+        }
+        if (!shouldEscalateToRealWrite(parameters, userMessage)) {
+            return;
+        }
+        forceConfirmedWriteToolParams(toolName, parameters);
+    }
+
     public static boolean shouldEscalateToRealWrite(Map<String, Object> parameters, String userMessage) {
         if (parameters != null) {
             if (Boolean.TRUE.equals(getBoolean(parameters, "confirmDelete"))
@@ -134,6 +169,14 @@ public final class McpToolParamReader {
             return false;
         }
         return REAL_WRITE_UTTERANCE.matcher(userMessage).find();
+    }
+
+    private static boolean isTempSubDirectoryPath(String path) {
+        String norm = path.trim().replace('\\', '/');
+        if (norm.equals("/tmp") || norm.equals("/var/tmp") || norm.equals("/var/temp")) {
+            return false;
+        }
+        return norm.startsWith("/tmp/") || norm.startsWith("/var/tmp/") || norm.startsWith("/var/temp/");
     }
 
     private static boolean operationIs(Map<String, Object> parameters, String... ops) {

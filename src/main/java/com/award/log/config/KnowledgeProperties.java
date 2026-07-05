@@ -26,4 +26,7 @@ public class KnowledgeProperties {
 
     /** 无 Embedding API 时是否降级为本地哈希向量 */
     private boolean allowLocalFallbackEmbedding = true;
+
+    /** 启动时若知识库为空则写入内置 Runbook */
+    private boolean seedOnStartup = true;
 }

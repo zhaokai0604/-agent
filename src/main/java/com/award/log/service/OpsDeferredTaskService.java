@@ -18,9 +18,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 
-/**
- * 延时执行本地工具（与 MCP 控制器同源逻辑；进程内调度，重启后任务丢失）。
- */
 @Slf4j
 @Service
 public class OpsDeferredTaskService {
@@ -46,14 +43,12 @@ public class OpsDeferredTaskService {
     }
 
     public Map<String, Object> schedule(int delayMinutes, String toolName, Map<String, Object> parameters,
-                                         String operatorId) {
+                                        String operatorId) {
         validate(delayMinutes, toolName, parameters);
 
         String taskId = UUID.randomUUID().toString();
         Instant executeAt = Instant.now().plus(delayMinutes, ChronoUnit.MINUTES);
-        Map<String, Object> paramCopy = parameters == null
-                ? new HashMap<>()
-                : new HashMap<>(parameters);
+        Map<String, Object> paramCopy = parameters == null ? new HashMap<>() : new HashMap<>(parameters);
 
         TaskMeta meta = new TaskMeta(taskId, toolName, executeAt, paramCopy,
                 operatorId == null ? "" : operatorId, "PENDING");
@@ -62,29 +57,36 @@ public class OpsDeferredTaskService {
         ScheduledFuture<?> future = scheduler.schedule(() -> runTask(taskId), executeAt);
         futures.put(taskId, future);
 
-        log.info("【延时运维】已创建任务 taskId={} tool={} executeAt={} delayMin={} operator={}",
+        log.info("Created deferred ops task taskId={} tool={} executeAt={} delayMin={} operator={}",
                 taskId, toolName, executeAt, delayMinutes, operatorId);
 
         return toView(meta);
     }
 
-    public boolean cancel(String taskId) {
-        ScheduledFuture<?> f = futures.get(taskId);
-        if (f == null) {
+    public boolean cancel(String taskId, String operatorId, boolean admin) {
+        TaskMeta meta = metas.get(taskId);
+        if (meta == null || (!admin && !sameOwner(meta.createdBy, operatorId))) {
             return false;
         }
-        boolean cancelled = f.cancel(false);
+        ScheduledFuture<?> future = futures.get(taskId);
+        if (future == null) {
+            return false;
+        }
+        boolean cancelled = future.cancel(false);
         futures.remove(taskId);
         metas.remove(taskId);
-        log.info("【延时运维】取消任务 taskId={} cancelled={}", taskId, cancelled);
+        log.info("Cancelled deferred ops task taskId={} cancelled={}", taskId, cancelled);
         return cancelled;
     }
 
-    public List<Map<String, Object>> listPending() {
+    public List<Map<String, Object>> listPending(String operatorId, boolean admin) {
         List<Map<String, Object>> list = new ArrayList<>();
-        for (TaskMeta m : metas.values()) {
-            if ("PENDING".equals(m.status)) {
-                list.add(toView(m));
+        for (TaskMeta meta : metas.values()) {
+            if (!"PENDING".equals(meta.status)) {
+                continue;
+            }
+            if (admin || sameOwner(meta.createdBy, operatorId)) {
+                list.add(toView(meta));
             }
         }
         list.sort((a, b) -> String.valueOf(a.get("executeAt")).compareTo(String.valueOf(b.get("executeAt"))));
@@ -93,16 +95,16 @@ public class OpsDeferredTaskService {
 
     private void validate(int delayMinutes, String toolName, Map<String, Object> parameters) {
         if (delayMinutes < MIN_DELAY_MIN || delayMinutes > MAX_DELAY_MIN) {
-            throw new IllegalArgumentException("延时必须在 " + MIN_DELAY_MIN + "~" + MAX_DELAY_MIN + " 分钟之间");
+            throw new IllegalArgumentException("delayMinutes must be between " + MIN_DELAY_MIN + " and " + MAX_DELAY_MIN);
         }
         if (toolName == null || toolName.isBlank() || !ALLOWED_DEFERRED_TOOLS.contains(toolName)) {
-            throw new IllegalArgumentException("不支持延时执行的工具: " + toolName);
+            throw new IllegalArgumentException("Unsupported deferred tool: " + toolName);
         }
         if ("CleanTempTool".equals(toolName)) {
             Boolean dryRun = getBoolean(parameters, "dryRun");
             Boolean confirmDelete = getBoolean(parameters, "confirmDelete");
             if (Boolean.FALSE.equals(dryRun) && !Boolean.TRUE.equals(confirmDelete)) {
-                throw new IllegalArgumentException("真实删除必须同时设置 dryRun=false 且 confirmDelete=true");
+                throw new IllegalArgumentException("Real delete requires dryRun=false and confirmDelete=true");
             }
         }
     }
@@ -114,12 +116,12 @@ public class OpsDeferredTaskService {
         }
         meta.status = "RUNNING";
         try {
-            log.info("【延时运维】开始执行 taskId={} tool={}", taskId, meta.toolName);
+            log.info("Running deferred ops task taskId={} tool={}", taskId, meta.toolName);
             Map<String, Object> exec = mcpExecuteController.executeDeferredScheduledTool(meta.toolName, meta.parameters);
             meta.status = Boolean.TRUE.equals(exec.get("success")) ? "DONE" : "FAILED";
-            log.info("【延时运维】结束 taskId={} success={}", taskId, exec.get("success"));
+            log.info("Finished deferred ops task taskId={} success={}", taskId, exec.get("success"));
         } catch (Exception e) {
-            log.error("【延时运维】执行异常 taskId={}", taskId, e);
+            log.error("Deferred ops task failed taskId={}", taskId, e);
             meta.status = "FAILED";
         } finally {
             futures.remove(taskId);
@@ -127,14 +129,14 @@ public class OpsDeferredTaskService {
         }
     }
 
-    private Map<String, Object> toView(TaskMeta m) {
+    private Map<String, Object> toView(TaskMeta meta) {
         Map<String, Object> map = new HashMap<>();
-        map.put("taskId", m.taskId);
-        map.put("toolName", m.toolName);
-        map.put("executeAt", m.executeAt.toString());
-        map.put("status", m.status);
-        map.put("parameters", Collections.unmodifiableMap(new HashMap<>(m.parameters)));
-        map.put("createdBy", m.createdBy);
+        map.put("taskId", meta.taskId);
+        map.put("toolName", meta.toolName);
+        map.put("executeAt", meta.executeAt.toString());
+        map.put("status", meta.status);
+        map.put("parameters", Collections.unmodifiableMap(new HashMap<>(meta.parameters)));
+        map.put("createdBy", meta.createdBy);
         return map;
     }
 
@@ -142,14 +144,18 @@ public class OpsDeferredTaskService {
         if (params == null || !params.containsKey(key)) {
             return null;
         }
-        Object v = params.get(key);
-        if (v == null) {
+        Object value = params.get(key);
+        if (value == null) {
             return null;
         }
-        if (v instanceof Boolean) {
-            return (Boolean) v;
+        if (value instanceof Boolean booleanValue) {
+            return booleanValue;
         }
-        return Boolean.parseBoolean(v.toString());
+        return Boolean.parseBoolean(value.toString());
+    }
+
+    private static boolean sameOwner(String expected, String actual) {
+        return expected != null && !expected.isBlank() && expected.equals(actual);
     }
 
     private static final class TaskMeta {

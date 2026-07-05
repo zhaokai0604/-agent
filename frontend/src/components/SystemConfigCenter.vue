@@ -1,19 +1,15 @@
 <template>
-  <div class="config-page">
-    <section class="hero-shell">
-      <div class="hero-copy">
-        <p class="eyebrow">设置与治理</p>
-        <h1>系统配置与效果</h1>
-        <p class="hero-text">
-          集中管理运行策略、日志采集、AI 接入与安全白名单；保存后的热生效/重启影响见上方摘要，巡检快照见下方对照区。
-        </p>
-      </div>
-      <div class="hero-actions">
+  <div class="ops-page config-page">
+    <OpsPageHeader
+      title="系统配置与效果"
+      subtitle="集中管理运行策略、日志采集、AI 接入与安全白名单；保存后的热生效/重启影响见下方摘要"
+    >
+      <template #actions>
         <el-button :icon="Refresh" @click="reloadAll" :loading="loading">刷新视图</el-button>
         <el-button type="primary" :icon="Download" @click="exportJsonSnapshot">导出 JSON</el-button>
         <el-button type="success" :icon="Document" @click="exportPdfReport">导出 PDF</el-button>
-      </div>
-    </section>
+      </template>
+    </OpsPageHeader>
 
     <section class="summary-grid">
       <article class="summary-card">
@@ -43,6 +39,77 @@
       </article>
     </section>
 
+    <section class="bootstrap-grid">
+      <article class="bootstrap-card">
+        <div class="bootstrap-card__head">
+          <div>
+            <span class="summary-label">启动探测状态</span>
+            <strong>{{ bootstrapPlatformLine }}</strong>
+          </div>
+          <el-tag :type="bootstrapStatus?.corrected ? 'warning' : 'success'" effect="plain">
+            {{ bootstrapStatus?.corrected ? '已自动纠正' : '无需纠正' }}
+          </el-tag>
+        </div>
+        <small class="bootstrap-card__meta">
+          最近执行：{{ formatDateTime(bootstrapStatus?.lastRunAt) }} · 指纹：{{ bootstrapStatus?.platformFingerprint || '--' }}
+        </small>
+        <div class="bootstrap-chip-row">
+          <el-tag
+            v-for="([name]) in bootstrapCapabilityEntries"
+            :key="name"
+            size="small"
+            effect="plain"
+          >
+            {{ name }}
+          </el-tag>
+          <span v-if="!bootstrapCapabilityEntries.length" class="bootstrap-empty">暂无能力摘要</span>
+        </div>
+      </article>
+
+      <article class="bootstrap-card">
+        <div class="bootstrap-card__head">
+          <div>
+            <span class="summary-label">最近自动纠正</span>
+            <strong>{{ bootstrapChangedKeys.length }}</strong>
+          </div>
+          <el-button
+            v-if="viewer?.editable"
+            type="primary"
+            size="small"
+            plain
+            :loading="bootstrapLoading"
+            @click="reconcileBootstrapNow"
+          >
+            手动重新探测
+          </el-button>
+        </div>
+        <small class="bootstrap-card__meta">
+          自动生成 {{ bootstrapGeneratedKeys.length }} 项 · 配置目录 {{ bootstrapStatus?.configDir || '--' }}
+        </small>
+        <div class="bootstrap-list">
+          <div v-if="bootstrapChangedKeys.length" class="bootstrap-list__row">
+            <span class="bootstrap-list__label">已纠正</span>
+            <div class="bootstrap-chip-row">
+              <el-tag v-for="item in bootstrapChangedKeys" :key="item" size="small" type="warning" effect="plain">
+                {{ item }}
+              </el-tag>
+            </div>
+          </div>
+          <div v-if="bootstrapGeneratedKeys.length" class="bootstrap-list__row">
+            <span class="bootstrap-list__label">自动生成</span>
+            <div class="bootstrap-chip-row">
+              <el-tag v-for="item in bootstrapGeneratedKeys" :key="item" size="small" type="success" effect="plain">
+                {{ item }}
+              </el-tag>
+            </div>
+          </div>
+          <div v-if="!bootstrapChangedKeys.length && !bootstrapGeneratedKeys.length" class="bootstrap-empty">
+            当前没有待展示的自动纠正项
+          </div>
+        </div>
+      </article>
+    </section>
+
     <el-alert
       v-if="!viewer?.editable"
       class="status-banner"
@@ -63,6 +130,26 @@
       :description="isDirty ? '你有未保存的配置改动。热生效项会立即更新，重启项会写入本地覆盖文件并标记待重启。' : '可以直接修改并保存配置；页面会明确标出热生效项和需重启项。'"
     />
 
+    <el-alert
+      v-if="runtimeForm.dryRunGlobal"
+      class="status-banner"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="全局演练模式已开启"
+      description="写操作（清理、重启等）仅预览，不会真正落地。可在下方「运行策略 → 全局演练模式」关闭。"
+    />
+
+    <el-alert
+      v-if="!aiKeyConfigured"
+      class="status-banner"
+      type="info"
+      :closable="false"
+      show-icon
+      title="AI 未配置"
+      description="智能对话暂不可用；运维工具与巡检仍可正常使用。可在下方「AI 接入」填写 API Key。"
+    />
+
     <div v-if="messages.length" class="message-stack">
       <el-alert
         v-for="msg in messages"
@@ -79,7 +166,7 @@
         <div class="path-policy-bar">
           <h2>运行策略</h2>
           <el-tag type="success" size="small">HOT</el-tag>
-          <span class="path-policy-meta">巡检 · 自愈 · 编排 · Dry-run 保存即生效</span>
+          <span class="path-policy-meta">巡检 · 自愈 · 自动修复 · 保存即生效</span>
         </div>
 
         <div class="runtime-toolbar">
@@ -88,7 +175,7 @@
             <el-switch v-model="runtimeForm.autoRemediationEnabled" :disabled="!viewer?.editable" size="small" />
           </label>
           <label class="runtime-switch">
-            <span>全局 Dry Run</span>
+            <span>全局演练模式</span>
             <el-switch v-model="runtimeForm.dryRunGlobal" :disabled="!viewer?.editable" size="small" />
           </label>
           <div class="runtime-field">
@@ -98,9 +185,9 @@
           <div class="runtime-field runtime-field--mode">
             <span class="runtime-field-label">修复模式</span>
             <el-select v-model="runtimeForm.autoRemediationMode" size="small" :disabled="!viewer?.editable">
-              <el-option label="HYBRID" value="HYBRID" />
-              <el-option label="CONFIRM_FIRST" value="CONFIRM_FIRST" />
-              <el-option label="IMMEDIATE" value="IMMEDIATE" />
+              <el-option label="混合模式" value="HYBRID" />
+              <el-option label="先确认后执行" value="CONFIRM_FIRST" />
+              <el-option label="自动执行" value="IMMEDIATE" />
             </el-select>
           </div>
         </div>
@@ -221,7 +308,7 @@
         <div class="card-head">
           <div>
             <h2>AI 接入</h2>
-            <p>当前运行值来自 application.yml 与本地覆盖文件合并结果；修改后需<strong>重启后端</strong>生效。默认 DeepSeek：<code>https://api.deepseek.com</code> · <code>deepseek-chat</code></p>
+            <p>当前运行值来自配置文件合并结果；修改后需<strong>重启后端</strong>生效。AI 接口与模型可在下方填写。</p>
           </div>
           <el-tag type="warning">RESTART</el-tag>
         </div>
@@ -234,7 +321,7 @@
               <el-input v-model="aiForm.chatModel" placeholder="deepseek-chat" :disabled="!viewer?.editable" />
             </el-form-item>
             <el-form-item label="Embedding 模型">
-              <el-input v-model="aiForm.embeddingModel" placeholder="deepseek-chat（占位）" :disabled="!viewer?.editable" />
+              <el-input v-model="aiForm.embeddingModel" placeholder="deepseek-chat" :disabled="!viewer?.editable" />
             </el-form-item>
           </div>
           <el-form-item label="AI API Key">
@@ -339,7 +426,7 @@
             <p class="effect-links-hint">下列内容已在其它 Tab 完整展示，此处不再重复拉取。</p>
             <div class="effect-link-actions">
               <el-button type="primary" link @click="goToTab('ops-effect')">运维效果评分（Tab 8）</el-button>
-              <el-button type="primary" link @click="goToTab('ops-audit-trace')">运维链路审计（Tab 4）</el-button>
+              <el-button type="primary" link @click="goToTab('audit')">统一审计中心（Tab 3）</el-button>
             </div>
             <p class="effect-links-sub">顶栏「安全自检」按钮可查看护栏探针详情。</p>
           </div>
@@ -366,9 +453,11 @@ import { ElMessage } from 'element-plus'
 import { Document, Download, Refresh } from '@element-plus/icons-vue'
 import {
   getPatrolCorrelationLatest,
+  reconcileSystemBootstrap,
   getSystemConfigEffective,
   saveSystemConfigEffective
 } from '../api'
+import OpsPageHeader from './OpsPageHeader.vue'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -379,6 +468,8 @@ const messages = ref([])
 const needsRestart = ref([])
 const savedAt = ref('')
 const patrolSnapshot = ref(null)
+const bootstrapStatus = ref(null)
+const bootstrapLoading = ref(false)
 const runtimeRef = ref(null)
 const collectorRef = ref(null)
 const aiRef = ref(null)
@@ -514,6 +605,18 @@ const activeProfileLine = computed(() => {
   const profiles = configPayload.value?.platform?.activeProfiles || []
   return Array.isArray(profiles) && profiles.length ? profiles.join(' / ') : 'default'
 })
+const bootstrapPlatformLine = computed(() => {
+  const platform = bootstrapStatus.value?.platform || {}
+  const parts = [bootstrapStatus.value?.platformKey, platform.osName, platform.osArch]
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+  return parts.length ? parts.join(' · ') : platformSummary.value
+})
+const bootstrapChangedKeys = computed(() => bootstrapStatus.value?.changedKeys || [])
+const bootstrapGeneratedKeys = computed(() => bootstrapStatus.value?.autoGeneratedKeys || [])
+const bootstrapCapabilityEntries = computed(() =>
+  Object.entries(bootstrapStatus.value?.capabilities || {}).filter(([, enabled]) => enabled === true)
+)
 const viewerRoleText = computed(() => viewer.value?.role === 1 ? '管理员' : '普通用户')
 const allItems = computed(() => {
   const groups = configPayload.value?.groups || {}
@@ -572,6 +675,7 @@ function assignFormState(data) {
   messages.value = Array.isArray(data.messages) ? data.messages : []
   needsRestart.value = Array.isArray(data.needsRestart) ? data.needsRestart : []
   savedAt.value = data.savedAt || ''
+  bootstrapStatus.value = data.bootstrap || null
 
   const runtime = groupIndex('runtime')
   runtimeForm.patrolInspectRoots = [...(runtime.patrolInspectRoots?.value || [])]
@@ -677,6 +781,20 @@ async function loadEffects() {
 
 async function reloadAll() {
   await Promise.all([reloadConfig(), loadEffects()])
+}
+
+async function reconcileBootstrapNow() {
+  if (!viewer.value?.editable) return
+  bootstrapLoading.value = true
+  try {
+    const data = await reconcileSystemBootstrap()
+    assignFormState(data)
+    ElMessage.success('启动探测与平台派生配置已重新收敛')
+  } catch (error) {
+    ElMessage.error(error.message || '重新探测失败')
+  } finally {
+    bootstrapLoading.value = false
+  }
 }
 
 async function saveAll() {
@@ -793,53 +911,77 @@ reloadAll()
   gap: 18px;
 }
 
-.hero-shell {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 22px 24px;
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.18), transparent 32%),
-    linear-gradient(135deg, #0f172a 0%, #13243b 50%, #0f766e 100%);
-  color: #f8fafc;
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
-}
-
-.eyebrow {
-  margin: 0 0 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 11px;
-  opacity: 0.74;
-}
-
-.hero-shell h1 {
-  margin: 0;
-  font-size: 30px;
-  line-height: 1.08;
-}
-
-.hero-text {
-  margin: 10px 0 0;
-  max-width: 60ch;
-  font-size: 14px;
-  line-height: 1.7;
-  color: rgba(248, 250, 252, 0.86);
-}
-
-.hero-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
+}
+
+.bootstrap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.bootstrap-card {
+  padding: 18px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+}
+
+.bootstrap-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.bootstrap-card__head strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 22px;
+  color: #0f172a;
+}
+
+.bootstrap-card__meta {
+  display: block;
+  margin-top: 10px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.bootstrap-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bootstrap-list {
+  margin-top: 12px;
+}
+
+.bootstrap-list__row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bootstrap-list__row + .bootstrap-list__row {
+  margin-top: 10px;
+}
+
+.bootstrap-list__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.bootstrap-empty {
+  font-size: 13px;
+  color: #64748b;
 }
 
 .summary-card,
@@ -1282,7 +1424,6 @@ reloadAll()
 }
 
 @media (max-width: 960px) {
-  .hero-shell,
   .save-bar,
   .card-head {
     flex-direction: column;

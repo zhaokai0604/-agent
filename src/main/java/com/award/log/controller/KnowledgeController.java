@@ -38,9 +38,13 @@ public class KnowledgeController {
     @Operation(summary = "上传知识文档（文本）")
     @PostMapping("/upload")
     public Result<Map<String, Object>> upload(@RequestBody Map<String, String> body) {
+        String content = body.getOrDefault("content", "");
+        if (content == null || content.isBlank()) {
+            return Result.error("文档内容不能为空");
+        }
         return Result.success(knowledgeBaseService.upload(
                 body.getOrDefault("title", "untitled"),
-                body.getOrDefault("content", ""),
+                content,
                 body.getOrDefault("category", "general"),
                 body.getOrDefault("source", "manual")
         ));

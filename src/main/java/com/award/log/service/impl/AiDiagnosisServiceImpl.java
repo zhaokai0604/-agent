@@ -1,5 +1,6 @@
 package com.award.log.service.impl;
 
+import com.award.log.agent.OpsReportFormat;
 import com.award.log.analysis.AiDiagnosisContextBuilder;
 import com.award.log.dto.EnhancedLogParseResultEntity;
 import com.award.log.util.AiChatResponseSupport;
@@ -55,6 +56,16 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
     @Autowired
     private ChatModel chatModel;
 
+    private static final String EMPTY_AI_REPLY =
+            "AI 未返回有效内容，请稍后重试或检查模型配置。";
+
+    private static String ensureDiagnosisText(String text, String fallback) {
+        if (text == null || text.isBlank()) {
+            return fallback;
+        }
+        return text;
+    }
+
     private Prompt createPrompt(List<EnhancedLogParseResultEntity> focusLines,
                                 List<EnhancedLogParseResultEntity> baselineLines) {
         StringBuilder logContent = new StringBuilder();
@@ -92,19 +103,20 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
             }
         }
 
-        String systemPrompt = "你担任 **Incident Response Lead（事件响应负责人）** 兼 **Staff SRE**：输入为经脱敏的异常日志切片，须在 **证据边界内** 撰写技术备忘录；**答复范围仅限于用户消息中的日志字段与正文**，不得引入无关事实；**宁可承认信息不足，也不得编造或套用无关模板**。\n\n" +
-                "输出必须严格遵循下列栏目（使用 **加粗** 标签引导小节标题，勿使用 Markdown `#` 标题）：\n\n" +
-                "**问题等级**：\n" +
-                "依据 **严重度（Severity）× 紧急度（Urgency）** 给出 Critical / High / Medium / Low；标注判定依据（仅使用输入中已有的时间与等级字段）。\n\n" +
-                "**问题描述**：\n" +
-                "用 **现象 — 受影响实体 — 影响面** 撰写；「受影响实体」**必须为日志原文中的名称子串**。若日志对应**多个不同时间戳**的问题，**按时间分小节**叙述，**不得**合并为单一事件叙事。\n\n" +
-                "**根因分析**：\n" +
-                "列出 **2–3 条 RCA 假设**（可对应不同时间点的问题），逐条 **置信度（高/中/低）**、**反证所需观测**；不确定时标题用 **「可能原因」**，每条 hypothesis 后必须有 **— 证据：** 引用（见下文总则）。**禁止**无证据使用「集中爆发」等表述。\n\n" +
-                "**问题修复**：\n" +
-                "针对每条高置信度假设给出 **Mitigation** 与 **Corrective Fix**，须点名日志中出现的异常类型/关键字；验证步骤尽量可复制；禁止与本片段无关的宽泛建议。\n\n" +
-                "**预防措施**：\n" +
-                "仅写与本片段证据相关的可度量项；不可套用与本日志无关的泛泛架构清单。\n" +
-                BATCH_EVIDENCE_AND_ANTI_HALLUCINATION;
+        String systemPrompt = "你担任 **Incident Response Lead（事件响应负责人）** 兼 **Staff SRE**：输入为经脱敏的异常日志切片，须在 **证据边界内** 撰写技术备忘录；**答复范围仅限于用户消息中的日志字段与正文**，不得引入无关事实；**宁可承认信息不足，也不得编造或套用无关模板**。\n\n"
+                + OpsReportFormat.markdownOutputSpecForPrompt() + "\n"
+                + "输出必须严格遵循下列栏目 (使用 `###` 子章节标题):\n\n"
+                + "### 问题等级\n"
+                + "依据 **严重度（Severity）× 紧急度（Urgency）** 给出 Critical / High / Medium / Low；标注判定依据（仅使用输入中已有的时间与等级字段）。\n\n"
+                + "### 问题描述\n"
+                + "用 **现象 — 受影响实体 — 影响面** 撰写；「受影响实体」**必须为日志原文中的名称子串**。若日志对应**多个不同时间戳**的问题，**按时间分小节**叙述，**不得**合并为单一事件叙事。\n\n"
+                + "### 根因分析\n"
+                + "列出 **2–3 条 RCA 假设**（可对应不同时间点的问题），逐条 **置信度（高/中/低）**、**反证所需观测**；不确定时标题用 **「可能原因」**，每条 hypothesis 后必须有 **— 证据：** 引用（见下文总则）。**禁止**无证据使用「集中爆发」等表述。\n\n"
+                + "### 问题修复\n"
+                + "针对每条高置信度假设给出 **Mitigation** 与 **Corrective Fix**，须点名日志中出现的异常类型/关键字；验证步骤尽量可复制；禁止与本片段无关的宽泛建议。\n\n"
+                + "### 预防措施\n"
+                + "仅写与本片段证据相关的可度量项；不可套用与本日志无关的泛泛架构清单。\n"
+                + BATCH_EVIDENCE_AND_ANTI_HALLUCINATION;
 
         int baselineCount = baselineLines == null ? 0 : baselineLines.size();
         String userPrompt = "【硬性事实】焦点异常日志条数 = " + focusLines.size()
@@ -126,7 +138,9 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
             return "经过智能分析，未在日志中发现明显异常，系统运行看起来很健康。";
         }
         try {
-            String result = AiChatResponseSupport.textFrom(chatModel.call(createPrompt(anomalies, List.of())));
+            String result = ensureDiagnosisText(
+                    AiChatResponseSupport.textFrom(chatModel.call(createPrompt(anomalies, List.of()))),
+                    EMPTY_AI_REPLY);
             log.info("AI 诊断报告生成成功");
             return result;
         } catch (Exception e) {
@@ -147,7 +161,9 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
         List<EnhancedLogParseResultEntity> baseline = AiDiagnosisContextBuilder.selectBaselineLines(fullResult);
         try {
-            String result = AiChatResponseSupport.textFrom(chatModel.call(createPrompt(focus, baseline)));
+            String result = ensureDiagnosisText(
+                    AiChatResponseSupport.textFrom(chatModel.call(createPrompt(focus, baseline))),
+                    EMPTY_AI_REPLY);
             log.info("AI 诊断报告生成成功（含对照样本 {} 条）", baseline.size());
             return result;
         } catch (Exception e) {
@@ -158,8 +174,10 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
 
     @Override
     public String diagnoseSingleLog(EnhancedLogParseResultEntity logEntry) {
+        if (logEntry == null) {
+            return "无效的日志数据。";
+        }
         log.info("单条日志快速诊断，日志等级: [{}]", logEntry.getSeverity());
-        if (logEntry == null) return "无效的日志数据。";
         
         String systemPrompt = "你是 **On-call Principal Engineer**。对单条异常日志执行 **极致压缩（Ultra-compressed）RCA**，面向已在 bridges / Slack 上的值班工程师。\n" +
                 "**答复仅能依据下方「时间」「日志内容」等用户字段**，禁止捏造或引入无关事件。\n" +
@@ -179,7 +197,9 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         try {
             Message systemMessage = new SystemMessage(systemPrompt);
             Message userMessage = new UserMessage(userPrompt);
-            String result = AiChatResponseSupport.textFrom(chatModel.call(new Prompt(List.of(systemMessage, userMessage))));
+            String result = ensureDiagnosisText(
+                    AiChatResponseSupport.textFrom(chatModel.call(new Prompt(List.of(systemMessage, userMessage)))),
+                    EMPTY_AI_REPLY);
             log.info("单条日志诊断成功");
             return result;
         } catch (Exception e) {
@@ -274,6 +294,9 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
 
     @Override
     public Flux<String> chatStream(String userMessageText) {
+        if (userMessageText == null || userMessageText.isBlank()) {
+            return Flux.just("请输入有效的运维问题描述。");
+        }
         String systemPrompt = "## Persona\n" +
                 "**Distinguished Cloud & Platform Engineer**：贯通 Linux（含企业发行版与麒麟系）、Windows Server、Kubernetes、容器运行时与托管中间件；熟悉 **Well-Architected** 可靠性支柱与 **CRE（Customer Reliability Engineering）** 沟通范式。\n\n" +
                 "## Operating Principles\n" +

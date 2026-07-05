@@ -1,9 +1,13 @@
 <template>
   <div class="ops-page knowledge-base">
-    <div class="page-header">
-      <h1>知识库</h1>
-      <p class="subtitle">运维 Runbook / 案例入库，对话时自动 RAG 检索相似经验</p>
-    </div>
+    <OpsPageHeader
+      title="知识库"
+      subtitle="运维 Runbook / 案例入库，对话时自动检索相似经验"
+    >
+      <template #actions>
+        <el-button :icon="Refresh" @click="refreshAll" :loading="loadingDocs">刷新</el-button>
+      </template>
+    </OpsPageHeader>
 
     <el-row :gutter="16" class="status-row">
       <el-col :xs="24" :md="8">
@@ -40,10 +44,10 @@
       show-icon
       class="conn-alert"
       title="知识库未就绪"
-      description="请启动 Qdrant（docker compose up -d qdrant）并配置 AI_API_KEY 以获得最佳语义检索效果。"
+      description="请启动 Qdrant（docker compose up -d qdrant）。启动后系统会自动写入 5 篇内置 Runbook；也可手动新增文档。"
     />
 
-    <el-tabs v-model="activeTab" type="border-card" class="kb-tabs">
+    <el-tabs v-model="activeTab" type="border-card" class="kb-tabs ops-tabs">
       <el-tab-pane label="文档管理" name="docs">
         <div class="toolbar">
           <el-button type="primary" :icon="Plus" @click="showUpload = true">新增文档</el-button>
@@ -79,13 +83,13 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="检索测试" name="search">
+      <el-tab-pane label="检索验证" name="search">
         <div class="search-panel">
           <el-input
             v-model="searchQuery"
             type="textarea"
             :rows="3"
-            placeholder="输入运维问题，测试知识库检索效果，例如：磁盘满了怎么清理"
+            placeholder="输入运维问题，验证知识库检索效果，例如：磁盘满了怎么清理"
           />
           <el-button type="primary" class="search-btn" :loading="searching" @click="runSearch">
             检索 Top-5
@@ -159,6 +163,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
+import OpsPageHeader from './OpsPageHeader.vue'
 import {
   getKnowledgeStatus,
   listKnowledgeDocuments,
@@ -189,7 +194,7 @@ const searchedOnce = ref(false)
 
 const embeddingLabel = computed(() => {
   if (status.value.embeddingMode === 'spring-ai') return 'DashScope 语义向量'
-  if (status.value.embeddingMode === 'local-fallback') return '本地降级（开发用）'
+  if (status.value.embeddingMode === 'local-fallback') return '本地降级（未连接向量库）'
   return '不可用'
 })
 
@@ -304,22 +309,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.knowledge-base .page-header {
-  margin-bottom: 16px;
-}
-
-.knowledge-base .page-header h1 {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.knowledge-base .subtitle {
-  margin: 0;
-  color: var(--ops-text-muted);
-  font-size: 13px;
-}
-
 .status-row {
   margin-bottom: 16px;
 }

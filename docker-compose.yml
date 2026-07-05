@@ -1,34 +1,12 @@
 # 本地/演示用依赖栈（应用进程仍建议本机 mvn / jar 启动，便于调试 MCP 与宿主路径）
 #
-# 启动：docker compose up -d mysql
+# 启动：docker compose up -d mariadb qdrant
 # 建表：首次需对库执行 src/main/resources/schema.sql（及所需增量 SQL）
-# MariaDB（麒麟联调）：docker compose --profile mariadb up -d mariadb
 #
 # 环境变量可复制根目录 .env.example
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: threshcore-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-log_analysis}
-      TZ: Asia/Shanghai
-    ports:
-      - "${MYSQL_PUBLISH_PORT:-3306}:3306"
-    command: >
-      --character-set-server=utf8mb4
-      --collation-server=utf8mb4_unicode_ci
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
-      interval: 8s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
   mariadb:
-    profiles: ["mariadb"]
     image: mariadb:10.11
     container_name: threshcore-mariadb
     restart: unless-stopped
@@ -37,7 +15,7 @@ services:
       MARIADB_DATABASE: ${MARIADB_DATABASE:-log_analysis}
       TZ: Asia/Shanghai
     ports:
-      - "${MARIADB_PUBLISH_PORT:-3307}:3306"
+      - "${MARIADB_PUBLISH_PORT:-3306}:3306"
     command: >
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci

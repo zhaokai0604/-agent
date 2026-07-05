@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.*;
 
@@ -172,53 +174,26 @@ public abstract class AbstractCommandExecutor {
 
             Process process = pb.start();
 
-            try (BufferedReader stdoutReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                 BufferedReader stderrReader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-
-                String line;
-                int outChars = 0;
-                while ((line = stdoutReader.readLine()) != null) {
-                    int inc = line.length() + (output.length() > 0 ? 1 : 0);
-                    if (outChars + inc > MAX_STDOUT_CHARS) {
-                        if (output.length() > 0) {
-                            output.append("\n");
-                        }
-                        output.append("...[stdout truncated at ").append(MAX_STDOUT_CHARS).append(" chars]");
-                        break;
-                    }
-                    outChars += inc;
-                    if (output.length() > 0) {
-                        output.append("\n");
-                    }
-                    output.append(line);
-                }
-                int errChars = 0;
-                while ((line = stderrReader.readLine()) != null) {
-                    int inc = line.length() + (errorOutput.length() > 0 ? 1 : 0);
-                    if (errChars + inc > MAX_STDERR_CHARS) {
-                        if (errorOutput.length() > 0) {
-                            errorOutput.append("\n");
-                        }
-                        errorOutput.append("...[stderr truncated]");
-                        break;
-                    }
-                    errChars += inc;
-                    if (errorOutput.length() > 0) {
-                        errorOutput.append("\n");
-                    }
-                    errorOutput.append(line);
-                }
-            }
+            CompletableFuture<Void> stdoutFuture = CompletableFuture.runAsync(
+                    () -> drainStream(process.getInputStream(), output, MAX_STDOUT_CHARS, "stdout"),
+                    executor);
+            CompletableFuture<Void> stderrFuture = CompletableFuture.runAsync(
+                    () -> drainStream(process.getErrorStream(), errorOutput, MAX_STDERR_CHARS, "stderr"),
+                    executor);
 
             if (timeoutMillis <= 0) {
+                CompletableFuture.allOf(stdoutFuture, stderrFuture).join();
                 exitCode = process.waitFor();
             } else {
                 boolean finished = process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS);
                 if (!finished) {
                     process.destroyForcibly();
+                    stdoutFuture.cancel(true);
+                    stderrFuture.cancel(true);
                     log.warn("命令执行超时 ({} ms): {}", timeoutMillis, command);
                     return new CommandResult(false, output.toString(), "command timeout", -1, true);
                 }
+                CompletableFuture.allOf(stdoutFuture, stderrFuture).join();
                 exitCode = process.exitValue();
             }
 
@@ -237,6 +212,40 @@ public abstract class AbstractCommandExecutor {
         } catch (Exception e) {
             log.error("执行命令失败: {} - {}", command, e.getMessage());
             return new CommandResult(false, null, e.getMessage(), -1, false);
+        }
+    }
+
+    private static Charset commandOutputCharset() {
+        if (OsRuntime.isWindows()) {
+            return Charset.forName("GBK");
+        }
+        return StandardCharsets.UTF_8;
+    }
+
+    private static void drainStream(java.io.InputStream stream, StringBuilder target, int maxChars, String label) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, commandOutputCharset()))) {
+            String line;
+            int chars = 0;
+            while ((line = reader.readLine()) != null) {
+                int inc = line.length() + (target.length() > 0 ? 1 : 0);
+                if (chars + inc > maxChars) {
+                    if (target.length() > 0) {
+                        target.append("\n");
+                    }
+                    target.append("...[").append(label).append(" truncated at ").append(maxChars).append(" chars]");
+                    break;
+                }
+                chars += inc;
+                if (target.length() > 0) {
+                    target.append("\n");
+                }
+                target.append(line);
+            }
+        } catch (Exception e) {
+            if (target.length() > 0) {
+                target.append("\n");
+            }
+            target.append("...[").append(label).append(" read error: ").append(e.getMessage()).append("]");
         }
     }
 

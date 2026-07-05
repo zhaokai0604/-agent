@@ -216,6 +216,11 @@ CREATE TABLE IF NOT EXISTS `decision_feedback` (
   `reviewer` varchar(64) DEFAULT NULL,
   `remark` varchar(500) DEFAULT NULL,
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `log_content` text DEFAULT NULL,
+  `log_level` varchar(32) DEFAULT NULL,
+  `log_template` varchar(255) DEFAULT NULL,
+  `model_confidence` double DEFAULT NULL,
+  `is_trained` tinyint(1) DEFAULT '0',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_decision_feedback` (`decision_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='决策人工反馈表';
@@ -295,3 +300,62 @@ CREATE TABLE IF NOT EXISTS `ops_failure_insight` (
   UNIQUE KEY `uk_insight_key` (`insight_key`),
   KEY `idx_security_code` (`security_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Reflexion 失败教训';
+
+-- 远程主机资产（SSH 纳管）
+CREATE TABLE IF NOT EXISTS `remote_host` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `alias` varchar(128) NOT NULL COMMENT '主机别名',
+  `hostname` varchar(255) NOT NULL COMMENT 'IP 或域名',
+  `port` int(11) NOT NULL DEFAULT '22' COMMENT 'SSH 端口',
+  `username` varchar(64) NOT NULL COMMENT 'SSH 登录用户',
+  `auth_type` varchar(16) NOT NULL DEFAULT 'KEY' COMMENT 'KEY | PASSWORD',
+  `encrypted_secret` text COMMENT 'AES-GCM 加密的私钥或密码',
+  `key_passphrase_encrypted` text COMMENT '私钥口令（加密）',
+  `tags` varchar(512) DEFAULT NULL COMMENT '逗号分隔标签',
+  `environment` varchar(32) DEFAULT 'production' COMMENT 'production|staging|test|dev',
+  `allowed_roles` varchar(128) NOT NULL DEFAULT 'ADMIN,OPS' COMMENT '可执行远程运维的角色',
+  `connect_timeout_ms` int(11) NOT NULL DEFAULT '15000',
+  `command_timeout_ms` int(11) NOT NULL DEFAULT '60000',
+  `enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `last_probe_at` datetime DEFAULT NULL,
+  `last_probe_ok` tinyint(1) DEFAULT NULL,
+  `last_probe_message` varchar(512) DEFAULT NULL,
+  `description` text,
+  `created_by` varchar(64) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_remote_host_alias` (`alias`),
+  KEY `idx_remote_host_enabled` (`enabled`),
+  KEY `idx_remote_host_env` (`environment`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='SSH 远程主机资产';
+
+-- Runbook approval and execution records
+CREATE TABLE IF NOT EXISTS `ops_runbook_approval` (
+  `id` bigint(20) NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `action_name` varchar(255) DEFAULT NULL,
+  `command_text` text,
+  `tool_name` varchar(128) DEFAULT NULL,
+  `parameters_json` longtext,
+  `requester` varchar(64) NOT NULL,
+  `status` varchar(32) NOT NULL,
+  `result_code` varchar(128) DEFAULT NULL,
+  `execution_implemented` tinyint(1) NOT NULL DEFAULT '0',
+  `approver` varchar(64) DEFAULT NULL,
+  `reason` text,
+  `operator` varchar(64) DEFAULT NULL,
+  `trace_id` varchar(64) DEFAULT NULL,
+  `mcp_result_json` longtext,
+  `mcp_success` tinyint(1) DEFAULT NULL,
+  `execution_message` text,
+  `write_mismatch` tinyint(1) DEFAULT NULL,
+  `write_mode` varchar(64) DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `approved_at` datetime DEFAULT NULL,
+  `executed_at` datetime DEFAULT NULL,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_runbook_requester_created` (`requester`, `created_at`),
+  KEY `idx_runbook_status_created` (`status`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Runbook approval and execution records';

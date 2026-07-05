@@ -4,6 +4,7 @@ import com.award.log.common.PageResult;
 import com.award.log.common.Result;
 import com.award.log.model.SysUser;
 import com.award.log.security.AuthInterceptor;
+import com.award.log.security.RequestUserResolver;
 import com.award.log.service.SysUserService;
 import com.award.log.service.impl.AiAuditLogService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -28,6 +29,9 @@ public class SysUserController {
 
     @Autowired
     private SysUserService sysUserService;
+
+    @Autowired
+    private RequestUserResolver requestUserResolver;
 
     @Autowired(required = false)
     private AiAuditLogService aiAuditLogService;
@@ -83,6 +87,9 @@ public class SysUserController {
     @PostMapping("/register")
     public Result<Integer> register(@RequestBody SysUser user) {
         log.info("用户注册: {}", user.getUsername());
+        if (user != null) {
+            user.setRole(null);
+        }
         Integer userId = sysUserService.registerUser(user);
         return userId != null
                 ? Result.success(userId)
@@ -153,17 +160,30 @@ public class SysUserController {
         return Result.success(sysUserService.userExists(userInfo.get("username")));
     }
 
-    @Operation(summary = "重置密码")
+    @Operation(summary = "重置密码（管理员）")
     @PostMapping("/reset-password")
-    public Result<Boolean> resetPassword(@RequestBody Map<String, String> passwordInfo) {
-        boolean success = sysUserService.resetPassword(passwordInfo.get("username"), passwordInfo.get("newPassword"));
+    public Result<Boolean> resetPassword(@RequestBody Map<String, String> passwordInfo,
+                                         HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
+            return Result.error(403, "需要管理员权限");
+        }
+        String username = passwordInfo.get("username");
+        String newPassword = passwordInfo.get("newPassword");
+        if (username == null || username.isBlank() || newPassword == null || newPassword.isBlank()) {
+            return Result.error("用户名与新密码不能为空");
+        }
+        boolean success = sysUserService.resetPassword(username, newPassword);
         return success ? Result.success(true) : Result.error("重置密码失败");
     }
 
     @Operation(summary = "更新用户角色")
     @PostMapping("/{userId}/role")
     public Result<Boolean> updateUserRole(@PathVariable String userId,
-                                          @RequestBody Map<String, Integer> roleInfo) {
+                                          @RequestBody Map<String, Integer> roleInfo,
+                                          HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
+            return Result.error(403, "需要管理员权限");
+        }
         Integer id = parseId(userId);
         if (id == null) {
             return Result.error("用户ID格式错误");

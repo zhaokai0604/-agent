@@ -1,5 +1,6 @@
 package com.award.log.security;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -17,7 +18,12 @@ public class HttpAuditSubject {
             if (attrs == null) {
                 return null;
             }
-            HttpSession session = attrs.getRequest().getSession(false);
+            HttpServletRequest request = attrs.getRequest();
+            Object requestUserId = request.getAttribute(RequestUserResolver.REQ_USER_ID);
+            if (requestUserId != null) {
+                return String.valueOf(requestUserId);
+            }
+            HttpSession session = request.getSession(false);
             if (session == null) {
                 return null;
             }

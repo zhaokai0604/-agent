@@ -273,13 +273,22 @@ function formatBytesCompact(value) {
   return `${size.toFixed(digits)} ${units[idx]}`
 }
 
+/** 字节数可读格式（供组件与其它 util 复用） */
+export function formatBytes(value) {
+  return formatBytesCompact(value)
+}
+
+function isByteField(key) {
+  return BYTE_FIELD_KEYS.has(String(key || ''))
+}
+
 function formatKbCompact(kb) {
   const n = Number(kb)
   if (!Number.isFinite(n)) return kb == null ? '—' : String(kb)
   return formatBytesCompact(n * 1024)
 }
 
-function formatScalar(val) {
+function formatScalar(val, key) {
   if (val == null) return '—'
   if (typeof val === 'boolean') return val ? '是' : '否'
   if (key === 'mode' && typeof val === 'string') {
@@ -294,7 +303,7 @@ function formatScalar(val) {
     if (u === 'ONLINE') return '在线'
     if (u === 'OFFLINE') return '离线'
   }
-  if (isByteField(key) && typeof val === 'number') return formatBytes(val)
+  if (isByteField(key) && typeof val === 'number') return formatBytesCompact(val)
   if (typeof val === 'number') return Number.isInteger(val) ? String(val) : val.toFixed(2)
   if (typeof val === 'string') {
     const translated = translateEnumValue(val)
@@ -396,7 +405,7 @@ function formatRowForDisplay (row, columns) {
     const v = out[col.prop]
     if (v == null || v === '') continue
     if (isByteField(col.prop) && typeof v === 'number') {
-      out[col.prop] = formatBytes(v)
+      out[col.prop] = formatBytesCompact(v)
     }
   }
   return out

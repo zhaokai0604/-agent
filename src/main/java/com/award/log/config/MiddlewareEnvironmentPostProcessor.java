@@ -25,6 +25,7 @@ public class MiddlewareEnvironmentPostProcessor implements EnvironmentPostProces
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        SystemBootstrapSupport.reconcileForCurrentPlatform("startup-auto-reconcile");
         MapPropertySource systemConfigSource = loadSystemConfigSource(environment);
         if (systemConfigSource != null) {
             environment.getPropertySources().addFirst(systemConfigSource);
@@ -32,6 +33,7 @@ public class MiddlewareEnvironmentPostProcessor implements EnvironmentPostProces
 
         boolean kafkaOn = Boolean.parseBoolean(environment.getProperty("award.middleware.kafka", "false"));
         boolean redisOn = Boolean.parseBoolean(environment.getProperty("award.middleware.redis", "false"));
+        boolean elasticsearchOn = Boolean.parseBoolean(environment.getProperty("spring.elasticsearch.enabled", "false"));
 
         LinkedHashSet<String> merged = new LinkedHashSet<>();
         Binder binder = Binder.get(environment);
@@ -60,11 +62,27 @@ public class MiddlewareEnvironmentPostProcessor implements EnvironmentPostProces
             merged.add("org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration");
             merged.add("org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration");
         }
+        if (!elasticsearchOn) {
+            merged.add("org.springframework.boot.autoconfigure.elasticsearch.ElasticsearchClientAutoConfiguration");
+            merged.add("org.springframework.boot.autoconfigure.elasticsearch.ElasticsearchRestClientAutoConfiguration");
+            merged.add("org.springframework.boot.autoconfigure.elasticsearch.ReactiveElasticsearchClientAutoConfiguration");
+            merged.add("org.springframework.boot.autoconfigure.data.elasticsearch.ElasticsearchDataAutoConfiguration");
+            merged.add("org.springframework.boot.autoconfigure.data.elasticsearch.ElasticsearchRepositoriesAutoConfiguration");
+            merged.add("org.springframework.boot.autoconfigure.data.elasticsearch.ReactiveElasticsearchRepositoriesAutoConfiguration");
+        }
 
         String csv = merged.stream().collect(Collectors.joining(","));
+        java.util.Map<String, Object> properties = new java.util.LinkedHashMap<>();
+        properties.put(EXCLUDE_KEY, csv);
+        if (!redisOn) {
+            properties.put("management.health.redis.enabled", "false");
+        }
+        if (!elasticsearchOn) {
+            properties.put("management.health.elasticsearch.enabled", "false");
+        }
         environment.getPropertySources().addFirst(new MapPropertySource(
                 "award-middleware-autoconfigure-exclude",
-                Collections.singletonMap(EXCLUDE_KEY, csv)));
+                properties));
     }
 
     private MapPropertySource loadSystemConfigSource(ConfigurableEnvironment environment) {

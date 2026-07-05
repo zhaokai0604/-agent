@@ -51,6 +51,21 @@ public class StartupConfigValidator {
         } else {
             log.info("[启动配置检查] 关键配置检查通过。");
         }
+
+        warnOptionalDevServices();
+    }
+
+    private void warnOptionalDevServices() {
+        if (Arrays.stream(environment.getActiveProfiles()).anyMatch("prod"::equalsIgnoreCase)) {
+            return;
+        }
+        if (!StringUtils.hasText(environment.getProperty("spring.ai.openai.api-key"))) {
+            log.warn("[启动配置检查] 未配置 AI_API_KEY：智能对话不可用，运维工具与巡检仍可用。");
+        }
+        if (!StringUtils.hasText(environment.getProperty("spring.datasource.password"))) {
+            log.warn("[启动配置检查] 未配置 DB_PASSWORD：日志分析/审计/历史任务将不可用。");
+        }
+        log.info("[启动配置检查] 知识库需 Qdrant（docker compose up -d qdrant）；详见控制台「环境状态」。");
     }
 
     private void require(String key, List<String> missing) {

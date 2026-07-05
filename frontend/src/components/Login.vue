@@ -225,7 +225,7 @@
     </div>
   </div>
   
-  <!-- 忘记密码弹窗 -->
+  <!-- 忘记密码说明 -->
   <el-dialog
     v-model="showForgotPassword"
     title="忘记密码"
@@ -233,93 +233,13 @@
     :close-on-click-modal="false"
     class="forgot-password-dialog"
   >
-    <div class="forgot-password-form">
-      <div class="form-group">
-        <div class="input-container">
-          <div class="input-icon">
-            <el-icon><User /></el-icon>
-          </div>
-          <input 
-            type="text" 
-            placeholder="请输入账号" 
-            v-model="forgotForm.username"
-            @input="validateAccount('forgot')"
-            class="form-input"
-          >
-        </div>
-        <div class="validate-tip" :class="{show: forgotForm.accountTip.show, error: forgotForm.accountTip.error, success: forgotForm.accountTip.success}">
-          <el-icon v-if="forgotForm.accountTip.error"><Close /></el-icon>
-          <el-icon v-else-if="forgotForm.accountTip.success"><Check /></el-icon>
-          {{ forgotForm.accountTip.text }}
-        </div>
-      </div>
-      
-      <div class="form-group">
-        <div class="input-container">
-          <div class="input-icon">
-            <el-icon><Lock /></el-icon>
-          </div>
-          <div class="password-input-wrapper">
-            <input 
-              :type="showForgotPasswordInput ? 'text' : 'password'" 
-              placeholder="请设置新密码" 
-              v-model="forgotForm.newPassword"
-              @input="validatePassword('forgot')"
-              class="form-input password-input"
-            >
-            <button type="button" class="password-toggle" @click="toggleForgotPassword">
-              <el-icon v-if="showForgotPasswordInput"><View /></el-icon>
-              <el-icon v-else><Hide /></el-icon>
-            </button>
-          </div>
-        </div>
-        <div class="validate-tip" :class="{show: forgotForm.pwdTip.show, error: forgotForm.pwdTip.error, success: forgotForm.pwdTip.success}">
-          <el-icon v-if="forgotForm.pwdTip.error"><Close /></el-icon>
-          <el-icon v-else-if="forgotForm.pwdTip.success"><Check /></el-icon>
-          {{ forgotForm.pwdTip.text }}
-        </div>
-        <!-- 密码强度条 -->
-        <div class="password-strength" :class="{show: forgotForm.newPassword.trim() !== ''}">
-          <div class="strength-bar" :class="forgotForm.strengthClass[0]"></div>
-          <div class="strength-bar" :class="forgotForm.strengthClass[1]"></div>
-          <div class="strength-bar" :class="forgotForm.strengthClass[2]"></div>
-        </div>
-      </div>
-      
-      <div class="form-group">
-        <div class="input-container">
-          <div class="input-icon">
-            <el-icon><Check /></el-icon>
-          </div>
-          <div class="password-input-wrapper">
-            <input 
-              :type="showForgotPasswordInput ? 'text' : 'password'" 
-              placeholder="请确认新密码" 
-              v-model="forgotForm.confirmPassword"
-              @input="validateConfirmPassword"
-              class="form-input password-input"
-            >
-            <button type="button" class="password-toggle" @click="toggleForgotPassword">
-              <el-icon v-if="showForgotPasswordInput"><View /></el-icon>
-              <el-icon v-else><Hide /></el-icon>
-            </button>
-          </div>
-        </div>
-        <div class="validate-tip" :class="{show: forgotForm.confirmTip.show, error: forgotForm.confirmTip.error, success: forgotForm.confirmTip.success}">
-          <el-icon v-if="forgotForm.confirmTip.error"><Close /></el-icon>
-          <el-icon v-else-if="forgotForm.confirmTip.success"><Check /></el-icon>
-          {{ forgotForm.confirmTip.text }}
-        </div>
-      </div>
-    </div>
-    
+    <p class="forgot-password-hint">
+      出于安全考虑，密码无法自助重置。请联系系统管理员处理，或在登录后于「个人中心 → 账号安全」修改密码。
+    </p>
     <template #footer>
       <div class="dialog-footer">
-        <button class="btn cancel-btn" @click="showForgotPassword = false">
-          <span>取消</span>
-        </button>
-        <button class="btn reset-btn" @click="handleResetPassword" :disabled="isResetting">
-          <span>{{ isResetting ? '重置中...' : '重置密码' }}</span>
+        <button class="btn reset-btn" @click="showForgotPassword = false">
+          <span>知道了</span>
         </button>
       </div>
     </template>
@@ -332,7 +252,7 @@
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Check, Close, View, Hide, ArrowRight } from '@element-plus/icons-vue'
-import { login, register, checkUserExists, resetPassword } from '../api'
+import { login, register, checkUserExists } from '../api'
 import UserServiceAgreement from './UserServiceAgreement.vue'
 
 const agreementVisible = ref(false)
@@ -647,7 +567,10 @@ const handleLogin = async () => {
     emit('login-success')
   } catch (error) {
     console.error('登录失败:', error)
-    ElMessage.error('登录失败，请检查用户名和密码')
+    // 业务错误（用户名/密码错）已由 axios 拦截器提示；此处仅补网络/后端不可达
+    if (!error?.response) {
+      ElMessage.error('无法连接后端，请确认 Spring Boot 已在 8088 端口运行')
+    }
   }
 }
 
@@ -1187,6 +1110,13 @@ const handleResetPassword = async () => {
 }
 
 /* 忘记密码 */
+.forgot-password-hint {
+  margin: 0;
+  line-height: 1.65;
+  color: #606266;
+  font-size: 14px;
+}
+
 .forgot-password {
   margin-left: 20px;
 }

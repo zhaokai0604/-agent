@@ -1,17 +1,25 @@
 package com.award.log.controller;
 
 import com.award.log.analysis.AiDiagnosisContextBuilder;
+import com.award.log.security.RequestUserResolver;
 import com.award.log.service.AiDiagnosisService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.publisher.Flux;
 
 import java.util.Map;
 
@@ -30,131 +38,136 @@ public class AiDiagnosisController {
     private AnalysisTaskManager taskManager;
 
     @Autowired
+    private RequestUserResolver requestUserResolver;
+
+    @Autowired
     @Qualifier("sseTaskExecutor")
     private ThreadPoolTaskExecutor sseExecutor;
 
-    @Operation(summary = "通用 AI 运维对话 (流式响应)")
+    @Operation(summary = "General AI ops chat stream")
     @PostMapping(value = "/chat", produces = TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chatStream(@RequestBody Map<String, String> payload) {
+    public SseEmitter chatStream(@RequestBody(required = false) Map<String, String> payload) {
+        if (payload == null) {
+            return shortMessageEmitter("Request body cannot be empty");
+        }
         String rawMessage = payload.getOrDefault("message", "").trim();
         if (rawMessage.isBlank()) {
-            SseEmitter emitter = new SseEmitter(1000L);
-            try {
-                emitter.send("请求内容不能为空");
-                emitter.complete();
-            } catch (Exception ignored) {}
-            return emitter;
+            return shortMessageEmitter("Request message cannot be empty");
         }
         final String message = rawMessage.length() > AiDiagnosisContextBuilder.CHAT_USER_MESSAGE_MAX_CHARS
                 ? rawMessage.substring(0, AiDiagnosisContextBuilder.CHAT_USER_MESSAGE_MAX_CHARS)
                 : rawMessage;
-        log.info("收到 AI 运维对话请求: [{}]", message);
         SseEmitter emitter = new SseEmitter(180000L);
         sseExecutor.execute(() -> {
             try {
-                aiDiagnosisService.chatStream(message)
-                        .doOnNext(chunk -> {
+                Flux<String> stream = aiDiagnosisService.chatStream(message);
+                if (stream == null) {
+                    emitter.send("AI 服务暂不可用");
+                    emitter.complete();
+                    return;
+                }
+                stream.doOnNext(chunk -> {
                             try {
-                                if (chunk != null) emitter.send(chunk);
+                                if (chunk != null) {
+                                    emitter.send(chunk);
+                                }
                             } catch (Exception e) {
-                                log.error("SSE 发送数据块失败", e);
+                                log.error("Failed to send SSE chunk", e);
                                 emitter.completeWithError(e);
                             }
                         })
-                        .doOnComplete(() -> {
-                            log.info("AI 运维对话响应完成");
-                            emitter.complete();
-                        })
+                        .doOnComplete(emitter::complete)
                         .doOnError(e -> {
-                            log.error("AI 运维对话流发生错误", e);
+                            log.error("AI chat stream failed", e);
                             emitter.completeWithError(e);
                         })
                         .subscribe();
             } catch (Exception e) {
-                log.error("执行 AI 对话任务时发生异常", e);
+                log.error("Execute AI chat stream failed", e);
                 emitter.completeWithError(e);
             }
         });
         return emitter;
     }
 
-    @Operation(summary = "执行 AI 故障诊断 (流式响应)")
+    @Operation(summary = "Run AI diagnosis stream")
     @GetMapping(value = "/stream/{taskId}", produces = TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter performDiagnosisStream(@PathVariable String taskId) {
-        log.info("开启 AI 故障诊断流式接口，任务ID: [{}]", taskId);
-        SseEmitter emitter = new SseEmitter(180000L); // 3分钟超时
-
+    public SseEmitter performDiagnosisStream(HttpServletRequest request, @PathVariable String taskId) {
+        SseEmitter emitter = new SseEmitter(180000L);
         try {
-            TaskInfo task = taskManager.getTask(taskId);
+            Integer userId = requestUserResolver.currentUserId(request);
+            boolean admin = requestUserResolver.isAdmin(request);
+            TaskInfo task = taskManager.getTaskForUser(taskId, userId, admin);
             if (task == null) {
-                log.warn("诊断流开启失败：任务未找到，任务ID: [{}]", taskId);
-                try {
-                    emitter.send("任务未找到，请确认任务ID是否正确。");
-                    emitter.complete();
-                } catch (Exception ignored) {}
+                emitter.send("Task not found or access denied");
+                emitter.complete();
                 return emitter;
             }
-
             if (task.getResult() == null) {
-                log.warn("诊断流开启失败：任务分析未完成，任务ID: [{}]，状态: [{}]", taskId, task.getStatus());
-                try {
-                    emitter.send("任务分析未完成，请等待分析完成后再进行诊断。当前状态: " + task.getStatus());
-                    emitter.complete();
-                } catch (Exception ignored) {}
+                emitter.send("Analysis has not completed yet. Current status: " + task.getStatus());
+                emitter.complete();
                 return emitter;
             }
-
-            log.info("任务 [{}] 使用完整解析结果进行流式诊断（多样模板 + 正常对照）", taskId);
-            
             sseExecutor.execute(() -> {
                 StringBuilder fullResponse = new StringBuilder();
                 try {
-                    aiDiagnosisService.generateDiagnosisStreamFromFullResult(task.getResult())
-                            .doOnNext(chunk -> {
+                    Flux<String> stream = aiDiagnosisService.generateDiagnosisStreamFromFullResult(task.getResult());
+                    if (stream == null) {
+                        emitter.send("Diagnosis service unavailable");
+                        emitter.complete();
+                        return;
+                    }
+                    stream.doOnNext(chunk -> {
                                 try {
                                     if (chunk != null) {
-                                        // 发送数据块
                                         emitter.send(chunk);
                                         fullResponse.append(chunk);
                                     }
                                 } catch (Exception e) {
-                                    log.error("SSE 发送诊断数据块失败", e);
-                                    try {
-                                        emitter.send("诊断流传输异常: " + e.getMessage());
-                                    } catch (Exception ignored) {}
+                                    log.error("Failed to send diagnosis stream chunk", e);
                                     emitter.complete();
                                 }
                             })
                             .doOnComplete(() -> {
-                                log.info("任务 [{}] 的 AI 流式诊断完成，正在持久化完整结果", taskId);
-                                // 完成后保存完整结果到数据库
                                 taskManager.updateAiDiagnosis(taskId, fullResponse.toString());
                                 emitter.complete();
                             })
                             .doOnError(e -> {
-                                log.error("AI 诊断流发生错误，任务ID: [{}]", taskId, e);
+                                log.error("Diagnosis stream failed for task {}", taskId, e);
                                 try {
-                                    emitter.send("诊断失败: " + e.getMessage());
-                                } catch (Exception ignored) {}
+                                    emitter.send("Diagnosis failed");
+                                } catch (Exception ignored) {
+                                }
                                 emitter.complete();
                             })
-                            .subscribe(); // 触发流
+                            .subscribe();
                 } catch (Exception e) {
-                    log.error("执行流式诊断任务时发生异常", e);
+                    log.error("Execute diagnosis stream failed for task {}", taskId, e);
                     try {
-                        emitter.send("诊断执行异常: " + e.getMessage());
-                    } catch (Exception ignored) {}
+                        emitter.send("Diagnosis execution failed");
+                    } catch (Exception ignored) {
+                    }
                     emitter.complete();
                 }
             });
         } catch (Exception e) {
-            log.error("处理 AI 诊断请求时发生异常，任务ID: [{}]", taskId, e);
+            log.error("Prepare diagnosis stream failed for task {}", taskId, e);
             try {
-                emitter.send("处理诊断请求时发生异常: " + e.getMessage());
-            } catch (Exception ignored) {}
+                emitter.send("Diagnosis request failed");
+            } catch (Exception ignored) {
+            }
             emitter.complete();
         }
+        return emitter;
+    }
 
+    private static SseEmitter shortMessageEmitter(String message) {
+        SseEmitter emitter = new SseEmitter(1000L);
+        try {
+            emitter.send(message);
+            emitter.complete();
+        } catch (Exception ignored) {
+        }
         return emitter;
     }
 }

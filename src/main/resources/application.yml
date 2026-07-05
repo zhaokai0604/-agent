@@ -2,6 +2,10 @@ server:
   port: 8088
   servlet:
     context-path: /award-log
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
   tomcat:
     # 生产建议 120000–600000（ms）；超长仅保留给特殊导出接口时再通过反向代理单独放宽
     connection-timeout: ${SERVER_TOMCAT_CONNECTION_TIMEOUT_MS:600000}
@@ -11,6 +15,19 @@ award:
   middleware:
     kafka: ${AWARD_MIDDLEWARE_KAFKA:false}
     redis: ${AWARD_MIDDLEWARE_REDIS:false}
+
+app:
+  cors:
+    allowed-origin-patterns:
+      - http://localhost:*
+      - http://127.0.0.1:*
+    allow-credentials: true
+  management:
+    enabled: ${APP_MANAGEMENT_ENABLED:false}
+    port: ${APP_MANAGEMENT_PORT:8089}
+  # 执行审计（/admin/audit/ai/recent）：true 时任意已登录用户可读；生产务必 false（仅管理员）
+  security:
+    ai-audit-relaxed-read: ${APP_AI_AUDIT_RELAXED_READ:false}
 
 spring:
   application:
@@ -40,10 +57,10 @@ spring:
       max-file-size: 200MB
       max-request-size: 200MB
   
-  # Database：本地/Windows 默认 MySQL；麒麟迁移时设 DB_URL=jdbc:mariadb://… 与 DB_DRIVER=org.mariadb.jdbc.Driver
+  # Database：MariaDB 10.6+（jdbc:mariadb + org.mariadb.jdbc.Driver）
   datasource:
-    driver-class-name: ${DB_DRIVER:com.mysql.cj.jdbc.Driver}
-    url: ${DB_URL:jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    driver-class-name: ${DB_DRIVER:org.mariadb.jdbc.Driver}
+    url: ${DB_URL:jdbc:mariadb://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
   
@@ -126,6 +143,9 @@ spring:
 
 # Log Collector Configuration
 log:
+  analysis:
+    max-concurrent-tasks: ${LOG_ANALYSIS_MAX_CONCURRENT:4}
+    detail-batch-size: ${LOG_ANALYSIS_DETAIL_BATCH:1000}
   elasticsearch:
     async:
       enabled: ${LOG_ES_ASYNC_ENABLED:true}
@@ -232,14 +252,14 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+  health:
+    redis:
+      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:false}
+    elasticsearch:
+      enabled: ${MANAGEMENT_HEALTH_ELASTICSEARCH_ENABLED:false}
   metrics:
     tags:
       application: ${spring.application.name}
-
-# 执行审计（/admin/audit/ai/recent）：true 时任意已登录用户可读；生产务必 false（仅管理员）
-app:
-  security:
-    ai-audit-relaxed-read: ${APP_AI_AUDIT_RELAXED_READ:false}
 
 # 智能运维 Agent：最小权限执行（Linux 下配置 sudoers；Windows 开发可设 enabled: false）
 agent:
@@ -268,9 +288,13 @@ agent:
     # 只读工具面追加禁止的 MCP 工具名（逗号分隔，与 Bean 短名一致），例：DiskTool
     read-only-extra-denied-tool-beans: ${AGENT_READ_ONLY_EXTRA_DENY_TOOLS:}
     intent-use-ml: ${AGENT_INTENT_USE_ML:false}
+  # MCP 工具 @Cacheable 进程内 TTL（毫秒）
+  mcp:
+    cache-ttl-ms: ${AGENT_MCP_CACHE_TTL_MS:45000}
   assistant:
     use-tool-agent-default: ${AGENT_ASSISTANT_USE_TOOLS:true}
     tool-agent-stream-chunk-chars: ${AGENT_ASSISTANT_TOOL_CHUNK:900}
+    tool-catalog-prompt-max: ${AGENT_ASSISTANT_TOOL_CATALOG_MAX:28}
     orchestrator:
       enabled: ${AGENT_ORCHESTRATOR_ENABLED:true}
       log-clean-days: ${AGENT_ORCH_LOG_DAYS:30}
@@ -291,8 +315,8 @@ agent:
     health-check-host: ${AGENT_AUTONOMOUS_HEALTH_HOST:127.0.0.1}
     health-check-ports: ${AGENT_AUTONOMOUS_HEALTH_PORTS:8080,80,443}
     ping-target: ${AGENT_AUTONOMOUS_PING_TARGET:8.8.8.8}
-    # 巡检后是否再跑全栈 AutonomousOpsOrchestrator；默认 false，与 ops.auto-remediation 二选一
-    run-after-patrol: ${AGENT_AUTONOMOUS_AFTER_PATROL:false}
+    # 已废弃：巡检后全栈 autonomous 双轨已下线，固定仅保留巡检自动修复单轨
+    run-after-patrol: false
   trust:
     notify-max: ${AGENT_TRUST_NOTIFY_MAX:6.0}
   log-safety:
@@ -337,6 +361,7 @@ knowledge:
   search-top-k: ${KNOWLEDGE_SEARCH_TOP_K:5}
   vector-dimensions: ${KNOWLEDGE_VECTOR_DIM:1024}
   allow-local-fallback-embedding: ${KNOWLEDGE_LOCAL_EMBED_FALLBACK:true}
+  seed-on-startup: ${KNOWLEDGE_SEED_ON_STARTUP:true}
 
 # 主动巡检：磁盘/告警/异常日志突增/僵尸进程/Drain 新模板；WebSocket channel=patrol_alert；GET /api/ops/patrol/alerts/recent
 # 自动修复：巡检后按磁盘阈值对白名单临时目录 / 日志根执行真实清理（WebSocket channel=patrol_remediation）；生产可关 OPS_AUTO_REMEDIATION_ENABLED
@@ -381,6 +406,8 @@ ops:
     anomaly-spike-factor: ${OPS_PATROL_ANOMALY_SPIKE:2.0}
     inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:/var/log,/tmp}
     dedup-window-ms: ${OPS_PATROL_DEDUP_MS:900000}
+    history-retention-days: ${OPS_PATROL_HISTORY_RETENTION_DAYS:30}
+    history-cleanup-cron: ${OPS_PATROL_HISTORY_CLEANUP_CRON:0 15 4 * * ?}
     disk-hotspot-top-n: ${OPS_PATROL_DISK_HOTSPOT_N:5}
     disk-hotspot-max-depth: ${OPS_PATROL_DISK_HOTSPOT_DEPTH:3}
     disk-hotspot-visit-budget: ${OPS_PATROL_DISK_HOTSPOT_BUDGET:12000}
@@ -389,5 +416,3 @@ ops:
     anomaly-baseline-ema-alpha: ${OPS_PATROL_ANOMALY_EMA:0.35}
     # 启动后异步跑一次巡检，填充 correlation/latest，避免首屏空窗
     warm-on-startup: ${OPS_PATROL_WARM_START:true}
-
-

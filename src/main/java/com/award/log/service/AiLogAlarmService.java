@@ -40,6 +40,8 @@ public interface AiLogAlarmService {
      */
     void processAlarmsByTaskId(String taskId);
 
+    void processAlarmsByTaskIdForUser(String taskId, Integer userId, boolean admin);
+
     /**
      * 获取告警历史列表
      * @param pageNum 页码
@@ -50,14 +52,29 @@ public interface AiLogAlarmService {
      */
     Map<String, Object> getAlarmHistory(int pageNum, int pageSize, String level, String taskId);
 
+    Map<String, Object> getAlarmHistoryForUser(int pageNum, int pageSize, String level, String taskId,
+                                               Integer userId, boolean admin);
+
     /**
      * 获取告警统计分析（可选按级别、任务筛选，与列表筛选口径一致）
      */
     Map<String, Object> getAlarmStatistics(int days, String level, String taskId);
 
+    Map<String, Object> getAlarmStatisticsForUser(int days, String level, String taskId,
+                                                  Integer userId, boolean admin);
+
     List<Map<String, Object>> getAlarmTrend(int days, String level, String taskId);
+
+    List<Map<String, Object>> getAlarmTrendForUser(int days, String level, String taskId,
+                                                   Integer userId, boolean admin);
 
     List<Map<String, Object>> getAlarmLevelDistribution(int days, String level, String taskId);
 
+    List<Map<String, Object>> getAlarmLevelDistributionForUser(int days, String level, String taskId,
+                                                               Integer userId, boolean admin);
+
     List<Map<String, Object>> getAlarmRootCauseStatistics(int days, String level, String taskId);
+
+    List<Map<String, Object>> getAlarmRootCauseStatisticsForUser(int days, String level, String taskId,
+                                                                 Integer userId, boolean admin);
 }

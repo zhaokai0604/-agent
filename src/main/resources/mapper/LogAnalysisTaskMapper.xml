@@ -4,6 +4,7 @@
 
     <resultMap id="BaseResultMap" type="com.award.log.model.LogAnalysisTask">
         <id column="task_id" jdbcType="VARCHAR" property="taskId" />
+        <result column="user_id" jdbcType="INTEGER" property="userId" />
         <result column="file_name" jdbcType="VARCHAR" property="fileName" />
         <result column="status" jdbcType="VARCHAR" property="status" />
         <result column="progress" jdbcType="INTEGER" property="progress" />
@@ -19,20 +20,52 @@
     </resultMap>
 
     <sql id="Base_Column_List">
-        task_id, file_name, status, progress, current_step, error_msg, ai_diagnosis, total_logs, anomaly_count, anomaly_rate, cost_time, create_time, update_time
+        task_id, user_id, file_name, status, progress, current_step, error_msg, ai_diagnosis,
+        total_logs, anomaly_count, anomaly_rate, cost_time, create_time, update_time
+    </sql>
+
+    <sql id="Filter_Conditions">
+        <if test="fileName != null and fileName != ''">
+            and file_name like concat('%', #{fileName}, '%')
+        </if>
+        <if test="status != null and status != ''">
+            and status = #{status}
+        </if>
+        <if test="createTimeStart != null">
+            and create_time &gt;= #{createTimeStart}
+        </if>
+        <if test="createTimeEnd != null">
+            and create_time &lt;= #{createTimeEnd}
+        </if>
     </sql>
 
     <select id="selectById" parameterType="java.lang.String" resultMap="BaseResultMap">
-        select 
+        select
         <include refid="Base_Column_List" />
         from log_analysis_task
         where task_id = #{taskId,jdbcType=VARCHAR}
+    </select>
+
+    <select id="selectByIdAndUserId" resultMap="BaseResultMap">
+        select
+        <include refid="Base_Column_List" />
+        from log_analysis_task
+        where task_id = #{taskId,jdbcType=VARCHAR}
+          and user_id = #{userId,jdbcType=INTEGER}
     </select>
 
     <select id="selectAll" resultMap="BaseResultMap">
         select
         <include refid="Base_Column_List" />
         from log_analysis_task
+        order by create_time desc
+    </select>
+
+    <select id="selectAllByUserId" resultMap="BaseResultMap">
+        select
+        <include refid="Base_Column_List" />
+        from log_analysis_task
+        where user_id = #{userId,jdbcType=INTEGER}
         order by create_time desc
     </select>
 
@@ -49,18 +82,19 @@
         <include refid="Base_Column_List" />
         from log_analysis_task
         <where>
-            <if test="fileName != null and fileName != ''">
-                and file_name like concat('%', #{fileName}, '%')
-            </if>
-            <if test="status != null and status != ''">
-                and status = #{status}
-            </if>
-            <if test="createTimeStart != null">
-                and create_time &gt;= #{createTimeStart}
-            </if>
-            <if test="createTimeEnd != null">
-                and create_time &lt;= #{createTimeEnd}
-            </if>
+            <include refid="Filter_Conditions" />
+        </where>
+        order by create_time desc
+        limit #{offset}, #{limit}
+    </select>
+
+    <select id="selectPageWithFilterByUserId" resultMap="BaseResultMap">
+        select
+        <include refid="Base_Column_List" />
+        from log_analysis_task
+        <where>
+            and user_id = #{userId,jdbcType=INTEGER}
+            <include refid="Filter_Conditions" />
         </where>
         order by create_time desc
         limit #{offset}, #{limit}
@@ -68,6 +102,12 @@
 
     <select id="countAll" resultType="java.lang.Long">
         select count(*) from log_analysis_task
+    </select>
+
+    <select id="countAllByUserId" resultType="java.lang.Long">
+        select count(*)
+        from log_analysis_task
+        where user_id = #{userId,jdbcType=INTEGER}
     </select>
 
     <select id="countSinceDays" resultType="java.lang.Long">
@@ -80,18 +120,16 @@
         select count(*)
         from log_analysis_task
         <where>
-            <if test="fileName != null and fileName != ''">
-                and file_name like concat('%', #{fileName}, '%')
-            </if>
-            <if test="status != null and status != ''">
-                and status = #{status}
-            </if>
-            <if test="createTimeStart != null">
-                and create_time &gt;= #{createTimeStart}
-            </if>
-            <if test="createTimeEnd != null">
-                and create_time &lt;= #{createTimeEnd}
-            </if>
+            <include refid="Filter_Conditions" />
+        </where>
+    </select>
+
+    <select id="countWithFilterByUserId" resultType="java.lang.Long">
+        select count(*)
+        from log_analysis_task
+        <where>
+            and user_id = #{userId,jdbcType=INTEGER}
+            <include refid="Filter_Conditions" />
         </where>
     </select>
 
@@ -99,6 +137,7 @@
         insert into log_analysis_task
         <trim prefix="(" suffix=")" suffixOverrides=",">
             <if test="taskId != null">task_id,</if>
+            <if test="userId != null">user_id,</if>
             <if test="fileName != null">file_name,</if>
             <if test="status != null">status,</if>
             <if test="progress != null">progress,</if>
@@ -114,6 +153,7 @@
         </trim>
         <trim prefix="values (" suffix=")" suffixOverrides=",">
             <if test="taskId != null">#{taskId,jdbcType=VARCHAR},</if>
+            <if test="userId != null">#{userId,jdbcType=INTEGER},</if>
             <if test="fileName != null">#{fileName,jdbcType=VARCHAR},</if>
             <if test="status != null">#{status,jdbcType=VARCHAR},</if>
             <if test="progress != null">#{progress,jdbcType=INTEGER},</if>
@@ -132,6 +172,7 @@
     <update id="updateById" parameterType="com.award.log.model.LogAnalysisTask">
         update log_analysis_task
         <set>
+            <if test="userId != null">user_id = #{userId,jdbcType=INTEGER},</if>
             <if test="fileName != null">file_name = #{fileName,jdbcType=VARCHAR},</if>
             <if test="status != null">status = #{status,jdbcType=VARCHAR},</if>
             <if test="progress != null">progress = #{progress,jdbcType=INTEGER},</if>
@@ -147,13 +188,13 @@
         </set>
         where task_id = #{taskId,jdbcType=VARCHAR}
     </update>
-    
+
     <select id="getTaskStatusCount" resultType="java.util.Map">
         select status, count(*) as count
         from log_analysis_task
         group by status
     </select>
-    
+
     <select id="getTaskTrend" parameterType="java.lang.Integer" resultType="java.util.Map">
         select date(create_time) as date, count(*) as count
         from log_analysis_task
@@ -161,19 +202,19 @@
         group by date(create_time)
         order by date
     </select>
-    
+
     <select id="getTaskCompletionStatistics" resultType="java.util.Map">
         select status, count(*) as count
         from log_analysis_task
         group by status
     </select>
-    
+
     <select id="getAverageProcessingTime" resultType="java.lang.Double">
         select avg(cost_time) as avgTime
         from log_analysis_task
         where cost_time > 0
     </select>
-    
+
     <delete id="deleteById" parameterType="java.lang.String">
         delete from log_analysis_task
         where task_id = #{taskId,jdbcType=VARCHAR}

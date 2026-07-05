@@ -20,12 +20,16 @@ import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.LogAnalysisService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
+import com.award.log.util.LogAnalysisArtifactCleaner;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
+
+import jakarta.annotation.PostConstruct;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -43,11 +47,18 @@ import java.util.stream.Collectors;
 public class LogAnalysisServiceImpl implements LogAnalysisService {
 
     /** 智能决策逐条评估上限，避免大文件在 89% 后长时间无进度 */
-    private static final int ROUTER_EVAL_MAX = 400;
+    private static final int ROUTER_EVAL_MAX = 150;
+    /** 热循环内取消检查间隔（行），暂停/取消仅在边界处阻塞 */
+    private static final int CANCEL_CHECK_EVERY_LINES = 256;
+    private static final long ANALYSIS_QUEUE_WAIT_MS = 60_000L;
+
+    @Value("${log.analysis.max-concurrent-tasks:4}")
+    private int maxConcurrentAnalysisTasks;
+
+    private Semaphore analysisConcurrencyGate;
 
     // 任务状态映射，用于跟踪每个任务的状态
     private final ConcurrentHashMap<String, String> taskStatusMap = new ConcurrentHashMap<>();
-    
 
     // 任务断点信息映射，用于实现断点续传
     private final ConcurrentHashMap<String, Map<String, Object>> taskBreakpointMap = new ConcurrentHashMap<>();
@@ -60,6 +71,9 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
     @Autowired
     private AnalysisTaskManager taskManager;
+
+    @Autowired
+    private LogAnalysisArtifactCleaner artifactCleaner;
 
     @Autowired
     @Qualifier("logAnalysisExecutor")
@@ -78,16 +92,29 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     @Autowired
     private DrainParserFactory drainParserFactory;
 
-    // 暂停任务方法（空实现）
+    @PostConstruct
+    void initAnalysisConcurrencyGate() {
+        analysisConcurrencyGate = new Semaphore(Math.max(1, maxConcurrentAnalysisTasks), true);
+        log.info("日志分析并发上限: {}", Math.max(1, maxConcurrentAnalysisTasks));
+    }
+
+    // 暂停任务：阻塞分析线程直至恢复或取消
     @Override
     public void pauseAnalysis(String taskId) {
-        log.info("[任务状态变更] 暂停任务功能已移除，任务ID: [{}]", taskId);
+        log.info("[任务状态变更] 暂停任务，任务ID: [{}]", taskId);
+        taskStatusMap.put(taskId, "PAUSED");
+        taskManager.pauseTask(taskId);
     }
-    
-    // 恢复任务方法（空实现）
+
     @Override
     public void resumeAnalysis(String taskId) {
-        log.info("[任务状态变更] 恢复任务功能已移除，任务ID: [{}]", taskId);
+        String status = taskStatusMap.get(taskId);
+        if (!"PAUSED".equals(status)) {
+            throw new IllegalStateException("仅运行中已暂停的任务可恢复；任务不在内存暂停态或已结束");
+        }
+        log.info("[任务状态变更] 恢复任务，任务ID: [{}]", taskId);
+        taskStatusMap.put(taskId, "PROCESSING");
+        taskManager.resumeTask(taskId);
     }
     
     // 添加取消任务方法
@@ -102,6 +129,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         
         // 2. 更新数据库状态
         taskManager.failTask(taskId, "任务被用户取消");
+        artifactCleaner.purgeTaskArtifacts(taskId);
         log.debug("[任务状态变更] 数据库状态已更新，任务ID: [{}]，状态变更为 [CANCELLED]", taskId);
         
 
@@ -132,20 +160,38 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         generateHtmlReport(results, config);
     }
 
-    @Async
+    @Async("logAnalysisExecutor")
     @Override
     public void startAnalysisAsync(File logFile, String taskId) {
-        // 检查文件是否已经分析过
         String filePath = logFile.getAbsolutePath();
-        if (analyzedFiles.contains(filePath)) {
-            log.info("【文件跳过】文件 {} 已经分析过，跳过分析", filePath);
-            taskStatusMap.put(taskId, "COMPLETED");
-            taskManager.completeTask(taskId, new ArrayList<>(), new TaskInfo.TaskSummary());
+        String dedupKey = buildFileDedupKey(logFile);
+        if (analyzedFiles.contains(dedupKey)) {
+            log.warn("【文件跳过】文件 {} 内容与本次运行中已完成任务相同，拒绝重复分析", filePath);
+            taskStatusMap.put(taskId, "FAILED");
+            taskManager.failTask(taskId, "该文件内容与本次运行中已分析的任务相同，请修改文件或重新上传后再试");
+            artifactCleaner.purgeTaskArtifacts(taskId);
             return;
         }
-        
-        // 标记文件为已分析
-        analyzedFiles.add(filePath);
+
+        boolean acquired = false;
+        try {
+            acquired = analysisConcurrencyGate.tryAcquire(ANALYSIS_QUEUE_WAIT_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (!acquired) {
+            log.warn("【分析排队超时】任务 {} 等待并发槽位超过 {} ms", taskId, ANALYSIS_QUEUE_WAIT_MS);
+            taskStatusMap.put(taskId, "FAILED");
+            taskManager.failTask(taskId, "当前分析任务较多，请稍后重试");
+            artifactCleaner.purgeTaskArtifacts(taskId);
+            try {
+                Files.deleteIfExists(logFile.toPath());
+            } catch (Exception ignored) {
+            }
+            return;
+        }
+
+        analyzedFiles.add(dedupKey);
         
         // 初始化任务状态
         taskStatusMap.put(taskId, "PROCESSING");
@@ -173,7 +219,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 if (logShards.isEmpty()) {
 
                     taskManager.failTask(taskId, "文件内容为空，未读取到日志数据。");
-
+                    artifactCleaner.purgeTaskArtifacts(taskId);
                     return;
 
                 }
@@ -355,23 +401,9 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 throw new RuntimeException("任务被用户取消");
             }
             
-            taskManager.updateProgress(taskId, 92, "异常检测完成，正在生成统计报告...");
+            taskManager.updateProgress(taskId, 92, "异常检测完成，正在写入结果...");
 
-            // 5. 结果导出 (保留原有逻辑，生成文件到 output 目录作为备份)
-            if (config.enableCsvExport) {
-                exportCsvResult(finalResult, config);
-            }
-            if (config.enableVisualReport) {
-                generateHtmlReport(finalResult, config);
-            }
-            
-            // 检查任务是否被取消
-            if (Thread.currentThread().isInterrupted() || "CANCELLED".equals(taskStatusMap.get(taskId))) {
-                log.info("【任务取消】报告生成被中断，任务ID: [{}]", taskId);
-                throw new RuntimeException("任务被用户取消");
-            }
-            
-            // 6. 完成任务，生成 Summary
+            // 5. 先完成任务入库，缩短轮询等待；CSV/HTML 报告异步生成
             long endTime = System.currentTimeMillis();
             long costTime = endTime - startTime;
             log.info("【分析任务完成】总耗时: [{} 毫秒].", costTime);
@@ -382,8 +414,15 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             summary.setAnomalyCount((int)anomalyCount);
             summary.setAnomalyRate(finalResult.isEmpty() ? 0 : (double)anomalyCount / finalResult.size());
             summary.setCostTime(costTime);
+
+            final boolean exportCsv = config.enableCsvExport;
+            final boolean exportHtml = config.enableVisualReport;
+            final String exportOutputDir = config.outputDir;
+            final List<EnhancedLogParseResultEntity> exportSnapshot = (exportCsv || exportHtml)
+                    ? new ArrayList<>(finalResult)
+                    : List.of();
             
-            // 7. AI告警处理：文件级别整体告警
+            // 6. AI告警处理：文件级别整体告警
             if (config.enableAnomalyDetect && anomalyCount > 0) {
                 log.info("【AI告警启动】开始处理异常日志，生成智能告警...");
                 log.info("【AI告警启动】异常日志数量: [{}]", anomalyCount);
@@ -446,20 +485,55 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
             taskManager.completeTask(taskId, finalResult, summary);
 
-            // 清理临时文件
-            try { Files.deleteIfExists(logFile.toPath()); } catch (Exception ignored) {}
+            if (!exportSnapshot.isEmpty()) {
+                logAnalysisExecutor.execute(() -> exportReportArtifactsAsync(taskId, exportSnapshot, exportOutputDir, exportCsv, exportHtml));
+            }
+
+            // 成功：仅删除上传临时文件，保留 output 供下载
+            artifactCleaner.deleteUploadTemps(taskId);
 
         } catch (Exception e) {
             // 检查任务是否被取消，如果是，则不记录为失败
             if (!"CANCELLED".equals(taskStatusMap.get(taskId))) {
                 log.error("分析任务失败", e);
                 taskManager.failTask(taskId, "分析过程发生意外错误: " + e.getMessage());
+                artifactCleaner.purgeTaskArtifacts(taskId);
             } else {
                 log.info("任务 [{}] 已被取消，不再处理异常", taskId);
             }
         } finally {
-            // 移除线程映射，释放资源
+            if (acquired) {
+                analysisConcurrencyGate.release();
+            }
             taskThreadMap.remove(taskId);
+            if (logFile != null) {
+                try {
+                    Files.deleteIfExists(logFile.toPath());
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private void exportReportArtifactsAsync(String taskId,
+                                            List<EnhancedLogParseResultEntity> results,
+                                            String outputDir,
+                                            boolean exportCsv,
+                                            boolean exportHtml) {
+        EngineConfig config = new EngineConfig();
+        config.outputDir = outputDir;
+        config.enableCsvExport = exportCsv;
+        config.enableVisualReport = exportHtml;
+        try {
+            if (exportCsv) {
+                exportCsvResult(results, config);
+            }
+            if (exportHtml) {
+                generateHtmlReport(results, config);
+            }
+            log.info("【报告导出完成】任务ID: [{}]", taskId);
+        } catch (Exception e) {
+            log.warn("【报告导出失败】任务ID: [{}], {}", taskId, e.getMessage());
         }
     }
 
@@ -474,10 +548,14 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         List<EnhancedLogParseResultEntity> result = new ArrayList<>();
         List<String> tempLines = new ArrayList<>(currentBatchSize);
         int processedInShard = 0;
-        
+        int lineIndex = 0;
+
         for (String line : batchLines) {
-            // 检查任务是否被暂停或取消
-            checkCancelStatus(taskId);
+            if (lineIndex++ % CANCEL_CHECK_EVERY_LINES == 0) {
+                checkCancelStatus(taskId);
+            } else {
+                checkCancelledOnly(taskId);
+            }
             
             // 检查当前线程是否被中断
             if (Thread.currentThread().isInterrupted()) {
@@ -512,13 +590,43 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     }
     
     /**
-     * 检查任务是否被取消
+     * 检查任务是否被取消；暂停时在边界处阻塞等待恢复。
      */
     private void checkCancelStatus(String taskId) {
-        // 检查任务是否被取消
+        checkCancelledOnly(taskId);
+        waitWhilePaused(taskId);
+    }
+
+    private void checkCancelledOnly(String taskId) {
         if ("CANCELLED".equals(taskStatusMap.get(taskId))) {
             log.info("任务 [{}] 已被取消，退出执行", taskId);
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private void waitWhilePaused(String taskId) {
+        while ("PAUSED".equals(taskStatusMap.get(taskId))) {
+            if ("CANCELLED".equals(taskStatusMap.get(taskId))) {
+                log.info("任务 [{}] 暂停期间被取消", taskId);
+                Thread.currentThread().interrupt();
+                return;
+            }
+            try {
+                Thread.sleep(400);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("任务被中断", e);
+            }
+        }
+    }
+
+    private String buildFileDedupKey(File logFile) {
+        try {
+            return logFile.getAbsolutePath() + "|"
+                    + Files.getLastModifiedTime(logFile.toPath()).toMillis() + "|"
+                    + logFile.length();
+        } catch (IOException e) {
+            return logFile.getAbsolutePath() + "|" + logFile.length();
         }
     }
 
@@ -650,10 +758,13 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         Map<String, Integer> tempCodeMap = new HashMap<>();
         int codeId = 0;
         List<double[]> featureList = new ArrayList<>();
-        for (EnhancedLogParseResultEntity res : resultList) {
-            // 检查任务是否被暂停或取消
-            checkCancelStatus(taskId);
-            
+        for (int i = 0; i < resultList.size(); i++) {
+            if (i % CANCEL_CHECK_EVERY_LINES == 0) {
+                checkCancelStatus(taskId);
+            } else {
+                checkCancelledOnly(taskId);
+            }
+            EnhancedLogParseResultEntity res = resultList.get(i);
             tempCodeMap.putIfAbsent(res.getTemplateId(), codeId++);
             double[] feature = {
                     res.getTimestamp() / 1000.0,
@@ -677,9 +788,12 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         List<Double> windowScores = new ArrayList<>();
         
         for (int i = 0; i < resultList.size(); i++) {
-            // 检查任务是否被暂停或取消
-            checkCancelStatus(taskId);
-            
+            if (i % CANCEL_CHECK_EVERY_LINES == 0) {
+                checkCancelStatus(taskId);
+            } else {
+                checkCancelledOnly(taskId);
+            }
+
             EnhancedLogParseResultEntity res = resultList.get(i);
             double[] vec = featureList.get(i);
             
@@ -823,6 +937,10 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             candidates.add(logEntity);
         }
 
+        candidates.sort(Comparator
+                .comparingDouble(EnhancedLogParseResultEntity::getAnomalyScore).reversed()
+                .thenComparing(r -> r.getSeverity().getSeverityScore(), Comparator.reverseOrder()));
+
         int candidateTotal = candidates.size();
         int evalLimit = Math.min(candidateTotal, ROUTER_EVAL_MAX);
         if (candidateTotal > evalLimit) {
@@ -956,7 +1074,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                     .append("</tr>");
         });
         html.append("</table><footer>")
-                .append("© 2025 智能日志分析引擎 | 作者：赵文凯 日志分析组 | Apache License 2.0<br/>")
+                .append("© 2026 ThreshCore 智能日志分析引擎 | 赵文凯 日志分析组<br/>")
                 .append("迭代式Drain算法+分级脱敏+四维异常检测+加权特征分析+多线程分片 | 运行环境：JDK8+ 零依赖</footer>")
                 .append("</body></html>");
         try (BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(htmlPath), StandardCharsets.UTF_8))) {

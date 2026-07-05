@@ -1,6 +1,9 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.McpNestedResultSupport;
+import com.award.log.security.OpsPathPolicy;
+import com.award.log.util.OsRuntime;
+import com.award.log.util.WindowsDriveSupport;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -9,8 +12,10 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
-import java.util.Locale;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,6 +29,7 @@ public class DiskAnalyzeTool {
 
     private final DiskTool diskTool;
     private final ObjectMapper objectMapper;
+    private final OpsPathPolicy opsPathPolicy;
 
     @Tool(name = "analyzeDiskPressure",
             description = "磁盘压力综合诊断：df/分区使用率汇总 + 可选热点目录 du 排序（白名单路径）。")
@@ -37,13 +43,57 @@ public class DiskAnalyzeTool {
         out.put("overview", McpNestedResultSupport.unwrap(objectMapper, diskTool.checkDiskUsage()));
         boolean hot = Boolean.TRUE.equals(includeHotspots);
         if (hot) {
-            String root = (rootPath != null && !rootPath.isBlank()) ? rootPath.trim()
-                    : (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win") ? "C:\\Windows\\Logs" : "/var/log");
-            int n = topN != null ? Math.min(Math.max(topN, 3), 40) : 12;
-            out.put("hotspotsRank", McpNestedResultSupport.unwrap(objectMapper, diskTool.rankDiskUsageUnderPath(root, 2, n)));
+            if (OsRuntime.isWindows() && (rootPath == null || rootPath.isBlank())) {
+                out.put("multiDrive", buildWindowsMultiDriveAnalysis(topN));
+            } else {
+                String root = (rootPath != null && !rootPath.isBlank()) ? rootPath.trim()
+                        : "/var/log";
+                int n = topN != null ? Math.min(Math.max(topN, 3), 40) : 12;
+                out.put("hotspotsRank", McpNestedResultSupport.unwrap(objectMapper,
+                        diskTool.rankDiskUsageUnderPath(root, 2, n)));
+            }
         }
-        out.put("hint", "结合 overview 使用率与 hotspots 大目录定位垃圾文件或日志膨胀；高使用率时需关注 I/O wait（可用 OsInsightTool / 系统监控）。");
+        out.put("hint", "结合 overview 各盘使用率与 Temp/热点目录定位垃圾文件；高占用盘优先清理 Temp 与白名单目录。");
         out.put("durationMs", System.currentTimeMillis() - t0);
         return objectMapper.writeValueAsString(out);
+    }
+
+    private List<Map<String, Object>> buildWindowsMultiDriveAnalysis(Integer topN) throws JsonProcessingException {
+        int n = topN != null ? Math.min(Math.max(topN, 3), 20) : 12;
+        List<Map<String, Object>> drives = new ArrayList<>();
+        for (String driveRoot : buildWindowsInsightRoots()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("drive", WindowsDriveSupport.driveLabel(driveRoot));
+            row.put("root", driveRoot);
+            try {
+                Object hotspots = McpNestedResultSupport.unwrap(objectMapper,
+                        diskTool.rankDiskUsageUnderPath(driveRoot, 2, Math.min(n, 8)));
+                row.put("hotspots", hotspots);
+            } catch (Exception e) {
+                row.put("hotspotsError", e.getMessage());
+            }
+            drives.add(row);
+        }
+        return drives;
+    }
+
+    private List<String> buildWindowsInsightRoots() {
+        LinkedHashSet<String> roots = new LinkedHashSet<>();
+        addWindowsRoots(roots, opsPathPolicy.snapshotReadPrefixes());
+        addWindowsRoots(roots, opsPathPolicy.snapshotTempCleanRoots());
+        addWindowsRoots(roots, opsPathPolicy.snapshotLogCleanupRoots());
+        return new ArrayList<>(roots);
+    }
+
+    private void addWindowsRoots(LinkedHashSet<String> roots, List<String> candidates) {
+        if (candidates == null) {
+            return;
+        }
+        for (String candidate : candidates) {
+            String normalized = OpsPathPolicy.normalizeWindowsPath(candidate);
+            if (!normalized.isEmpty() && opsPathPolicy.isAllowedDiskInsightRoot(normalized)) {
+                roots.add(normalized);
+            }
+        }
     }
 }

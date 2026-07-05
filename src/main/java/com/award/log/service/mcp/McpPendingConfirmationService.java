@@ -1,0 +1,122 @@
+package com.award.log.service.mcp;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Service
+public class McpPendingConfirmationService {
+
+    private static final long MIN_TTL_MS = 60_000L;
+
+    private final ConcurrentHashMap<String, PendingConfirmation> pending = new ConcurrentHashMap<>();
+
+    @Value("${agent.security.confirmation-ttl-ms:900000}")
+    private long confirmationTtlMs;
+
+    public PendingConfirmation register(
+            String confirmationId,
+            String toolName,
+            Map<String, Object> parameters,
+            String userMessage,
+            String userInstruction,
+            String requester) {
+        purgeExpired();
+        long now = System.currentTimeMillis();
+        PendingConfirmation value = new PendingConfirmation(
+                confirmationId,
+                toolName,
+                immutableCopy(parameters),
+                normalizeText(userMessage),
+                normalizeText(userInstruction),
+                normalizeRequester(requester),
+                now,
+                now + Math.max(MIN_TTL_MS, confirmationTtlMs));
+        pending.put(confirmationId, value);
+        return value;
+    }
+
+    public TakeResult take(String confirmationId, String requester) {
+        if (confirmationId == null || confirmationId.isBlank()) {
+            return new TakeResult(null, TakeStatus.NOT_FOUND);
+        }
+        long now = System.currentTimeMillis();
+        String normalizedRequester = normalizeRequester(requester);
+        Holder holder = new Holder();
+        pending.compute(confirmationId.trim(), (key, existing) -> {
+            if (existing == null) {
+                holder.status = TakeStatus.NOT_FOUND;
+                return null;
+            }
+            if (existing.isExpired(now)) {
+                holder.status = TakeStatus.EXPIRED;
+                return null;
+            }
+            if (!existing.requester().equals(normalizedRequester)) {
+                holder.status = TakeStatus.REQUESTER_MISMATCH;
+                return existing;
+            }
+            holder.status = TakeStatus.OK;
+            holder.pending = existing;
+            return null;
+        });
+        return new TakeResult(holder.pending, holder.status);
+    }
+
+    private void purgeExpired() {
+        long now = System.currentTimeMillis();
+        pending.entrySet().removeIf(entry -> entry.getValue().isExpired(now));
+    }
+
+    private static Map<String, Object> immutableCopy(Map<String, Object> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return Map.of();
+        }
+        return Collections.unmodifiableMap(new LinkedHashMap<>(parameters));
+    }
+
+    private static String normalizeRequester(String requester) {
+        if (requester == null || requester.isBlank()) {
+            return "anonymous";
+        }
+        return requester.trim();
+    }
+
+    private static String normalizeText(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    public enum TakeStatus {
+        OK,
+        NOT_FOUND,
+        EXPIRED,
+        REQUESTER_MISMATCH
+    }
+
+    public record TakeResult(PendingConfirmation pending, TakeStatus status) {
+    }
+
+    public record PendingConfirmation(
+            String confirmationId,
+            String toolName,
+            Map<String, Object> parameters,
+            String userMessage,
+            String userInstruction,
+            String requester,
+            long createdAtMs,
+            long expiresAtMs) {
+
+        boolean isExpired(long nowMs) {
+            return nowMs > expiresAtMs;
+        }
+    }
+
+    private static final class Holder {
+        private PendingConfirmation pending;
+        private TakeStatus status = TakeStatus.NOT_FOUND;
+    }
+}

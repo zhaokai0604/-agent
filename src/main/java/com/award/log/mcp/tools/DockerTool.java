@@ -112,7 +112,13 @@ public class DockerTool extends AbstractCommandExecutor {
                     new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
         }
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 60_000L);
-        return wrapCommandResult("docker-restart", cmd, r, start, r.success());
+        if (isSimulatedDryRun(r)) {
+            return buildError("全局演练模式已启用：docker restart 被模拟执行，容器未实际重启", start);
+        }
+        if (!r.success()) {
+            return buildError("docker restart failed: " + (r.error() != null ? r.error() : r.output()), start);
+        }
+        return buildWriteSuccess("docker-restart", name, cmd, r, start);
     }
 
     @Tool(name = "stopDockerContainer",
@@ -145,7 +151,13 @@ public class DockerTool extends AbstractCommandExecutor {
                     new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
         }
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 60_000L);
-        return wrapCommandResult("docker-stop", cmd, r, start, r.success());
+        if (isSimulatedDryRun(r)) {
+            return buildError("全局演练模式已启用：docker stop 被模拟执行，容器未实际停止", start);
+        }
+        if (!r.success()) {
+            return buildError("docker stop failed: " + (r.error() != null ? r.error() : r.output()), start);
+        }
+        return buildWriteSuccess("docker-stop", name, cmd, r, start);
     }
 
     /** MCP HTTP 网关：operation = list | inspect | restart | stop */
@@ -194,6 +206,26 @@ public class DockerTool extends AbstractCommandExecutor {
 
     private String truncate(String s) {
         return s.length() > 4000 ? s.substring(0, 4000) + "..." : s;
+    }
+
+    private String buildWriteSuccess(String tool, String containerName, List<String> cmd, CommandResult r, long start)
+            throws JsonProcessingException {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("mode", "EXECUTED");
+        body.put("tool", tool);
+        body.put("containerName", containerName);
+        body.put("command", String.join(" ", cmd));
+        body.put("success", true);
+        if (r.output() != null && !r.output().isBlank()) {
+            body.put("output", truncate(r.output()));
+        }
+        long duration = System.currentTimeMillis() - start;
+        return objectMapper.writeValueAsString(
+                new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
+    }
+
+    private boolean isSimulatedDryRun(CommandResult result) {
+        return result != null && result.output() != null && result.output().contains("[DRY-RUN]");
     }
 
     private String buildError(String msg, long start) throws JsonProcessingException {

@@ -4,11 +4,13 @@ import com.award.log.common.PageResult;
 import com.award.log.common.Result;
 import com.award.log.mapper.DecisionFeedbackMapper;
 import com.award.log.model.DecisionFeedback;
+import com.award.log.security.RequestUserResolver;
 import com.award.log.service.impl.ContinuousLearningService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -16,18 +18,21 @@ import java.util.List;
 @Slf4j
 @Tag(name = "决策反馈管理")
 @RestController
-@RequestMapping("/decision-feedback")
+@RequestMapping("/api/decision-feedback")
+@RequiredArgsConstructor
 public class DecisionFeedbackController {
 
-    @Autowired
-    private DecisionFeedbackMapper decisionFeedbackMapper;
-
-    @Autowired
-    private ContinuousLearningService continuousLearningService;
+    private final DecisionFeedbackMapper decisionFeedbackMapper;
+    private final ContinuousLearningService continuousLearningService;
+    private final RequestUserResolver requestUserResolver;
 
     @Operation(summary = "提交决策反馈")
     @PostMapping("/submit")
-    public Result<Long> submitFeedback(@RequestBody DecisionFeedback feedback) {
+    public Result<Long> submitFeedback(@RequestBody DecisionFeedback feedback,
+                                       HttpServletRequest request) {
+        if (requestUserResolver.currentUserId(request) == null) {
+            return Result.error(401, "请先登录");
+        }
         log.info("[决策反馈] 收到反馈提交，decisionId: [{}], actualAlert: [{}]",
                 feedback.getDecisionId(), feedback.getActualAlert());
         try {
@@ -43,7 +48,14 @@ public class DecisionFeedbackController {
 
     @Operation(summary = "批量提交决策反馈")
     @PostMapping("/submit/batch")
-    public Result<Integer> submitFeedbackBatch(@RequestBody List<DecisionFeedback> feedbacks) {
+    public Result<Integer> submitFeedbackBatch(@RequestBody List<DecisionFeedback> feedbacks,
+                                               HttpServletRequest request) {
+        if (requestUserResolver.currentUserId(request) == null) {
+            return Result.error(401, "请先登录");
+        }
+        if (feedbacks == null || feedbacks.isEmpty()) {
+            return Result.error(400, "反馈列表不能为空");
+        }
         log.info("[决策反馈] 收到批量反馈提交，数量: [{}]", feedbacks.size());
         int successCount = 0;
         for (DecisionFeedback feedback : feedbacks) {
@@ -62,7 +74,11 @@ public class DecisionFeedbackController {
     @GetMapping("/untrained")
     public Result<PageResult<DecisionFeedback>> getUntrainedSamples(
             @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "20") int pageSize) {
+            @RequestParam(defaultValue = "20") int pageSize,
+            HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
+            return Result.error(403, "仅管理员可查看未训练样本");
+        }
         log.info("[决策反馈] 获取未训练样本，pageNum: [{}], pageSize: [{}]", pageNum, pageSize);
         try {
             List<DecisionFeedback> samples = decisionFeedbackMapper.selectUntrainedSamples(1000);
@@ -87,7 +103,10 @@ public class DecisionFeedbackController {
 
     @Operation(summary = "获取未训练样本统计")
     @GetMapping("/untrained/count")
-    public Result<Integer> getUntrainedCount() {
+    public Result<Integer> getUntrainedCount(HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
+            return Result.error(403, "仅管理员可查看未训练样本统计");
+        }
         try {
             int count = decisionFeedbackMapper.countUntrained();
             return Result.success(count);
@@ -99,7 +118,10 @@ public class DecisionFeedbackController {
 
     @Operation(summary = "手动触发模型训练")
     @PostMapping("/train/manual")
-    public Result<Boolean> triggerManualTraining() {
+    public Result<Boolean> triggerManualTraining(HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
+            return Result.error(403, "仅管理员可触发模型训练");
+        }
         log.info("[决策反馈] 收到手动训练触发请求");
         try {
             boolean success = continuousLearningService.triggerManualTraining();
@@ -112,7 +134,13 @@ public class DecisionFeedbackController {
 
     @Operation(summary = "标记样本为已训练")
     @PostMapping("/mark-trained")
-    public Result<Integer> markAsTrained(@RequestBody List<Long> ids) {
+    public Result<Integer> markAsTrained(@RequestBody List<Long> ids, HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) {
+            return Result.error(403, "仅管理员可标记训练样本");
+        }
+        if (ids == null || ids.isEmpty()) {
+            return Result.error(400, "样本 ID 列表不能为空");
+        }
         log.info("[决策反馈] 标记样本为已训练，数量: [{}]", ids.size());
         try {
             int count = decisionFeedbackMapper.markAsTrained(ids);

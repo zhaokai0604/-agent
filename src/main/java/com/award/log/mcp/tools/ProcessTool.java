@@ -310,17 +310,25 @@ public class ProcessTool extends AbstractCommandExecutor {
             return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
         }
         AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(cmd, 30_000L);
+        if (isSimulatedDryRun(result)) {
+            return buildErrorResponse("全局演练模式已启用：结束进程请求被模拟执行，进程未实际终止", startTime);
+        }
+        if (!result.success()) {
+            return buildErrorResponse("结束进程失败: " + (result.error() != null ? result.error() : result.output()), startTime);
+        }
         Map<String, Object> body = new LinkedHashMap<>();
+        body.put("mode", "EXECUTED");
         body.put("pid", pid);
         body.put("command", String.join(" ", cmd));
-        body.put("success", result.success());
+        body.put("success", true);
         body.put("output", result.output());
-        if (!result.success()) {
-            body.put("error", result.error());
-        }
         String data = objectMapper.writeValueAsString(body);
         long duration = System.currentTimeMillis() - startTime;
         return buildSuccessResponse(data, duration, false);
+    }
+
+    private boolean isSimulatedDryRun(AbstractCommandExecutor.CommandResult result) {
+        return result != null && result.output() != null && result.output().contains("[DRY-RUN]");
     }
 
     /** MCP HTTP 网关：operation = list | kill */

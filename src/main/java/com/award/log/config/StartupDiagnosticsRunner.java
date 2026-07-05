@@ -57,6 +57,17 @@ public class StartupDiagnosticsRunner implements ApplicationRunner {
         log.info("[ThreshCore] platform os={} arch={} kylin={} loongArch={} deliveryMatch={}",
                 OsRuntime.osName(), OsRuntime.osArch(), OsRuntime.isKylin(), OsRuntime.isLoongArch(),
                 OsRuntime.isKylin() && OsRuntime.isLoongArch());
+        log.info("[ThreshCore] user.dir={}", System.getProperty("user.dir"));
+        log.info("[ThreshCore] system config dir={}", SystemConfigFileSupport.activeConfigDir());
+        log.info("[ThreshCore] overrideFile={} exists={}",
+                SystemConfigFileSupport.overrideFile().toAbsolutePath(),
+                SystemConfigFileSupport.overrideFile().toFile().exists());
+        log.info("[ThreshCore] secretFile={} exists={}",
+                SystemConfigFileSupport.secretFile().toAbsolutePath(),
+                SystemConfigFileSupport.secretFile().toFile().exists());
+        log.info("[ThreshCore] pathPolicyFile={} exists={}",
+                SystemConfigFileSupport.pathPolicyFile().toAbsolutePath(),
+                SystemConfigFileSupport.pathPolicyFile().toFile().exists());
         log.info("[ThreshCore] classpath:application-local.yml 是否存在={}", localPresent);
         log.info("[ThreshCore] spring.datasource.password 已配置={}（未配置时 JDBC 将失败；开发请用 application-local.yml 或 DB_PASSWORD）", dbPassOk);
         log.info("[ThreshCore] 日志：本控制台 + 相对启动目录下 logs/award-log.log");

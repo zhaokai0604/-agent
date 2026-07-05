@@ -3,7 +3,7 @@
  */
 export function parseRemediationPlan (markdown) {
   if (!markdown || typeof markdown !== 'string') return null
-  const match = markdown.match(/##\s*处置计划\s*\n([\s\S]*?)(?=\n##\s+|\n---\s*\n\*\*数据依据|$)/i)
+  const match = markdown.match(/##\s*处置计划\s*\n([\s\S]*?)(?=\n##\s+|\n>\s*\*\*数据依据|$)/i)
   if (!match) return null
   const body = match[1].trim()
   if (!body) return null

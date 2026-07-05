@@ -35,10 +35,19 @@ public class OpsAuditTraceService {
                             "id BIGINT PRIMARY KEY AUTO_INCREMENT," +
                             "trace_id VARCHAR(64) NOT NULL," +
                             "channel VARCHAR(32) NOT NULL," +
+                            "audit_kind VARCHAR(32)," +
+                            "request_channel VARCHAR(32)," +
+                            "stage VARCHAR(64)," +
+                            "decision VARCHAR(64)," +
                             "user_input TEXT," +
                             "risk_level VARCHAR(32)," +
                             "security_outcome VARCHAR(64)," +
                             "tool_name VARCHAR(128)," +
+                            "target_type VARCHAR(64)," +
+                            "target_name VARCHAR(255)," +
+                            "parent_trace_id VARCHAR(64)," +
+                            "confirmation_id VARCHAR(64)," +
+                            "effect_summary TEXT," +
                             "execution_ok TINYINT(1) DEFAULT 0," +
                             "result_summary TEXT," +
                             "steps_json LONGTEXT," +
@@ -60,6 +69,17 @@ public class OpsAuditTraceService {
     private void migrateLegacyTable() {
         tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN operator_user_id VARCHAR(64) NULL");
         tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN policy_version VARCHAR(64) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_host_id VARCHAR(32) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_host_label VARCHAR(256) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN audit_kind VARCHAR(32) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN request_channel VARCHAR(32) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN stage VARCHAR(64) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN decision VARCHAR(64) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_type VARCHAR(64) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_name VARCHAR(255) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN parent_trace_id VARCHAR(64) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN confirmation_id VARCHAR(64) NULL");
+        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN effect_summary TEXT NULL");
     }
 
     private void tryAlter(String sql) {
@@ -84,6 +104,45 @@ public class OpsAuditTraceService {
             String operatorUserId,
             String policyVersion
     ) {
+        save(traceId, channel, userInput, riskLevel, securityOutcome, toolName, executionOk,
+                resultSummary, steps, durationMs, operatorUserId, policyVersion, Map.of(), Map.of());
+    }
+
+    public void save(
+            String traceId,
+            String channel,
+            String userInput,
+            String riskLevel,
+            String securityOutcome,
+            String toolName,
+            boolean executionOk,
+            String resultSummary,
+            List<Map<String, Object>> steps,
+            long durationMs,
+            String operatorUserId,
+            String policyVersion,
+            Map<String, String> targetHostMeta
+    ) {
+        save(traceId, channel, userInput, riskLevel, securityOutcome, toolName, executionOk,
+                resultSummary, steps, durationMs, operatorUserId, policyVersion, targetHostMeta, Map.of());
+    }
+
+    public void save(
+            String traceId,
+            String channel,
+            String userInput,
+            String riskLevel,
+            String securityOutcome,
+            String toolName,
+            boolean executionOk,
+            String resultSummary,
+            List<Map<String, Object>> steps,
+            long durationMs,
+            String operatorUserId,
+            String policyVersion,
+            Map<String, String> targetHostMeta,
+            Map<String, Object> auditMeta
+    ) {
         try {
             String stepsJson = steps == null || steps.isEmpty()
                     ? null
@@ -92,22 +151,46 @@ public class OpsAuditTraceService {
             if (summary.length() > 4000) {
                 summary = summary.substring(0, 4000) + "...";
             }
+            String targetHostId = targetHostMeta != null ? targetHostMeta.get("targetHostId") : null;
+            String targetHostLabel = targetHostMeta != null ? targetHostMeta.get("targetHostLabel") : null;
+            String auditKind = metaString(auditMeta, "auditKind");
+            String requestChannel = metaString(auditMeta, "requestChannel");
+            String stage = metaString(auditMeta, "stage");
+            String decision = metaString(auditMeta, "decision");
+            String targetType = metaString(auditMeta, "targetType");
+            String targetName = metaString(auditMeta, "targetName");
+            String parentTraceId = metaString(auditMeta, "parentTraceId");
+            String confirmationId = metaString(auditMeta, "confirmationId");
+            String effectSummary = truncate(metaString(auditMeta, "effectSummary"), 2000);
             jdbcTemplate.update(
-                    "INSERT INTO ops_audit_trace(trace_id,channel,user_input,risk_level,security_outcome," +
-                            "tool_name,execution_ok,result_summary,steps_json,duration_ms,operator_user_id,policy_version,created_at) " +
-                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO ops_audit_trace(trace_id,channel,audit_kind,request_channel,stage,decision,user_input," +
+                            "risk_level,security_outcome,tool_name,target_type,target_name,parent_trace_id,confirmation_id," +
+                            "effect_summary,execution_ok,result_summary,steps_json,duration_ms,operator_user_id,policy_version," +
+                            "target_host_id,target_host_label,created_at) " +
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     traceId,
                     channel,
+                    auditKind,
+                    requestChannel,
+                    stage,
+                    decision,
                     userInput,
                     riskLevel,
                     securityOutcome,
                     toolName,
+                    targetType,
+                    targetName,
+                    parentTraceId,
+                    confirmationId,
+                    effectSummary,
                     executionOk ? 1 : 0,
                     summary,
                     stepsJson,
                     durationMs,
                     operatorUserId,
                     policyVersion,
+                    targetHostId,
+                    targetHostLabel,
                     new Timestamp(System.currentTimeMillis())
             );
         } catch (JsonProcessingException e) {
@@ -122,14 +205,33 @@ public class OpsAuditTraceService {
         try {
             return jdbcTemplate.query(
                     "SELECT id, trace_id, channel, user_input, risk_level, security_outcome, tool_name, " +
+                            "audit_kind, request_channel, stage, decision, target_type, target_name, parent_trace_id, confirmation_id, effect_summary, " +
                             "execution_ok, LEFT(result_summary, 512) AS result_summary, duration_ms, " +
-                            "operator_user_id, policy_version, created_at " +
+                            "operator_user_id, policy_version, target_host_id, target_host_label, created_at " +
                             "FROM ops_audit_trace ORDER BY id DESC LIMIT ?",
                     (rs, rowNum) -> mapTraceRow(rs, false),
                     cap
             );
         } catch (Exception e) {
             log.warn("查询审计列表失败: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    public List<Map<String, Object>> listRecentWithSteps(int limit) {
+        int cap = Math.min(Math.max(limit, 1), 500);
+        try {
+            return jdbcTemplate.query(
+                    "SELECT id, trace_id, channel, user_input, risk_level, security_outcome, tool_name, " +
+                            "audit_kind, request_channel, stage, decision, target_type, target_name, parent_trace_id, confirmation_id, effect_summary, " +
+                            "execution_ok, LEFT(result_summary, 512) AS result_summary, duration_ms, " +
+                            "operator_user_id, policy_version, target_host_id, target_host_label, created_at, steps_json " +
+                            "FROM ops_audit_trace ORDER BY id DESC LIMIT ?",
+                    (rs, rowNum) -> mapTraceRow(rs, true),
+                    cap
+            );
+        } catch (Exception e) {
+            log.warn("查询含步骤的审计列表失败: {}", e.getMessage());
             return new ArrayList<>();
         }
     }
@@ -144,8 +246,9 @@ public class OpsAuditTraceService {
         try {
             List<Map<String, Object>> rows = jdbcTemplate.query(
                     "SELECT id, trace_id, channel, user_input, risk_level, security_outcome, tool_name, " +
+                            "audit_kind, request_channel, stage, decision, target_type, target_name, parent_trace_id, confirmation_id, effect_summary, " +
                             "execution_ok, result_summary, duration_ms, operator_user_id, policy_version, " +
-                            "created_at, steps_json FROM ops_audit_trace WHERE trace_id = ? ORDER BY id DESC LIMIT 1",
+                            "created_at, steps_json, target_host_id, target_host_label FROM ops_audit_trace WHERE trace_id = ? ORDER BY id DESC LIMIT 1",
                     (rs, rowNum) -> mapTraceRow(rs, true),
                     traceId.trim()
             );
@@ -161,14 +264,29 @@ public class OpsAuditTraceService {
         m.put("id", rs.getLong("id"));
         m.put("traceId", rs.getString("trace_id"));
         m.put("channel", rs.getString("channel"));
+        putIfAvailable(m, "auditKind", rs, "audit_kind");
+        putIfAvailable(m, "requestChannel", rs, "request_channel");
+        putIfAvailable(m, "stage", rs, "stage");
+        putIfAvailable(m, "decision", rs, "decision");
         m.put("userInput", rs.getString("user_input"));
         m.put("riskLevel", rs.getString("risk_level"));
         m.put("securityOutcome", rs.getString("security_outcome"));
         m.put("toolName", rs.getString("tool_name"));
+        putIfAvailable(m, "targetType", rs, "target_type");
+        putIfAvailable(m, "targetName", rs, "target_name");
+        putIfAvailable(m, "parentTraceId", rs, "parent_trace_id");
+        putIfAvailable(m, "confirmationId", rs, "confirmation_id");
+        putIfAvailable(m, "effectSummary", rs, "effect_summary");
         m.put("executionOk", rs.getInt("execution_ok") == 1);
         m.put("durationMs", rs.getLong("duration_ms"));
         m.put("operatorUserId", rs.getString("operator_user_id"));
         m.put("policyVersion", rs.getString("policy_version"));
+        try {
+            m.put("targetHostId", rs.getString("target_host_id"));
+            m.put("targetHostLabel", rs.getString("target_host_label"));
+        } catch (SQLException ignored) {
+            // legacy schema without remote columns
+        }
         m.put("createdAt", rs.getTimestamp("created_at") != null
                 ? rs.getTimestamp("created_at").toInstant().toString()
                 : null);
@@ -216,7 +334,39 @@ public class OpsAuditTraceService {
                     "detail", remediationEffect));
         }
         save(traceId, channel, userInput, riskLevel, securityOutcome, toolName, executionOk,
-                resultSummary, steps, durationMs, operatorUserId, policyVersion);
+                resultSummary, steps, durationMs, operatorUserId, policyVersion, Map.of(), Map.of(
+                        "auditKind", "remediation",
+                        "requestChannel", channel,
+                        "stage", "effect",
+                        "decision", securityOutcome,
+                        "effectSummary", remediationEffect == null ? "" : truncate(String.valueOf(remediationEffect), 2000)));
+    }
+
+    private static String metaString(Map<String, Object> auditMeta, String key) {
+        if (auditMeta == null || key == null) {
+            return null;
+        }
+        Object value = auditMeta.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private static void putIfAvailable(Map<String, Object> row, String key, ResultSet rs, String column) {
+        try {
+            row.put(key, rs.getString(column));
+        } catch (SQLException ignored) {
+            // legacy schema
+        }
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max) + "...";
     }
 
     @SuppressWarnings("unchecked")

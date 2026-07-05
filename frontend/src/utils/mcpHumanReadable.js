@@ -202,6 +202,41 @@ function formatConfigDriftSummary(data) {
   return `配置漂移检查 (${data.configPath || '-'}):\n• 结论: ${status}\n• 信息: ${data.message || '-'}`
 }
 
+function parseServiceNamesFromOutput(output) {
+  if (!output || typeof output !== 'string') return []
+  const names = []
+  const headerTokens = new Set(['name', 'status', 'starttype', 'unit', '----'])
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || /^-+$/.test(trimmed)) continue
+    const token = trimmed.split(/\s+/)[0]?.toLowerCase()
+    if (!token || headerTokens.has(token)) continue
+    if (/^[a-z0-9@._-]{1,128}$/i.test(token)) names.push(token)
+  }
+  return names
+}
+
+function formatSystemdServiceSummary(data, title = '服务巡检结果') {
+  if (!data || typeof data !== 'object') return ''
+  const out = String(data.output || data.stderrOrOutput || '').trim()
+  const names = parseServiceNamesFromOutput(out)
+  const lines = [title]
+  if (data.command) lines.push(`命令: ${data.command}`)
+  if (!out) {
+    lines.push('未发现应运行却未启动的服务（或本机无异常服务）。')
+    return lines.join('\n')
+  }
+  if (names.length === 0) {
+    const head = out.length > 800 ? out.slice(0, 800) + '\n...[truncated]' : out
+    lines.push(head)
+    return lines.join('\n')
+  }
+  const sample = names.slice(0, 8).join('、')
+  const suffix = names.length > 8 ? ` 等 ${names.length} 项` : ''
+  lines.push(`发现 ${names.length} 个异常服务：${sample}${suffix}`)
+  return lines.join('\n')
+}
+
 function formatCommandOutputSummary(data, title) {
   if (!data || typeof data !== 'object') return ''
   const heading = title || data.tool || '命令结果'
@@ -322,8 +357,15 @@ export function generateHumanReadableResponse(toolName, result) {
         }
         if (data?.mode === 'DRY-RUN') {
           return (
+            `⚠️ **预览模式（未实际删除）**\n` +
             `临时文件清理预览:\n• 路径: ${data.path}\n• 将删除 ${data.filesFound} 个文件\n• 预览前 ${data.previewCount} 个:\n` +
             (data.preview || []).map((f) => `  - ${f}`).join('\n')
+          )
+        }
+        if (data?.mode === 'DELETE') {
+          return (
+            `✅ **已真实删除**\n` +
+            `临时文件清理结果:\n• 路径: ${data.path}\n• 发现文件: ${data.filesFound}\n• 实际删除: ${data.filesDeleted} 个文件`
           )
         }
         if (data?.filesDeleted != null) {
@@ -379,7 +421,7 @@ export function generateHumanReadableResponse(toolName, result) {
         }
         if (data?.mode === 'DRY-RUN') {
           return (
-            `日志清理 Dry-Run:\n` +
+            `日志清理预览:\n` +
             `• 路径: ${data.path}\n` +
             `• 候选文件: ${data.filesFound}\n` +
             `• 预览 ${data.previewCount ?? '-'} 条:\n` +
@@ -394,7 +436,7 @@ export function generateHumanReadableResponse(toolName, result) {
       case 'CleanTempTool':
         if (data.mode === 'DRY-RUN') {
           return (
-            `Dry-Run 预览:\n` +
+            `预览模式:\n` +
             `• 路径: ${data.path}\n` +
             `• 将删除 ${data.filesFound} 个文件\n` +
             `• 预览前 ${data.previewCount} 个:\n` +
@@ -406,7 +448,7 @@ export function generateHumanReadableResponse(toolName, result) {
       case 'LogCleanupTool':
         if (data.mode === 'DRY-RUN') {
           return (
-            `日志清理 Dry-Run:\n` +
+            `日志清理预览:\n` +
             `• 路径: ${data.path}\n` +
             `• 候选文件: ${data.filesFound}\n` +
             `• 预览 ${data.previewCount ?? '-'} 条:\n` +
@@ -424,7 +466,7 @@ export function generateHumanReadableResponse(toolName, result) {
           return `服务重启结果:\n• ${data.service}\n• success=${data.success}\n• ${data.stderr || ''}`
         }
         if (data?.tool || data?.output || data?.stderr) {
-          return formatCommandOutputSummary(data, '服务巡检结果')
+          return formatSystemdServiceSummary(data, '服务巡检结果')
         }
         break
 
@@ -433,6 +475,19 @@ export function generateHumanReadableResponse(toolName, result) {
         const parts = ['**磁盘综合诊断**']
         if (d?.overview != null) parts.push(formatDiskAnalyzeOverview(d.overview))
         if (d?.hotspotsRank != null) parts.push(formatDiskAnalyzeHotspots(d.hotspotsRank))
+        if (Array.isArray(d?.multiDrive) && d.multiDrive.length) {
+          parts.push(
+            '多盘热点:\n' +
+              d.multiDrive
+                .slice(0, 6)
+                .map((row) => {
+                  const drive = row.drive || row.root || '-'
+                  if (row.hotspotsError) return `• ${drive}: ${row.hotspotsError}`
+                  return `• ${drive}: ${formatDiskAnalyzeHotspots(row.hotspots)}`
+                })
+                .join('\n')
+          )
+        }
         if (d?.hint) parts.push(String(d.hint))
         if (parts.length > 1) return parts.join('\n\n')
         break
@@ -503,7 +558,7 @@ export function generateHumanReadableResponse(toolName, result) {
 
       case 'SystemdTool':
         if (data?.tool || data?.output || data?.stderr) {
-          return formatCommandOutputSummary(data, '服务巡检结果')
+          return formatSystemdServiceSummary(data, '服务巡检结果')
         }
         break
 

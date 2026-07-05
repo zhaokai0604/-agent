@@ -127,19 +127,4 @@ public class McpToolRegistry {
                 .filter(bean -> !denylist.denies(ClassUtils.getUserClass(bean).getSimpleName()))
                 .collect(Collectors.toCollection(ArrayList::new));
     }
-
-    /**
-     * Spring AI 1.1：{@code ChatClient.tools(List)} 会把整个 List 当作单个对象导致扫描失败；
-     * 须通过 {@link MethodToolCallbackProvider} 注册 @Tool 方法。
-     */
-    public ToolCallback[] getToolCallbacksForSurface(McpToolSurface surface, ReadOnlySurfaceDenylist denylist) {
-        List<Object> beans = getToolBeansForSurface(surface, denylist);
-        if (beans.isEmpty()) {
-            return new ToolCallback[0];
-        }
-        return MethodToolCallbackProvider.builder()
-                .toolObjects(beans.toArray())
-                .build()
-                .getToolCallbacks();
-    }
 }

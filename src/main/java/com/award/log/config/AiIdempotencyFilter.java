@@ -22,8 +22,7 @@ public class AiIdempotencyFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
         if (!"POST".equalsIgnoreCase(request.getMethod())) return true;
-        return !(path.startsWith("/award-log/api/chat/")
-                || path.startsWith("/award-log/log/diagnose/")
+        return !(path.startsWith("/award-log/log/diagnose/")
                 || path.startsWith("/award-log/api/assistant/"));
     }
 

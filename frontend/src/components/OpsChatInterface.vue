@@ -1,24 +1,6 @@
-<template>
-  <div class="ops-page ops-chat-container">
-    <div class="chat-header">
-      <div class="header-left">
-        <div class="header-mark">
-          <el-icon :size="20"><ChatLineRound /></el-icon>
-        </div>
-        <div class="header-info">
-          <h3>对话</h3>
-          <span class="status-text">
-            <span class="online-dot"></span>
-            Agent · MCP 工具 · 系统配置(Tab9) · 延时任务
-          </span>
-        </div>
-      </div>
-      <div class="header-actions">
-        <el-button text :icon="Refresh" @click="clearChat">清空会话</el-button>
-      </div>
-    </div>
-
-    <div v-if="patrolPending?.hasPending" class="patrol-pending-banner">
+﻿<template>
+  <div class="ops-page ops-chat-container ops-chat-container--agent">
+    <div v-if="patrolPending?.hasPending" class="patrol-pending-banner agent-chat-column">
       <div class="patrol-pending-text">
         <strong>巡检待处理</strong>
         <span class="patrol-summary">{{ patrolPending.summary || '有待确认修复步骤' }}</span>
@@ -28,195 +10,150 @@
       </el-button>
     </div>
 
-    <div class="chat-messages" ref="messagesContainer">
-      <div v-if="messages.length === 0" class="welcome-area">
-        <div class="welcome-intro">
-          <h2>有什么可以帮您？</h2>
-          <p>
-            描述问题或下达检查指令：我会采集本机真实状态、给出诊断与处置计划。
-            涉及删除、重启等写操作默认仅预览，确认后才会落地。
-          </p>
-        </div>
-        <div
-          v-for="group in workbenchQuickGroups"
-          :key="group.name"
-          class="quick-group"
-        >
-          <div class="quick-group-title">{{ group.name }}</div>
-          <div class="capability-list">
-            <button
-              v-for="(item, idx) in group.items"
-              :key="group.name + idx"
-              type="button"
-              class="capability-item"
-              @click="sendQuickCommand(item.cmd)"
-            >
-              <el-icon class="cap-icon"><component :is="item.icon" /></el-icon>
-              <span class="cap-label">{{ item.label }}</span>
-            </button>
-            <button
-              v-if="group.name === '处置' && patrolPending?.hasPending"
-              type="button"
-              class="capability-item capability-item--alert"
-              @click="continuePatrolPending"
-            >
-              <el-icon class="cap-icon"><component :is="patrolQuickItem.icon" /></el-icon>
-              <span class="cap-label">{{ patrolQuickItem.label }}</span>
-            </button>
-          </div>
-        </div>
+    <div class="chat-messages" ref="messagesContainer" @scroll="onMessagesScroll">
+      <div v-if="messages.length === 0" class="agent-chat-column">
+        <AgentWelcome
+          :patrol-pending="patrolPending?.hasPending"
+          @select="sendQuickCommand"
+          @patrol="continuePatrolPending"
+          @open-skills="openSkills"
+        />
       </div>
 
-      <div v-for="(msg, index) in messages" :key="index" :class="['message-wrapper', msg.role]">
-        <div class="message-avatar" v-if="msg.role === 'assistant'">
-          <el-icon :size="18"><Service /></el-icon>
-        </div>
-        <div class="message-content">
-          <div class="message-header">
-            <span class="sender-name">{{ msg.role === 'user' ? '你' : '助手' }}</span>
-            <span class="timestamp">{{ msg.timestamp }}</span>
+      <div class="agent-chat-column messages-inner" v-if="messages.length > 0">
+        <section v-for="(turn, ti) in chatTurns" :key="ti" class="chat-turn">
+          <div v-if="turn.user" class="chat-turn__user">
+            <div class="chat-turn__user-bubble">{{ turn.user.content }}</div>
           </div>
 
-          <div v-if="msg.isToolCalling" class="tool-calling">
-            <div class="tool-calling-header">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              <span>正在执行 {{ msg.toolName ? mcpToolDisplayName(msg.toolName) : '工具' }}…</span>
+          <div
+            v-for="{ msg, index } in turn.assistants"
+            :key="index"
+            class="chat-turn__assistant"
+          >
+            <div v-if="msg.isToolCalling" class="tool-calling">
+              <div class="tool-calling-header">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                <span>正在执行 {{ msg.toolName ? mcpToolDisplayName(msg.toolName) : '工具' }}…</span>
+              </div>
+              <div class="tool-command" v-if="msg.toolCommand">
+                <code>{{ msg.toolCommand }}</code>
+              </div>
             </div>
-            <div class="tool-command" v-if="msg.toolCommand">
-              <code>{{ msg.toolCommand }}</code>
-            </div>
-          </div>
 
-          <div v-else-if="msg.role === 'assistant'" class="message-bubble assistant-bubble">
-            <div v-if="msg.isHtml" class="markdown-content assistant-markdown" v-html="msg.content"></div>
-            <div
-              v-else-if="msg.content"
-              class="markdown-content assistant-markdown"
-              v-html="renderAssistantMarkdown(msg.content)"
-            />
-            <RemediationPlanCard
-              v-if="msg.remediationPlan && !msg.writeConfirmed"
-              :plan="msg.remediationPlan"
-              :loading="loading && confirmPlanIndex === index"
-              @confirm="confirmPlanFromMessage(index)"
-            />
-            <AssistantEvidenceBar
-              :rag-hits="msg.ragHits"
-              @open-knowledge="openKnowledge"
-            />
+            <template v-else>
+              <AssistantProse
+                v-if="msg.content"
+                :content="msg.content"
+                :streaming="loading && streaming && index === messages.length - 1"
+              />
+              <RemediationPlanCard
+                v-if="msg.remediationPlan && !msg.writeConfirmed"
+                :plan="msg.remediationPlan"
+                :loading="loading && confirmPlanIndex === index"
+                @confirm="confirmPlanFromMessage(index)"
+              />
+              <AssistantEvidenceBar
+                :rag-hits="msg.ragHits"
+                :tools-used="msg.toolsUsed || (msg.toolName ? [msg.toolName] : [])"
+                :reply-mode="msg.meta?.replyMode || msg.streamEvent?.replyMode"
+                :security-outcome="msg.meta?.securityOutcome || msg.streamEvent?.securityOutcome"
+                :awm-workflow-id="msg.meta?.awmWorkflowId || msg.streamEvent?.awmWorkflowId"
+                :awm-workflow-title="msg.meta?.awmWorkflowTitle || msg.streamEvent?.awmWorkflowTitle"
+                :trace-id="msg.traceId || msg.streamEvent?.traceId"
+                @open-knowledge="openKnowledge"
+              />
+            </template>
           </div>
-          <div v-else class="message-bubble user-bubble">
-            {{ msg.content }}
-          </div>
+        </section>
 
-        </div>
-        <div class="message-avatar message-avatar--user" v-if="msg.role === 'user'">
-          <el-icon :size="16"><User /></el-icon>
-        </div>
-      </div>
-
-      <div v-if="loading" class="message-wrapper assistant">
-        <div class="message-avatar">
-          <el-icon :size="18"><Service /></el-icon>
-        </div>
-        <div class="message-content">
-          <div class="message-header">
-            <span class="sender-name">助手</span>
+        <div v-if="loading && streaming" class="chat-turn agent-stream-status">
+          <div class="agent-stream-status__inner">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>{{ streamStatusLabel }}</span>
           </div>
-          <div class="message-bubble assistant-bubble typing">
-            <span class="typing-dot"></span>
-            <span class="typing-dot"></span>
-            <span class="typing-dot"></span>
+        </div>
+        <div v-else-if="loading" class="chat-turn">
+          <div class="prose-typing">
+            <span class="prose-typing-dot"></span>
+            <span class="prose-typing-dot"></span>
+            <span class="prose-typing-dot"></span>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="chat-input-area">
-      <div v-if="pendingAttachment" class="attachment-chip">
-        <span>已选文本附件：{{ pendingAttachment.name }}</span>
-        <el-button link type="danger" size="small" @click="clearAttachment">移除</el-button>
-      </div>
-      <div class="input-wrapper">
-        <input
-          ref="fileInputRef"
-          type="file"
-          class="hidden-file-input"
-          accept=".txt,.log,.csv,.json,.md,text/plain"
-          @change="onAttachFile"
-        />
-        <el-button class="icon-btn" :icon="FolderOpened" circle title="附加文本文件" @click="openFilePicker" />
-        <el-button
-          class="icon-btn"
-          :icon="Microphone"
-          circle
-          :type="listeningVoice ? 'danger' : 'default'"
-          title="语音输入（需浏览器支持）"
-          @click="toggleVoiceInput"
-        />
-        <el-input
-          v-model="inputMessage"
-          type="textarea"
-          :autosize="{ minRows: 1, maxRows: 4 }"
-          placeholder="描述运维问题，例如：检查磁盘、分析最近错误日志…"
-          @keydown.enter.exact.prevent="handleSend"
-          @keydown.shift.enter="handleNewLine"
-        />
-        <el-button type="primary" :loading="loading" @click="handleSend" class="send-btn">
-          <el-icon v-if="!loading"><Promotion /></el-icon>
-          <span v-else>发送中</span>
-        </el-button>
-      </div>
-      <div class="input-hints">
-        <span class="hint">Enter 发送 · Shift+Enter 换行 · 语音为浏览器识别（Chrome 较稳）· 附件限文本类，并入本条消息</span>
-      </div>
+    <button
+      v-if="showScrollDown"
+      type="button"
+      class="scroll-down-btn"
+      title="回到底部"
+      @click="scrollToBottom(true)"
+    >
+      <el-icon><ArrowDown /></el-icon>
+    </button>
+
+    <div class="agent-chat-column composer-sticky">
+      <AgentQuickBar
+        v-if="messages.length > 0"
+        :loading="loading"
+        @select="sendQuickCommand"
+      />
+      <AgentComposer
+        v-model="inputMessage"
+        :loading="loading"
+        :stoppable="loading"
+        :listening-voice="listeningVoice"
+        :pending-attachment="pendingAttachment"
+        :route-hint="routeHint"
+        @send="handleSend"
+        @stop="stopGeneration"
+        @newline="handleNewLine"
+        @attach="onAttachFileFromComposer"
+        @toggle-voice="toggleVoiceInput"
+        @clear-attachment="clearAttachment"
+      />
     </div>
-    <ToolResultDialog ref="toolResultDialogRef" />
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Promotion, Loading, Microphone, FolderOpened, ChatLineRound, Service, User } from '@element-plus/icons-vue'
-import { WORKBENCH_QUICK_GROUPS, PATROL_QUICK_ITEM } from '../constants/workbenchQuickActions'
+import { Loading, ArrowDown } from '@element-plus/icons-vue'
+import AgentWelcome from './agent/AgentWelcome.vue'
+import AgentComposer from './agent/AgentComposer.vue'
+import AgentQuickBar from './agent/AgentQuickBar.vue'
+import AssistantProse from './agent/AssistantProse.vue'
+import { useComposerRouteHint } from '../composables/useComposerRouteHint'
+import { useAgentSession } from '../composables/useAgentSession'
 import {
-  executeMcpTool,
-  confirmMcpExecute,
   assistantChatStream,
-  getPatrolRemediationPending,
-  scheduleDeferredOpsTask
+  getPatrolRemediationPending
 } from '../api'
-import { normalizeMcpToolResponse } from '../utils/mcpToolResult'
 import { generateHumanReadableResponse } from '../utils/mcpHumanReadable'
-import { getMcpToolCommandHint, applyMcpWriteConfirmParams } from '../utils/mcpToolsMeta'
-import { buildMcpRiskConfirmMessage } from '../utils/mcpRiskConfirm'
+import { mcpToolDisplayName, extractToolsUsedFromText } from '../utils/mcpToolsMeta'
 import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
 import { isWorkbenchHighRiskMessage, workbenchHighRiskBlockMarkdown } from '../utils/opsIntentSafety'
 import {
   userDeclinesTools,
-  shouldUseNaturalLanguageAssistant,
-  userConfirmedRemediation,
-  isOpsMissionIntent
+  userConfirmedRemediation
 } from '../utils/opsMissionIntent'
-import { formatErrorMarkdown } from '../utils/apiError.js'
-import { formatResultPreview, fieldLabel, formatBytes } from '../utils/structuredDataView'
-import ToolResultDialog from './ToolResultDialog.vue'
 import RemediationPlanCard from './RemediationPlanCard.vue'
 import AssistantEvidenceBar from './AssistantEvidenceBar.vue'
-import { renderAssistantMarkdown } from '../utils/assistantMarkdown'
 import { parseRemediationPlan, hasActionableRemediationPlan } from '../utils/remediationPlan'
 import { handleAssistantSsePayload } from '../utils/assistantSseMeta'
 
-const workbenchQuickGroups = WORKBENCH_QUICK_GROUPS
-const patrolQuickItem = PATROL_QUICK_ITEM
-
-const messages = ref([])
+const { messages, loadSession, clearSession } = useAgentSession()
 const inputMessage = ref('')
+const routeHint = useComposerRouteHint(inputMessage)
 const loading = ref(false)
+const streaming = ref(false)
+const showScrollDown = ref(false)
+let generationToken = 0
+let streamAbortController = null
+let streamReader = null
 const messagesContainer = ref(null)
-const toolResultDialogRef = ref(null)
-const fileInputRef = ref(null)
 const pendingAttachment = ref(null)
 const patrolPending = ref({ hasPending: false })
 const patrolContinueLoading = ref(false)
@@ -224,6 +161,32 @@ const listeningVoice = ref(false)
 const confirmPlanIndex = ref(-1)
 const skipRemediationConfirm = ref(false)
 let speechRecognition = null
+
+const chatTurns = computed(() => {
+  const turns = []
+  let current = null
+  for (let i = 0; i < messages.value.length; i++) {
+    const msg = messages.value[i]
+    if (msg.role === 'user') {
+      if (current) turns.push(current)
+      current = { user: msg, assistants: [] }
+    } else if (current) {
+      current.assistants.push({ msg, index: i })
+    } else {
+      turns.push({ user: null, assistants: [{ msg, index: i }] })
+    }
+  }
+  if (current) turns.push(current)
+  return turns
+})
+
+const streamStatusLabel = computed(() => {
+  const last = messages.value[messages.value.length - 1]
+  const mode = last?.meta?.replyMode || last?.streamEvent?.replyMode
+  if (mode === 'ORCHESTRATE') return '正在全面巡检…'
+  if (mode === 'TOOL_AGENT') return '正在调用运维工具采集数据…'
+  return '正在思考…'
+})
 
 const refreshPatrolPending = async () => {
   try {
@@ -247,23 +210,20 @@ const continuePatrolPending = async () => {
 let patrolPollTimer = null
 
 onMounted(() => {
+  loadSession()
   refreshPatrolPending()
   patrolPollTimer = setInterval(refreshPatrolPending, 120000)
 })
-
-const openFilePicker = () => fileInputRef.value?.click()
 
 const clearAttachment = () => {
   pendingAttachment.value = null
 }
 
-const onAttachFile = (e) => {
-  const f = e.target.files?.[0]
+function readAttachmentFile(f) {
   if (!f) return
   const maxBytes = 48 * 1024
   if (f.size > maxBytes) {
     ElMessage.warning('文本附件请勿超过 48KB')
-    e.target.value = ''
     return
   }
   const reader = new FileReader()
@@ -277,7 +237,10 @@ const onAttachFile = (e) => {
   }
   reader.onerror = () => ElMessage.error('读取附件失败')
   reader.readAsText(f, 'UTF-8')
-  e.target.value = ''
+}
+
+const onAttachFileFromComposer = (file) => {
+  readAttachmentFile(file)
 }
 
 const toggleVoiceInput = () => {
@@ -325,379 +288,48 @@ const toggleVoiceInput = () => {
   }
 }
 
-const getToolCommand = (toolName) => getMcpToolCommandHint(toolName)
-
-const parseUserIntent = (message) => {
-  if (isWorkbenchHighRiskMessage(message)) {
-    return null
-  }
-  const lowerMsg = message.toLowerCase()
-
-  if (
-    /重启|重新启动/i.test(message) &&
-    (/nginx|rsyslog|\.service/i.test(message) || (/服务/.test(lowerMsg) && /nginx|rsyslog/i.test(message)))
-  ) {
-    return 'ServiceRestartTool'
-  }
-
-  if (
-    (lowerMsg.includes('/var/log') ||
-      lowerMsg.includes('日志目录') ||
-      lowerMsg.includes('陈旧日志') ||
-      (lowerMsg.includes('日志') && lowerMsg.includes('清理'))) &&
-    (lowerMsg.includes('清理') || lowerMsg.includes('删除') || lowerMsg.includes('清除'))
-  ) {
-    return 'LogCleanupTool'
-  }
-
-  if (
-    lowerMsg.includes('磁盘压力') ||
-    lowerMsg.includes('磁盘综合') ||
-    lowerMsg.includes('磁盘诊断') ||
-    (lowerMsg.includes('磁盘') &&
-      (lowerMsg.includes('满了') || lowerMsg.includes('占满') || lowerMsg.includes('空间不足'))) ||
-    /io\s*异常|i\s*\/\s*o/i.test(lowerMsg)
-  ) {
-    return 'DiskAnalyzeTool'
-  }
-
-  if (
-    lowerMsg.includes('热点') ||
-    lowerMsg.includes('大目录') ||
-    lowerMsg.includes('谁占用') ||
-    lowerMsg.includes('空间占用') ||
-    lowerMsg.includes('磁盘占用') ||
-    (lowerMsg.includes('磁盘') && lowerMsg.includes('占'))
-  ) {
-    return 'DiskInsightTool'
-  }
-  if (lowerMsg.includes('磁盘') || lowerMsg.includes('硬盘') || lowerMsg.includes('df')) {
-    return 'DiskTool'
-  }
-  if (
-    /\bjournalctl\b/i.test(lowerMsg) ||
-    (lowerMsg.includes('systemd') && lowerMsg.includes('日志')) ||
-    lowerMsg.includes('内核日志')
-  ) {
-    return 'OsInsightTool'
-  }
-  if (
-    lowerMsg.includes('监听端口') ||
-    lowerMsg.includes('网络套接字') ||
-    (lowerMsg.includes('套接字') && lowerMsg.includes('监听'))
-  ) {
-    return 'OsInsightTool'
-  }
-  if (/\blsof\b/i.test(lowerMsg) || (lowerMsg.includes('打开文件') && lowerMsg.includes('进程'))) {
-    return 'OsInsightTool'
-  }
-  if (lowerMsg.includes('进程') || lowerMsg.includes('cpu') || lowerMsg.includes('内存') || lowerMsg.includes('ps aux')) {
-    if (lowerMsg.includes('内存') && !lowerMsg.includes('系统')) {
-      return 'ProcessTool'
-    }
-    return lowerMsg.includes('负载') || lowerMsg.includes('系统负载') || lowerMsg.includes('load') ? 'SystemLoadTool' : 'ProcessTool'
-  }
-  if (lowerMsg.includes('日志') || lowerMsg.includes('log') || lowerMsg.includes('分析')) {
-    return 'LogAnalysisTool'
-  }
-  if (lowerMsg.includes('清理') || lowerMsg.includes('临时文件') || lowerMsg.includes('clean')) {
-    return 'CleanTempTool'
-  }
-  if (lowerMsg.includes('配置') || lowerMsg.includes('config') || lowerMsg.includes('语法')) {
-    return 'ConfigCheckTool'
-  }
-  if (lowerMsg.includes('网络') || lowerMsg.includes('ping') || lowerMsg.includes('连通') || lowerMsg.includes('traceroute')) {
-    return 'NetworkTool'
-  }
-  if (lowerMsg.includes('权限') || lowerMsg.includes('privilege') || lowerMsg.includes('sudo')) {
-    return 'PrivilegeTool'
-  }
-  if (
-    (lowerMsg.includes('系统') || lowerMsg.includes('状态') || lowerMsg.includes('概览')) &&
-    !/删除|删掉|清除|破坏|格式化|rm\s/i.test(message)
-  ) {
-    return 'SystemLoadTool'
-  }
-
-  return null
-}
-
-const extractParameters = (message, toolName) => {
-  const params = {}
-  const lowerMsg = message.toLowerCase()
-
-  if (toolName === 'NetworkTool') {
-    const pingMatch = message.match(/ping\s+(\S+)/i)
-    if (pingMatch) {
-      params.target = pingMatch[1]
-      params.type = 'ping'
-    }
-    const traceMatch = message.match(/traceroute\s+(\S+)/i)
-    if (traceMatch) {
-      params.target = traceMatch[1]
-      params.type = 'traceroute'
-    }
-    if (lowerMsg.includes('ping') && !params.target) {
-      const ipMatch = message.match(/\d+\.\d+\.\d+\.\d+/)
-      if (ipMatch) params.target = ipMatch[0]
-    }
-  }
-
-  if (toolName === 'CleanTempTool') {
-    const daysMatch = message.match(/(\d+)\s*天/)
-    if (daysMatch) {
-      params.days = parseInt(daysMatch[1])
-    } else {
-      params.days = 7
-    }
-    params.dryRun = lowerMsg.includes('预览') || lowerMsg.includes('dry-run')
-  }
-
-  if (toolName === 'ProcessTool') {
-    if (lowerMsg.includes('内存')) {
-      params.minMem = 0
-    }
-  }
-
-  if (toolName === 'LogAnalysisTool') {
-    const linesMatch = message.match(/(\d+)\s*行/)
-    if (linesMatch) {
-      params.lines = parseInt(linesMatch[1])
-    } else {
-      params.lines = 100
-    }
-  }
-
-  if (toolName === 'ConfigCheckTool') {
-    const pathMatch = message.match(/\/[\w\/\.-]+/)
-    if (pathMatch) {
-      params.configPath = pathMatch[0]
-    }
-  }
-
-  if (toolName === 'DiskInsightTool') {
-    const pathMatch = message.match(/\/[\w\/\.-]+/)
-    params.rootPath = pathMatch ? pathMatch[0] : '/tmp'
-    const depthMatch = message.match(/深度\s*(\d+)/)
-    if (depthMatch) {
-      params.maxDepth = parseInt(depthMatch[1], 10)
-    }
-    const topMatch = message.match(/前\s*(\d+)\s*条/)
-    if (topMatch) {
-      params.topN = parseInt(topMatch[1], 10)
-    }
-  }
-
-  if (toolName === 'DiskAnalyzeTool') {
-    const pathMatch = message.match(/\/[\w\/\.-]+/)
-    if (pathMatch) {
-      params.rootPath = pathMatch[0]
-    }
-    params.includeHotspots = !/不要热点|仅\s*df|只看分区/i.test(message)
-    const topMatch = message.match(/前\s*(\d+)\s*条/)
-    if (topMatch) {
-      params.topN = parseInt(topMatch[1], 10)
-    }
-  }
-
-  if (toolName === 'LogCleanupTool') {
-    const pathMatch = message.match(/\/[\w\/\.-]+/)
-    if (pathMatch) {
-      params.path = pathMatch[0]
-    }
-    const daysMatch = message.match(/(\d+)\s*天/)
-    params.days = daysMatch ? parseInt(daysMatch[1], 10) : 30
-    params.dryRun = !/真实删除|执行删除|立即删除/i.test(lowerMsg)
-    params.confirmDelete = /真实删除|执行删除|立即删除/i.test(lowerMsg)
-  }
-
-  if (toolName === 'ServiceRestartTool') {
-    let svc = null
-    if (/nginx/i.test(message)) {
-      svc = 'nginx'
-    }
-    if (/rsyslog/i.test(message)) {
-      svc = 'rsyslog'
-    }
-    params.serviceName = svc || 'nginx'
-    params.dryRun = !/真实重启|立即重启|执行重启/i.test(lowerMsg)
-    params.confirmRestart = /真实重启|立即重启|执行重启/i.test(lowerMsg)
-  }
-
-  if (toolName === 'OsInsightTool') {
-    params.operation = 'journal'
-    if (/\blsof\b/i.test(lowerMsg) || /pid\s*[:：]?\s*\d+/i.test(message)) {
-      params.operation = 'lsof'
-      const pm = message.match(/pid\s*[:：]?\s*(\d+)/i)
-      params.pid = pm ? parseInt(pm[1], 10) : 1
-    } else if (lowerMsg.includes('监听') || lowerMsg.includes('套接字') || lowerMsg.includes('端口')) {
-      params.operation = 'ss'
-    }
-    const minMatch = message.match(/(\d+)\s*分钟/)
-    if (minMatch) {
-      params.sinceMinutes = parseInt(minMatch[1], 10)
-    }
-    const linesMatch = message.match(/(\d+)\s*行/)
-    if (linesMatch) {
-      params.maxLines = parseInt(linesMatch[1], 10)
-    }
-  }
-
-  return params
-}
-
-/** 将工具返回对象转成可读中文，避免对话里出现大段 JSON */
-const formatMcpFailureBlock = (result) => formatErrorMarkdown(result)
-
-const scrollToBottom = () => {
+const scrollToBottom = (force = false) => {
   nextTick(() => {
     if (messagesContainer.value) {
       messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+      if (force) showScrollDown.value = false
     }
   })
+}
+
+const onMessagesScroll = () => {
+  const el = messagesContainer.value
+  if (!el) return
+  const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+  showScrollDown.value = dist > 100
+}
+
+const isGenerationCancelled = (token) => token !== generationToken
+
+const stopGeneration = () => {
+  generationToken += 1
+  streaming.value = false
+  loading.value = false
+  if (streamAbortController) {
+    streamAbortController.abort()
+    streamAbortController = null
+  }
+  if (streamReader) {
+    streamReader.cancel().catch(() => {})
+    streamReader = null
+  }
+  const last = messages.value[messages.value.length - 1]
+  if (last?.role === 'assistant') {
+    if (!String(last.content || '').trim()) {
+      messages.value.pop()
+    } else if (!String(last.content).includes('（已停止生成）')) {
+      last.content = `${last.content}\n\n（已停止生成）`
+    }
+  }
 }
 
 /** Shift+Enter 换行：依赖 textarea 默认行为，仅需占位函数避免模板绑定 undefined 导致 withModifiers 报错 */
 const handleNewLine = () => {}
-
-/** 解析「半小时后 / N分钟后 / N小时后」等为分钟数，上限 24h */
-const parseDelayMinutesFromText = (raw) => {
-  const t = raw.replace(/\s+/g, '')
-  if (/半小时[后後]?|半个小时[后後]?/.test(t)) return 30
-  let m = t.match(/(?:再过|再等)?(\d+)\s*(?:个)?(?:小时|小時|钟头|鐘頭)(?:后|後)?/)
-  if (m) return Math.min(parseInt(m[1], 10) * 60, 24 * 60)
-  m = t.match(/(?:再过|再等)?(\d+)\s*分钟(?:钟|鐘)?(?:后|後)?/)
-  if (m) return Math.min(parseInt(m[1], 10), 24 * 60)
-  m = t.match(/(\d+)\s*分钟(?:钟|鐘)?/)
-  if (m && /后|後|之后|之後|以后|以後|过后|過後/.test(t)) {
-    return Math.min(parseInt(m[1], 10), 24 * 60)
-  }
-  const cn = { 十五: 15, 三十: 30, 四十五: 45, 六十: 60, 二十: 20, 四十: 40, 五十: 50 }
-  for (const [word, val] of Object.entries(cn)) {
-    if (t.includes(word + '分钟') || t.includes(word + '分鐘')) {
-      if (/后|後|之后|之後/.test(t)) return Math.min(val, 24 * 60)
-    }
-  }
-  return null
-}
-
-/** 与后端 OpsDeferredTaskService.ALLOWED_DEFERRED_TOOLS 保持一致 */
-const DEFERRED_ALLOWED_TOOLS = new Set([
-  'DiskTool',
-  'DiskAnalyzeTool',
-  'DiskInsightTool',
-  'ProcessTool',
-  'SystemLoadTool',
-  'LogAnalysisTool',
-  'CleanTempTool',
-  'ConfigCheckTool',
-  'NetworkTool',
-  'PrivilegeTool',
-  'OsInsightTool'
-])
-
-const isDeferredCleanupIntent = (text) =>
-  /清理|清除|删掉|刪掉|垃圾|临时文件|臨時文件|缓存|緩存|^tmp$/i.test(text) &&
-  !/删除.{0,16}(整个|全部|所有|系统)|删.{0,4}(整个|全部).{0,12}系统/i.test(text)
-
-const scheduleDeferredCleanupFlow = async (plan, rawMessage) => {
-  const params = extractParameters(rawMessage, 'CleanTempTool')
-  const wantRealDelete = /真实删除|彻底删除|真正删除|不要预览|不要dry-run|實際刪除/i.test(rawMessage)
-  let dryRun = !wantRealDelete
-  let confirmDelete = false
-
-  if (wantRealDelete) {
-    await ElMessageBox.confirm(
-      `将在 ${plan.delayMinutes} 分钟后真实删除白名单目录内满足条件的临时文件（非预览）。请确认已了解风险。`,
-      '高危确认 · 延时任务',
-      {
-        type: 'warning',
-        confirmButtonText: '确认创建定时任务',
-        cancelButtonText: '取消',
-        closeOnClickModal: false
-      }
-    )
-    dryRun = false
-    confirmDelete = true
-  } else {
-    await ElMessageBox.confirm(
-      `将在 ${plan.delayMinutes} 分钟后执行临时文件清理的预览（find 列出候选，不执行 rm）。是否创建？`,
-      '延时任务',
-      {
-        type: 'info',
-        confirmButtonText: '创建',
-        cancelButtonText: '取消',
-        closeOnClickModal: false
-      }
-    )
-  }
-
-  const data = await scheduleDeferredOpsTask({
-    delayMinutes: plan.delayMinutes,
-    toolName: plan.toolName,
-    parameters: {
-      ...params,
-      dryRun,
-      confirmDelete
-    }
-  })
-  const taskId = data?.taskId ?? ''
-  const executeAt = data?.executeAt ?? ''
-  const mode = dryRun ? '预览（不删除）' : '真实删除'
-  messages.value.push({
-    role: 'assistant',
-    content:
-      `已创建延时任务。\n` +
-      `- 任务 ID：${taskId}\n` +
-      `- 计划执行（服务器时间）：${executeAt}\n` +
-      `- 工具：CleanTempTool · 模式：${mode}\n` +
-      `说明：任务保存在服务端内存，进程重启后会丢失（需已登录）。`,
-    timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  })
-  ElMessage.success('延时任务已创建')
-  scrollToBottom()
-}
-
-const scheduleDeferredToolFlow = async (plan, rawMessage) => {
-  if (!DEFERRED_ALLOWED_TOOLS.has(plan.toolName)) {
-    ElMessage.warning(`延时执行暂不支持「${plan.toolName}」，请使用清理/巡检类工具或即时执行`)
-    return
-  }
-  if (plan.toolName === 'CleanTempTool') {
-    await scheduleDeferredCleanupFlow(plan, rawMessage)
-    return
-  }
-  await ElMessageBox.confirm(
-    `将在 ${plan.delayMinutes} 分钟后执行「${plan.toolName}」（参数由当前输入解析）。是否创建延时任务？`,
-    '延时任务',
-    {
-      type: 'info',
-      confirmButtonText: '创建',
-      cancelButtonText: '取消',
-      closeOnClickModal: false
-    }
-  )
-  const params = extractParameters(rawMessage, plan.toolName)
-  const data = await scheduleDeferredOpsTask({
-    delayMinutes: plan.delayMinutes,
-    toolName: plan.toolName,
-    parameters: params
-  })
-  const taskId = data?.taskId ?? ''
-  const executeAt = data?.executeAt ?? ''
-  messages.value.push({
-    role: 'assistant',
-    content:
-      `已创建延时任务。\n` +
-      `- 任务 ID：${taskId}\n` +
-      `- 计划执行（服务器时间）：${executeAt}\n` +
-      `- 工具：${plan.toolName}\n` +
-      `说明：任务保存在服务端内存，进程重启后会丢失（需已登录）。`,
-    timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  })
-  ElMessage.success('延时任务已创建')
-  scrollToBottom()
-}
 
 const buildConversationHistory = (priorMessages) => {
   const out = []
@@ -724,13 +356,34 @@ function applySseToAssistant (assistantIdx, payload) {
     onMeta: (meta) => {
       const msg = messages.value[assistantIdx]
       if (!msg) return
-      msg.meta = meta
+      msg.meta = { ...(msg.meta || {}), ...meta }
       if (Array.isArray(meta.ragHits)) msg.ragHits = meta.ragHits
       if (meta.writeConfirmed) msg.writeConfirmed = true
+    },
+    onEvent: (event) => {
+      const msg = messages.value[assistantIdx]
+      if (!msg || !event) return
+      msg.streamEvent = event
+      if (event.traceId) msg.traceId = event.traceId
+      if (Array.isArray(event.toolsUsed) && event.toolsUsed.length) {
+        msg.toolsUsed = event.toolsUsed
+      }
+      if (event.replyMode || event.securityOutcome || event.awmWorkflowId) {
+        msg.meta = {
+          ...(msg.meta || {}),
+          ...(event.replyMode ? { replyMode: event.replyMode } : {}),
+          ...(event.securityOutcome ? { securityOutcome: event.securityOutcome } : {}),
+          ...(event.awmWorkflowId ? {
+            awmWorkflowId: event.awmWorkflowId,
+            awmWorkflowTitle: event.awmWorkflowTitle
+          } : {})
+        }
+      }
     },
     onContent: (text) => {
       if (messages.value[assistantIdx]) {
         messages.value[assistantIdx].content += text
+        if (!showScrollDown.value) scrollToBottom()
       }
     }
   })
@@ -742,12 +395,20 @@ function finalizeAssistantMessage (assistantIdx) {
   if (msg.content) {
     msg.content = msg.content
       .replace(/^>\s*\*\*traceId:\*\*\s*`[^`]+`\s*\n\n?/gim, '')
+      .replace(/^###\s*追踪信息\s*\n\s*- 追踪 ID:\s*`[^`]+`\s*\n\n?/gim, '')
+      .replace(/^\*\*追踪 ID：\*\*\s*`[^`]+`\s*\n\n?/gim, '')
       .replace(/^追踪\s*ID[：:]\s*`?[a-f0-9-]{8,}`?\s*\n?/gim, '')
   }
   if (!msg.ragHits?.length && msg.meta?.ragHits?.length) msg.ragHits = msg.meta.ragHits
   if (msg.meta?.writeConfirmed) msg.writeConfirmed = true
   if (!msg.writeConfirmed && hasActionableRemediationPlan(msg.content)) {
     msg.remediationPlan = parseRemediationPlan(msg.content)
+  }
+  if (!msg.toolsUsed?.length) {
+    const extractedTools = extractToolsUsedFromText(msg.content)
+    if (extractedTools.length) {
+      msg.toolsUsed = extractedTools
+    }
   }
 }
 
@@ -766,6 +427,10 @@ async function confirmRemediationDialog () {
 
 function openKnowledge () {
   window.dispatchEvent(new CustomEvent('ops-navigate-tab', { detail: { tab: 'knowledge' } }))
+}
+
+function openSkills () {
+  window.dispatchEvent(new CustomEvent('ops-navigate-tab', { detail: { tab: 'agent-skills' } }))
 }
 
 const confirmPlanFromMessage = async (index) => {
@@ -792,17 +457,33 @@ const runNaturalLanguageStream = async (message) => {
       content: '',
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     }) - 1
+  const token = generationToken
   loading.value = true
+  streaming.value = true
+  streamAbortController = new AbortController()
 
   try {
     const response = await assistantChatStream(message, history, {
       useToolAgent: !userDeclinesTools(message),
-      confirmRemediation: userConfirmedRemediation(message)
+      confirmRemediation: userConfirmedRemediation(message),
+      signal: streamAbortController.signal
     })
+    if (isGenerationCancelled(token)) return
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
-        messages.value[assistantIdx].content =
-          '助手暂时不可用: 未登录或会话已失效（/api/assistant 受登录保护）。请重新登录后再试；若前后端不同端口，请确认请求带 Cookie（credentials）且后端 CORS 允许当前页面来源。'
+        const errText = await response.text().catch(() => '')
+        let hint = '未登录或会话已失效，请退出后重新登录。'
+        try {
+          const j = JSON.parse(errText)
+          if (j.securityCode === 'CSRF_ORIGIN_DENIED') {
+            hint = '请求被 CSRF 防护拦截（常见于通过局域网 IP 访问）。请刷新页面或重新构建前端；管理员可在 application.yml 的 app.cors.allowed-origin-patterns 加入当前访问地址。'
+          } else if (j.message) {
+            hint = j.message
+          }
+        } catch {
+          /* ignore */
+        }
+        messages.value[assistantIdx].content = `助手暂时不可用: ${hint}`
         return
       }
       const errText = await response.text().catch(() => '')
@@ -821,29 +502,40 @@ const runNaturalLanguageStream = async (message) => {
       messages.value[assistantIdx].content = '服务端未返回流式数据，请确认 AI 已配置。'
       return
     }
-    const decoder = new TextDecoder()
+    streamReader = reader
+    const decoder = new TextDecoder('utf-8')
     let sseBuf = ''
     while (true) {
+      if (isGenerationCancelled(token)) break
       const { done, value } = await reader.read()
       if (done) break
+      if (isGenerationCancelled(token)) break
       const chunk = decoder.decode(value, { stream: true })
       sseBuf = appendSsePayloadFromChunk(sseBuf, chunk, (payload) => {
         applySseToAssistant(assistantIdx, payload)
       })
     }
-    flushSseBuffer(sseBuf, (payload) => {
-      applySseToAssistant(assistantIdx, payload)
-    })
-    if (!messages.value[assistantIdx].content.trim()) {
-      messages.value[assistantIdx].content = '（未返回内容，请检查模型服务）'
+    if (!isGenerationCancelled(token)) {
+      flushSseBuffer(sseBuf, (payload) => {
+        applySseToAssistant(assistantIdx, payload)
+      })
+      if (!messages.value[assistantIdx].content.trim()) {
+        messages.value[assistantIdx].content = '（未返回内容，请检查模型服务）'
+      }
+      finalizeAssistantMessage(assistantIdx)
     }
-    finalizeAssistantMessage(assistantIdx)
   } catch (e) {
+    if (isGenerationCancelled(token) || e?.name === 'AbortError') return
     console.error('自然语言对话失败', e)
     messages.value[assistantIdx].content =
       '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
   } finally {
-    loading.value = false
+    if (!isGenerationCancelled(token)) {
+      streaming.value = false
+      loading.value = false
+    }
+    streamAbortController = null
+    streamReader = null
   }
   scrollToBottom()
 }
@@ -852,7 +544,7 @@ const handleSend = async () => {
   const rawInput = inputMessage.value.trim()
   let message = rawInput
   if (pendingAttachment.value) {
-    message = `${rawInput}\n\n--- 附件: ${pendingAttachment.value.name} ---\n${pendingAttachment.value.text}`.trim()
+    message = `${rawInput}\n\n> 附件: ${pendingAttachment.value.name}\n${pendingAttachment.value.text}`.trim()
   }
   if (!message || loading.value) return
 
@@ -895,147 +587,16 @@ const handleSend = async () => {
     return
   }
 
-  const delayMinutes = parseDelayMinutesFromText(message)
-  if (delayMinutes != null) {
-    const toolFromIntent = parseUserIntent(message)
-    const nl = shouldUseNaturalLanguageAssistant(message)
-    if (toolFromIntent && !nl) {
-      loading.value = true
-      try {
-        await scheduleDeferredToolFlow({ delayMinutes, toolName: toolFromIntent }, message)
-      } catch (e) {
-        const cancelled = e === undefined || e === null || e === 'cancel' || e === 'close'
-        if (!cancelled) {
-          console.error(e)
-          ElMessage.error(e?.message || '创建延时任务失败')
-        }
-      } finally {
-        loading.value = false
-      }
-      return
-    }
-    if (isDeferredCleanupIntent(message)) {
-      loading.value = true
-      try {
-        await scheduleDeferredCleanupFlow({ delayMinutes, toolName: 'CleanTempTool' }, message)
-      } catch (e) {
-        const cancelled = e === undefined || e === null || e === 'cancel' || e === 'close'
-        if (!cancelled) {
-          console.error(e)
-          ElMessage.error(e?.message || '创建延时任务失败')
-        }
-      } finally {
-        loading.value = false
-      }
-      return
-    }
-  }
-
-  loading.value = true
-
   try {
-    const toolName = parseUserIntent(message)
-    const useMcpPath = toolName && !shouldUseNaturalLanguageAssistant(message) && !userDeclinesTools(message)
-
-    if (!useMcpPath) {
-      await runNaturalLanguageStream(message)
-      return
-    }
-
-    const toolCallingIndex = messages.value.push({
-      role: 'assistant',
-      isToolCalling: true,
-      toolName: toolName,
-      toolCommand: getToolCommand(toolName),
-      timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    }) - 1
-
-    scrollToBottom()
-
-    const params = extractParameters(message, toolName)
-    console.log(`执行工具: ${toolName}, 参数:`, params)
-
-    let result = await executeMcpTool(toolName, params, message)
-
-    if (result && result.needConfirm === true) {
-      messages.value.splice(toolCallingIndex, 1)
-      loading.value = false
-      try {
-        await ElMessageBox.confirm(buildMcpRiskConfirmMessage(result), '操作确认', {
-          confirmButtonText: '确认执行',
-          cancelButtonText: '取消',
-          type: 'warning',
-          closeOnClickModal: false,
-          customClass: 'mcp-risk-confirm-box'
-        })
-      } catch {
-        messages.value.push({
-          role: 'assistant',
-          content: '已取消执行。',
-          timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-        })
-        scrollToBottom()
-        return
-      }
-      loading.value = true
-      const confirmCallingIndex = messages.value.push({
-        role: 'assistant',
-        isToolCalling: true,
-        toolName: toolName,
-        toolCommand: getToolCommand(toolName),
-        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-      }) - 1
-      scrollToBottom()
-      result = await confirmMcpExecute(
-        toolName,
-        applyMcpWriteConfirmParams(toolName, params, message),
-        '确认执行',
-        message
-      )
-      messages.value.splice(confirmCallingIndex, 1)
-    } else {
-      messages.value.splice(toolCallingIndex, 1)
-    }
-
-    result = normalizeMcpToolResponse(result)
-
-    const preview = formatResultPreview(result.data ?? result)
-    const label = mcpToolDisplayName(toolName)
-    const statusTitle = result.success ? '已完成' : result.securityCode ? '已拒绝' : '执行失败'
-    const brief =
-      preview && preview !== '—'
-        ? `${label} ${statusTitle}：${preview}`
-        : `${label} ${statusTitle}。`
-
-    toolResultDialogRef.value?.open({
-      toolName,
-      success: result.success,
-      duration: result.duration || 0,
-      raw: result,
-      showTrace: false
-    })
-
-    messages.value.push({
-      role: 'assistant',
-      content: brief,
-      toolName,
-      success: result.success,
-      duration: result.duration || 0,
-      timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    })
-
-    scrollToBottom()
-
+    await runNaturalLanguageStream(message)
   } catch (error) {
-    console.error('执行失败:', error)
+    console.error('助手流式对话失败:', error)
     messages.value.push({
       role: 'assistant',
-      content: `❌ 执行出错: ${error.message}\n\n请检查输入是否正确，或稍后重试。`,
+      content: `连接助手失败：${error.message || String(error)}\n\n请检查后端服务、AI 配置和当前登录状态。`,
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     })
     scrollToBottom()
-  } finally {
-    loading.value = false
   }
 }
 
@@ -1050,9 +611,8 @@ function applyPrefill(text) {
   nextTick(() => scrollToBottom())
 }
 
-defineExpose({ applyPrefill })
-
 onUnmounted(() => {
+  stopGeneration()
   if (patrolPollTimer) {
     clearInterval(patrolPollTimer)
   }
@@ -1066,16 +626,18 @@ onUnmounted(() => {
 })
 
 const clearChat = () => {
-  messages.value = []
+  clearSession()
 }
+
+defineExpose({ applyPrefill, clearChat })
 </script>
 
 <style scoped>
 .ops-chat-container {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 480px;
+  flex: 1;
+  min-height: 0;
   background: var(--ops-panel);
   border: 1px solid var(--ops-border);
   border-radius: var(--ops-radius);
@@ -1083,272 +645,103 @@ const clearChat = () => {
   overflow: hidden;
 }
 
-.chat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 18px;
-  background: var(--ops-panel-soft);
-  border-bottom: 1px solid var(--ops-border);
+.ops-chat-container--agent {
+  position: relative;
+  flex: 1;
+  min-height: calc(100vh - var(--ops-header-h, 52px));
+  width: 100%;
+  background: var(--agent-surface);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.header-mark {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: rgba(13, 148, 136, 0.1);
-  color: var(--ops-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.composer-sticky {
   flex-shrink: 0;
-}
-
-.header-info h3 {
-  margin: 0 0 2px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--ops-text);
-}
-
-.status-text {
-  font-size: 12px;
-  color: var(--ops-text-subtle);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.online-dot {
-  width: 6px;
-  height: 6px;
-  background: #10b981;
-  border-radius: 50%;
 }
 
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 18px;
-  background: var(--ops-bg);
+  padding: 12px 0 20px;
+  background: #fff;
 }
 
-.welcome-area {
-  max-width: 920px;
-  margin: 0 auto;
-  padding: 8px 4px 24px;
-  text-align: left;
-}
-
-.welcome-intro h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ops-text);
-  letter-spacing: -0.02em;
-}
-
-.welcome-intro p {
-  margin: 0 0 20px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--ops-text-subtle);
-  max-width: 56ch;
-}
-
-.quick-group {
-  margin-bottom: 18px;
-}
-
-.quick-group-title {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ops-text-subtle);
-  margin-bottom: 8px;
-}
-
-.capability-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 8px;
-}
-
-.capability-item {
-  appearance: none;
-  border: 1px solid var(--ops-border);
-  background: var(--ops-panel);
-  padding: 10px 12px;
-  border-radius: var(--ops-radius-sm);
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+.messages-inner {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--ops-text);
-  text-align: left;
+  flex-direction: column;
 }
 
-.capability-item:hover {
-  border-color: #94a3b8;
-  background: var(--ops-panel-soft);
-}
-
-.capability-item--alert {
-  border-color: rgba(245, 158, 11, 0.45);
-  background: #fffbeb;
-}
-
-.capability-item--alert:hover {
-  border-color: #f59e0b;
-}
-
-.cap-icon {
-  font-size: 16px;
-  color: var(--ops-primary);
+.composer-sticky {
   flex-shrink: 0;
+  padding-bottom: 8px;
+  background: linear-gradient(180deg, transparent, var(--agent-surface) 24%);
 }
 
-.cap-label {
-  line-height: 1.3;
-  font-weight: 500;
-}
-
-.message-wrapper {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
-  align-items: flex-start;
-}
-
-.message-wrapper.user {
-  flex-direction: row-reverse;
-}
-
-.message-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: rgba(13, 148, 136, 0.1);
-  color: var(--ops-primary);
+.scroll-down-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 140px;
+  transform: translateX(-50%);
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--agent-border);
+  background: var(--agent-surface);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  cursor: pointer;
+  color: var(--agent-muted);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.message-avatar--user {
-  background: #e2e8f0;
-  color: #475569;
-}
-
-.message-content {
-  max-width: 75%;
-  min-width: 200px;
-}
-
-.message-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 12px;
-}
-
-.message-wrapper.user .message-header {
-  flex-direction: row-reverse;
-}
-
-.sender-name {
-  color: #303133;
-  font-weight: 600;
-}
-
-.timestamp {
-  color: #909399;
-}
-
-.message-bubble {
-  padding: 12px 16px;
-  border-radius: 16px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Markdown 气泡：不用 pre-wrap，避免标题/列表排版塌成一团 */
-.message-bubble.assistant-bubble:has(.markdown-content) {
-  white-space: normal;
-}
-
-.user-bubble {
-  background: var(--ops-primary);
-  color: #f8fafc;
-  border-bottom-right-radius: 4px;
-}
-
-.assistant-bubble {
-  background: var(--ops-panel);
-  color: var(--ops-text);
-  border: 1px solid var(--ops-border);
-  border-bottom-left-radius: 4px;
-  box-shadow: var(--ops-shadow-sm);
-}
-
-.typing {
-  display: flex;
-  gap: 4px;
-  padding: 16px 20px;
-}
-
-.typing-dot {
-  width: 8px;
-  height: 8px;
-  background: #909399;
-  border-radius: 50%;
-  animation: typingBounce 1.4s infinite ease-in-out;
-}
-
-.typing-dot:nth-child(1) { animation-delay: 0s; }
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes typingBounce {
-  0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
-  40% { transform: scale(1.2); opacity: 1; }
+.scroll-down-btn:hover {
+  transform: translateX(-50%) translateY(-2px);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.16);
+  color: var(--ops-primary);
 }
 
 .tool-calling {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: var(--ops-radius-sm);
-  padding: 10px 12px;
-  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .tool-calling-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #b45309;
+  color: #374151;
   font-weight: 500;
-  font-size: 13px;
+  font-size: 14px;
+}
+
+.tool-calling-header::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #14b8a6;
+  animation: prosePulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 .tool-command {
-  margin-top: 8px;
-  background: #1e1e1e;
-  border-radius: 6px;
-  padding: 8px 12px;
+  margin-top: 0;
+  background: #1a1b1e;
+  border-radius: 10px;
+  padding: 10px 12px;
+  border: 1px solid #2d2d2d;
 }
 
 .tool-command code {
@@ -1357,215 +750,14 @@ const clearChat = () => {
   font-size: 12px;
 }
 
-.tool-result {
-  background: #f5f7fa;
-  border-radius: 12px;
-  margin-top: 8px;
-  overflow: hidden;
-  border: 1px solid #e4e8eb;
-}
-
-.tool-result-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: #e4e8eb;
-  border-bottom: 1px solid #dcdfe6;
-}
-
-.tool-badge {
-  background: #409eff;
-  color: white;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.duration-badge {
-  color: #606266;
-  font-size: 12px;
-}
-
-.tool-result-content {
-  padding: 12px;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.tool-result-content pre {
-  margin: 0;
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
-  color: #303133;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.chat-input-area {
-  padding: 12px 16px 14px;
-  background: var(--ops-panel);
-  border-top: 1px solid var(--ops-border);
-}
-
-.attachment-chip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 8px 12px;
-  background: #f4f4f5;
-  border-radius: 8px;
-  font-size: 13px;
-  color: #606266;
-}
-
-.hidden-file-input {
-  display: none;
-}
-
-.icon-btn {
-  flex-shrink: 0;
-}
-
-.input-wrapper {
-  display: flex;
-  gap: 12px;
-  align-items: flex-end;
-}
-
-.input-wrapper :deep(.el-textarea__inner) {
-  border-radius: var(--ops-radius-sm);
-  padding: 10px 12px;
-  resize: none;
-}
-
-.send-btn {
-  border-radius: var(--ops-radius-sm);
-  padding: 10px 16px;
-}
-
-.input-hints {
-  margin-top: 8px;
-  text-align: center;
-}
-
-.hint {
-  font-size: 12px;
-  color: #909399;
-}
-
-.markdown-content {
-  line-height: 1.8;
-}
-
-.assistant-markdown :deep(h2) {
-  font-size: 1.12rem;
-  font-weight: 600;
-  margin: 1em 0 0.5em;
-  color: #303133;
-  border-bottom: 1px solid #ebeef5;
-  padding-bottom: 0.25em;
-}
-
-.assistant-markdown :deep(h3) {
-  font-size: 0.95rem;
-  font-weight: 600;
-  margin: 0.65em 0 0.35em;
-  color: #606266;
-}
-
-.assistant-markdown :deep(p) {
-  margin: 0.35em 0;
-}
-
-.assistant-markdown :deep(ul),
-.assistant-markdown :deep(ol) {
-  margin: 0.35em 0 0.5em;
-  padding-left: 1.25em;
-}
-
-.assistant-markdown :deep(li) {
-  margin: 0.2em 0;
-}
-
-.assistant-markdown :deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 0.5em 0;
-  font-size: 0.9rem;
-}
-
-.assistant-markdown :deep(th),
-.assistant-markdown :deep(td) {
-  border: 1px solid #dcdfe6;
-  padding: 6px 8px;
-  text-align: left;
-}
-
-.assistant-markdown :deep(th) {
-  background: #f5f7fa;
-}
-
-.assistant-markdown :deep(blockquote) {
-  margin: 0.5em 0;
-  padding: 0.35em 0.75em;
-  border-left: 3px solid #409eff;
-  background: #ecf5ff;
-  color: #606266;
-}
-
-.assistant-markdown :deep(hr) {
-  border: none;
-  border-top: 1px solid #ebeef5;
-  margin: 0.75em 0;
-}
-
-.markdown-content :deep(code) {
-  background: #f5f7fa;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: 'Courier New', monospace;
-}
-
-.assistant-markdown :deep(pre code) {
-  display: block;
-  padding: 10px 12px;
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.plain-content {
-  margin: 0;
-  white-space: pre-wrap;
-  font-family: inherit;
-  line-height: 1.6;
-}
-
-.trace-id-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.trace-id-hint code {
-  font-size: 11px;
-}
-
-.trace-hint {
-  opacity: 0.85;
-}
-
 .patrol-pending-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 16px 8px;
+  margin: 8px auto;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--el-color-warning-light-9, #fdf6ec);
   border: 1px solid var(--el-color-warning-light-5, #f5dab1);
 }
@@ -1583,20 +775,25 @@ const clearChat = () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 520px;
+  max-width: 100%;
 }
 
-.capability-item.patrol-cap {
-  border-color: var(--el-color-warning);
+.agent-stream-status {
+  padding: 4px 0 8px;
 }
+
+.agent-stream-status__inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(240, 253, 250, 0.95);
+  border: 1px solid rgba(13, 148, 136, 0.2);
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 500;
+}
+
 </style>
 
-<style>
-/* MessageBox 挂载在 body，须非 scoped */
-.mcp-risk-confirm-box .el-message-box__message {
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: min(48vh, 420px);
-  overflow-y: auto;
-}
-</style>

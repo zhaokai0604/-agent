@@ -2,6 +2,7 @@ package com.award.log.service;
 
 import com.award.log.agent.AutonomousOpsOrchestrator;
 import com.award.log.config.AgentOpsProperties;
+import com.award.log.config.SystemBootstrapSupport;
 import com.award.log.config.OpsDryRunProperties;
 import com.award.log.config.SystemConfigFileSupport;
 import com.award.log.config.SystemConfigRuntimeState;
@@ -77,6 +78,7 @@ public class SystemConfigService {
         payload.put("platform", buildPlatform());
         payload.put("groups", groups);
         payload.put("files", buildFiles());
+        payload.put("bootstrap", SystemBootstrapSupport.readBootstrapStatus());
         payload.put("needsRestart", restartFlags);
         payload.put("savedAt", SystemConfigFileSupport.latestSavedAt(
                 SystemConfigFileSupport.overrideFile(),
@@ -110,6 +112,15 @@ public class SystemConfigService {
         result.put("messages", messages);
         result.put("savedAt", savedAt);
         return result;
+    }
+
+    public void reapplySavedRuntimeConfig() {
+        Map<String, Object> overrideRoot = SystemConfigFileSupport.readJsonFile(SystemConfigFileSupport.overrideFile());
+        Map<String, Object> runtimeBody = SystemConfigFileSupport.nestedMap(overrideRoot.get("runtime"));
+        if (runtimeBody.isEmpty()) {
+            return;
+        }
+        saveRuntimeGroup(overrideRoot, runtimeBody);
     }
 
     private List<Map<String, Object>> buildRuntimeItems() {

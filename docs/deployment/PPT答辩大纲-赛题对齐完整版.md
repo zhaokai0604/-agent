@@ -858,7 +858,7 @@ Tab2 工具控制台大图；Knife4j `/api/mcp/tools` inset。
 | 生产配置样例 | `prod-config-example.yml` |
 | 在线 API | `/award-log/doc.html` Knife4j |
 | 演示脚本 | README「答辩演示路径 7 步」 |
-| 许可 | Apache 2.0 |
+| 许可 | 专有软件 · 竞赛作品 |
 
 **演示清单（勾选框）**  
 □ 安全拒绝 □ 清理垃圾闭环 □ 安全自检 □ 效果评分 □ 审计导出  

@@ -1,7 +1,9 @@
 package com.award.log.service.impl;
 
+import com.award.log.model.LogAnalysisDetail;
 import com.award.log.model.LogDocument;
 import com.award.log.service.AiTool;
+import com.award.log.service.LogQueryFallbackService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
@@ -11,7 +13,10 @@ import org.springframework.data.elasticsearch.core.query.Criteria;
 import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -22,6 +27,9 @@ public class LogQueryTool implements AiTool {
 
     @Autowired(required = false)
     private ElasticsearchOperations elasticsearchOperations;
+
+    @Autowired
+    private LogQueryFallbackService logQueryFallbackService;
 
     @Override
     public String getName() {
@@ -78,10 +86,6 @@ public class LogQueryTool implements AiTool {
 
     @Override
     public ToolResult execute(Map<String, Object> parameters) {
-        if (elasticsearchOperations == null) {
-            return ToolResult.error("日志查询服务暂时不可用。请确保 Elasticsearch 已启动且应用不在 dev 环境下运行。");
-        }
-
         try {
             String timeRange = getStringParam(parameters, "timeRange", "最近1小时");
             String severity = getStringParam(parameters, "severity", null);
@@ -93,19 +97,31 @@ public class LogQueryTool implements AiTool {
             LocalDateTime startTime = timeRange2[0];
             LocalDateTime endTime = timeRange2[1];
 
-            List<LogDocument> logs = queryLogs(startTime, endTime, severity, keywords, service, limit);
+            List<LogDocument> logs = queryLogsFromEs(startTime, endTime, severity, keywords, service, limit);
+            String dataSource = "elasticsearch";
+            if (logs.isEmpty()) {
+                int days = estimateWindowDays(timeRange);
+                List<LogAnalysisDetail> dbRows = logQueryFallbackService.queryRecent(
+                        days, severity, keywords, null, limit);
+                if (!dbRows.isEmpty()) {
+                    logs = dbRows.stream().map(this::toLogDocument).toList();
+                    dataSource = "mariadb-fallback";
+                }
+            }
 
             if (logs.isEmpty()) {
-                return ToolResult.success("在指定条件下没有找到日志记录。\n" +
-                        "时间范围: " + timeRange + "\n" +
-                        "严重级别: " + (severity != null ? severity : "全部") + "\n" +
-                        "关键词: " + (keywords != null ? keywords : "无") + "\n" +
-                        "服务: " + (service != null ? service : "全部"));
+                return ToolResult.success("在指定条件下没有找到日志记录。\n"
+                        + "数据源: MariaDB 分析明细 + ES（若启用）\n"
+                        + "时间范围: " + timeRange + "\n"
+                        + "严重级别: " + (severity != null ? severity : "全部") + "\n"
+                        + "关键词: " + (keywords != null ? keywords : "无") + "\n"
+                        + "服务: " + (service != null ? service : "全部"));
             }
 
             Map<String, Object> result = new HashMap<>();
             result.put("totalCount", logs.size());
             result.put("timeRange", timeRange);
+            result.put("dataSource", dataSource);
             result.put("startTime", startTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
             result.put("endTime", endTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
 
@@ -127,6 +143,9 @@ public class LogQueryTool implements AiTool {
 
             StringBuilder response = new StringBuilder();
             response.append(String.format("查询结果：共找到 **%d** 条日志（显示前%d条）\n\n", logs.size(), Math.min(logs.size(), 20)));
+            if ("mariadb-fallback".equals(dataSource)) {
+                response.append("_数据源：MariaDB 日志分析明细（Elasticsearch 未命中或未启用）_\n\n");
+            }
 
             response.append("**时间范围**: ").append(startTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")))
                     .append(" 至 ").append(endTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))).append("\n\n");
@@ -158,8 +177,11 @@ public class LogQueryTool implements AiTool {
         }
     }
 
-    private List<LogDocument> queryLogs(LocalDateTime startTime, LocalDateTime endTime,
+    private List<LogDocument> queryLogsFromEs(LocalDateTime startTime, LocalDateTime endTime,
                                         String severity, String keywords, String service, int limit) {
+        if (elasticsearchOperations == null) {
+            return List.of();
+        }
         try {
             Criteria criteria = new Criteria("timestamp").between(startTime, endTime);
 
@@ -191,9 +213,71 @@ public class LogQueryTool implements AiTool {
 
             return logs;
         } catch (Exception e) {
-            log.error("ES查询失败: {}", e.getMessage(), e);
-            return new ArrayList<>();
+            log.warn("ES 查询失败，将尝试 MariaDB 回退: {}", e.getMessage());
+            return List.of();
         }
+    }
+
+    private LogDocument toLogDocument(LogAnalysisDetail row) {
+        LogDocument doc = new LogDocument();
+        doc.setContent(row.getDesensitizedLog());
+        doc.setSeverity(row.getSeverity());
+        doc.setProtocol(row.getProtocol());
+        doc.setSource(row.getTaskId());
+        doc.setTaskId(row.getTaskId());
+        doc.setAnomaly(Boolean.TRUE.equals(row.getIsAnomaly()));
+        doc.setAnomalyScore(row.getAnomalyScore());
+        doc.setTimestamp(parseFallbackTimestamp(row.getLogTime()));
+        return doc;
+    }
+
+    private LocalDateTime parseFallbackTimestamp(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String value = raw.trim().replace("\"", "");
+        List<DateTimeFormatter> formats = List.of(
+                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+                DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"),
+                DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
+                DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"));
+        for (DateTimeFormatter formatter : formats) {
+            try {
+                return LocalDateTime.parse(value, formatter);
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            return OffsetDateTime.parse(value).toLocalDateTime();
+        } catch (Exception ignored) {
+        }
+        if (value.matches("^\\d{10,13}$")) {
+            try {
+                long epoch = Long.parseLong(value);
+                if (value.length() == 10) {
+                    epoch *= 1000L;
+                }
+                return LocalDateTime.ofInstant(Instant.ofEpochMilli(epoch), ZoneId.systemDefault());
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private int estimateWindowDays(String timeRange) {
+        if (timeRange == null || timeRange.isBlank()) {
+            return 1;
+        }
+        if (timeRange.contains("月")) {
+            return 30;
+        }
+        if (timeRange.contains("周")) {
+            return 7;
+        }
+        if (timeRange.contains("天")) {
+            return Math.max(1, extractNumber(timeRange));
+        }
+        return 1;
     }
 
     private LocalDateTime[] parseTimeRange(String timeRange) {

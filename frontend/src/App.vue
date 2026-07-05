@@ -1,428 +1,899 @@
 <template>
+
   <div>
+
     <Login v-if="!isLoggedIn" @login-success="handleLoginSuccess" />
 
-    <div v-else class="app-shell">
-      <aside class="shell-sidebar" :class="{ collapsed: isSidebarCollapsed }">
-        <div class="brand-block">
-          <div class="brand-logo-wrap" aria-hidden="true">
-            <img src="/threshcore-logo.png" alt="" class="brand-logo">
-          </div>
-          <div v-if="!isSidebarCollapsed" class="brand-copy">
-            <strong>ThreshCore</strong>
-            <span>日志 · 工具 · 审计 · 治理</span>
-          </div>
-        </div>
 
-        <div class="sidebar-menu">
-          <AppSideNavMenu
-            :groups="visibleNavGroups"
-            :active-tab="activeTab"
-            :collapse="isSidebarCollapsed"
-            :structure-key="navMenuStructureKey"
-            @select="handleSelect"
-          />
-        </div>
-      </aside>
 
-      <div class="shell-main" :class="{ collapsed: isSidebarCollapsed }">
-        <header class="shell-topbar">
+    <div v-else class="app-shell" :class="{ 'app-shell--agent': isAgentWorkspace }">
+
+      <div
+        v-if="isMobile && !isSidebarCollapsed"
+        class="sidebar-backdrop"
+        aria-hidden="true"
+        @click="isSidebarCollapsed = true"
+      />
+
+      <AgentSidebar
+
+        :active-tab="activeTab"
+
+        :collapsed="isSidebarCollapsed"
+
+        :nav-groups="visibleNavGroups"
+
+        :sessions="agentSessions"
+
+        :active-session-id="activeSessionId"
+
+        @select="handleSelect"
+
+        @new-chat="handleAgentNewChat"
+
+        @select-session="handleSelectSession"
+
+        @delete-session="handleDeleteSession"
+
+        @toggle-collapse="toggleSidebar"
+
+      />
+
+
+
+      <div
+
+        class="shell-main"
+
+        :class="{
+
+          collapsed: isSidebarCollapsed,
+
+          'shell-main--agent': isAgentWorkspace
+
+        }"
+
+      >
+
+        <header class="shell-topbar" :class="{ 'shell-topbar--minimal': isAgentWorkspace }">
+
           <div class="topbar-left">
-            <el-button text circle size="small" :icon="isSidebarCollapsed ? Menu : Close" @click="toggleSidebar" />
+
+            <el-button
+
+              v-if="isMobile"
+
+              text
+
+              circle
+
+              size="small"
+
+              :icon="isSidebarCollapsed ? Menu : Close"
+
+              @click="toggleSidebar"
+
+            />
+
             <div class="topbar-title">
               <h1>{{ breadcrumbText }}</h1>
-              <span>ThreshCore 智能运维控制台</span>
             </div>
           </div>
-
-          <TopPerformanceBar />
 
           <div class="topbar-right">
-            <div class="toolbar-actions">
-              <el-tooltip placement="bottom" content="快捷键：1 对话 · 2 MCP · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 仪表盘 · 8 效果 · 9 配置">
+            <el-popover
+              v-if="isAgentWorkspace && !isMobile"
+              placement="bottom-end"
+              :width="320"
+              trigger="click"
+              popper-class="topbar-status-popover"
+            >
+              <template #reference>
+                <el-button class="topbar-status-btn" size="small" text type="primary">
+                  <el-icon><Odometer /></el-icon>
+                  运行状态
+                </el-button>
+              </template>
+              <RuntimeModeBar compact show-refresh />
+            </el-popover>
+
+            <el-popover
+              v-if="!isAgentWorkspace && !isMobile"
+              placement="bottom-end"
+              :width="380"
+              trigger="click"
+              popper-class="topbar-perf-popover"
+            >
+              <template #reference>
+                <el-button class="topbar-perf-btn" size="small" text type="primary">
+                  <el-icon><Odometer /></el-icon>
+                  本机态势
+                </el-button>
+              </template>
+              <TopPerformanceBar layout="vertical" />
+            </el-popover>
+
+            <el-button
+
+              v-if="isAgentWorkspace && isMobile"
+
+              text
+
+              circle
+
+              size="small"
+
+              :icon="Odometer"
+
+              title="本机态势"
+
+              @click="contextDrawerOpen = true"
+
+            />
+
+            <div v-if="!isAgentWorkspace" class="toolbar-actions">
+              <RuntimeModeBar compact />
+
+              <el-tooltip placement="bottom" content="快捷键：1 对话 · 2 工具 · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 仪表盘 · 8 效果 · 9 配置">
+
                 <el-button text circle size="small" :icon="QuestionFilled" aria-label="快捷键说明" />
+
               </el-tooltip>
+
             </div>
 
+
+
             <el-dropdown @command="handleUserMenuCommand">
+
               <span class="user-info">
+
                 <el-avatar size="small" :src="userAvatar" />
+
                 <span class="user-text">
+
                   <span class="user-name">{{ username }}</span>
+
                   <el-tag size="small" effect="plain" class="role-pill">{{ roleBadgeText }}</el-tag>
+
                 </span>
+
                 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+
               </span>
+
               <template #dropdown>
+
                 <el-dropdown-menu>
+
                   <el-dropdown-item disabled>{{ username }} · {{ roleBadgeText }}</el-dropdown-item>
+
                   <el-dropdown-item command="profile">个人中心</el-dropdown-item>
+
                   <el-dropdown-item command="system-config">系统配置</el-dropdown-item>
+
                   <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+
                 </el-dropdown-menu>
+
               </template>
+
             </el-dropdown>
+
           </div>
+
         </header>
 
-        <main class="shell-content">
-          <component
-            :is="currentComponent"
-            :key="activeTab"
-            ref="componentRef"
-            :initial-task-id="targetTaskId"
-            @view-task="handleViewTask"
-            @profile-updated="handleProfileUpdated"
-          />
-        </main>
+
+
+        <div class="workspace-body" :class="{ 'workspace-body--agent': isAgentWorkspace }">
+
+          <main
+            class="shell-content main-content"
+            :class="{ 'shell-content--agent': isAgentWorkspace }"
+          >
+            <div class="page-viewport" :class="{ 'page-viewport--agent': isAgentWorkspace }">
+              <transition name="page-fade" mode="out-in">
+                <component
+                  :is="currentComponent"
+                  :key="activeTab"
+                  ref="componentRef"
+                  :initial-task-id="targetTaskId"
+                  @view-task="handleViewTask"
+                  @profile-updated="handleProfileUpdated"
+                  @open-path-policy="handleOpenPathPolicy"
+                />
+              </transition>
+            </div>
+          </main>
+
+
+
+          <OpsContextPanel v-if="isAgentWorkspace && !isMobile && activeTab !== 'ops-live-wall'" />
+
+        </div>
+
       </div>
+
+
+
+      <el-drawer
+
+        v-model="contextDrawerOpen"
+
+        destroy-on-close
+
+        title="本机态势"
+
+        direction="rtl"
+
+        size="85%"
+
+        class="context-drawer"
+
+      >
+
+        <OpsContextPanel embedded />
+
+      </el-drawer>
+
     </div>
+
   </div>
+
 </template>
 
+
+
 <script setup>
+
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+
 import {
+
   ArrowDown,
+
   ChatLineSquare,
+
   Clock,
+
   Close,
+
   Connection,
+
   DataLine,
+
   Document,
+
+  Grid,
+
   List,
+
   Menu,
+
+  Monitor,
+
+  Odometer,
+
   PieChart,
+
+  Platform,
+
   QuestionFilled,
+
+  Reading,
+
   Setting,
+
   TrendCharts,
+
   User
+
 } from '@element-plus/icons-vue'
+
 import Login from './components/Login.vue'
-import AppSideNavMenu from './components/AppSideNavMenu.vue'
+
+import AgentSidebar from './components/agent/AgentSidebar.vue'
+
+import OpsContextPanel from './components/agent/OpsContextPanel.vue'
+
 import TopPerformanceBar from './components/TopPerformanceBar.vue'
+import RuntimeModeBar from './components/RuntimeModeBar.vue'
+import OpsChatInterface from './components/OpsChatInterface.vue'
+import AgentSkillsPage from './components/agent/AgentSkillsPage.vue'
+
 import { logout } from './api'
+import { useAgentSession } from './composables/useAgentSession'
+
+const {
+  sessions: agentSessions,
+  activeSessionId,
+  createSession,
+  switchSession,
+  deleteSession
+} = useAgentSession()
+
+
 
 const defineTabAsyncComponent = (loader) =>
+
   defineAsyncComponent({
+
     loader,
+
     suspensible: false
+
   })
+
+
 
 const LogAnalysis = defineTabAsyncComponent(() => import('./components/LogAnalysis.vue'))
+
 const HistoryList = defineTabAsyncComponent(() => import('./components/HistoryList.vue'))
+
 const LogAnalysisDashboard = defineTabAsyncComponent(() => import('./components/LogAnalysisDashboard.vue'))
-const McpToolsDemo = defineTabAsyncComponent(() => import('./components/McpToolsDemo.vue'))
-const OpsChatInterface = defineTabAsyncComponent(() => import('./components/OpsChatInterface.vue'))
-const AiAuditCenter = defineTabAsyncComponent(() => import('./components/AiAuditCenter.vue'))
-const OpsTraceCenter = defineTabAsyncComponent(() => import('./components/OpsTraceCenter.vue'))
+
+const ToolConsole = defineTabAsyncComponent(() => import('./components/ToolConsole.vue'))
+
+const AuditCenter = defineTabAsyncComponent(() => import('./components/AuditCenter.vue'))
+
 const OpsEffectDashboard = defineTabAsyncComponent(() => import('./components/OpsEffectDashboard.vue'))
+
 const SystemConfigCenter = defineTabAsyncComponent(() => import('./components/SystemConfigCenter.vue'))
+
 const UserProfileCenter = defineTabAsyncComponent(() => import('./components/UserProfileCenter.vue'))
 
+const KnowledgeBase = defineTabAsyncComponent(() => import('./components/KnowledgeBase.vue'))
+
+const EnvironmentStatus = defineTabAsyncComponent(() => import('./components/EnvironmentStatus.vue'))
+
+const OpsLiveWall = defineTabAsyncComponent(() => import('./components/OpsLiveWall.vue'))
+
+
+
 const isLoggedIn = ref(false)
+
 const activeTab = ref('ops-chat')
+
 const componentRef = ref(null)
+
 const targetTaskId = ref('')
+
 const userAvatar = ref('')
+
 const username = ref('本地管理员')
+
 const userRole = ref(0)
+
 const isSidebarCollapsed = ref(false)
+
 const isMobile = ref(typeof window !== 'undefined' ? window.innerWidth < 768 : false)
 
+const contextDrawerOpen = ref(false)
+
+
+
 const tabConfig = {
-  'ops-chat': { label: '工作台对话', component: OpsChatInterface, icon: ChatLineSquare },
-  'mcp-tools': { label: '工具控制台', component: McpToolsDemo, icon: Connection },
-  audit: { label: '执行审计', component: AiAuditCenter, icon: List },
-  'ops-audit-trace': { label: '运维链路审计', component: OpsTraceCenter, icon: Document },
+
+  'ops-chat': { label: 'Agent 对话', component: OpsChatInterface, icon: ChatLineSquare },
+
+  'agent-skills': { label: '运维技能', component: AgentSkillsPage, icon: Grid },
+
+  'mcp-tools': { label: '工具控制台', component: ToolConsole, icon: Connection },
+
+  audit: { label: '统一审计中心', component: AuditCenter, icon: List },
+
+  'ops-audit-trace': { label: '统一审计中心', component: AuditCenter, icon: List },
+
   'ops-effect': { label: '运维效果评分', component: OpsEffectDashboard, icon: TrendCharts },
+
+  'environment-status': { label: '环境状态', component: EnvironmentStatus, icon: Platform },
+
+  'ops-live-wall': { label: '运行态势', component: OpsLiveWall, icon: Monitor },
+
   analysis: { label: '日志分析', component: LogAnalysis, icon: DataLine },
+
   history: { label: '任务记录', component: HistoryList, icon: Clock },
+
   dashboard: { label: '日志分析仪表盘', component: LogAnalysisDashboard, icon: PieChart },
+
+  knowledge: { label: '知识库', component: KnowledgeBase, icon: Reading },
+
   'system-config': { label: '系统配置与效果', component: SystemConfigCenter, icon: Setting },
+
   'profile-center': { label: '个人中心', component: UserProfileCenter, icon: User }
+
 }
+
+
 
 const defaultTab = 'ops-chat'
+
 const NAV_GROUP_ORDER = [
-  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'mcp-tools', 'audit', 'ops-audit-trace', 'ops-effect'] },
-  { title: '日志与分析', keys: ['analysis', 'history', 'dashboard'] }
+
+  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'agent-skills', 'mcp-tools', 'audit', 'ops-effect', 'environment-status', 'ops-live-wall'] },
+
+  { title: '日志与分析', keys: ['analysis', 'history', 'dashboard', 'knowledge'] }
+
 ]
 
+
+
 const visibleNavGroups = computed(() =>
+
   NAV_GROUP_ORDER.map(group => ({
+
     title: group.title,
+
     items: group.keys
+
       .map(key => {
+
         const cfg = tabConfig[key]
+
         if (!cfg) return null
+
         return { key, label: cfg.label, icon: cfg.icon }
+
       })
+
       .filter(Boolean)
+
   }))
+
 )
 
-const navMenuStructureKey = computed(() =>
-  visibleNavGroups.value.map(group => group.items.map(item => item.key).join(',')).join('||')
-)
+
 
 const shortcutTabMap = {
+
   '1': 'ops-chat',
+
   '2': 'mcp-tools',
+
   '3': 'audit',
+
   '4': 'ops-audit-trace',
+
   '5': 'analysis',
+
   '6': 'history',
+
   '7': 'dashboard',
+
   '8': 'ops-effect',
+
   '9': 'system-config'
+
 }
+
+
+
+const isAgentWorkspace = computed(() => activeTab.value === 'ops-chat' || activeTab.value === 'agent-skills')
 
 const roleBadgeText = computed(() => (userRole.value === 1 ? '管理员' : '普通用户'))
+
 const breadcrumbText = computed(() => tabConfig[activeTab.value]?.label || tabConfig[defaultTab].label)
+
 const currentComponent = computed(() => tabConfig[activeTab.value]?.component || tabConfig[defaultTab].component)
 
+
+
 function toggleSidebar() {
+
   isSidebarCollapsed.value = !isSidebarCollapsed.value
+
 }
+
+
 
 function handleResize() {
+
   isMobile.value = window.innerWidth < 768
+
   if (isMobile.value) {
+
     isSidebarCollapsed.value = true
+
   }
+
 }
+
+
 
 function syncUserState(userData = {}) {
+
   username.value = userData.username || '本地管理员'
+
   userRole.value = Number(userData.role ?? 0)
+
 }
+
+
 
 function checkLoginStatus() {
+
   const rawUser = localStorage.getItem('user')
+
   if (!rawUser) {
+
     isLoggedIn.value = false
+
     return
+
   }
+
   try {
+
     const userData = JSON.parse(rawUser)
+
     isLoggedIn.value = true
+
     syncUserState(userData)
+
     if (!tabConfig[activeTab.value]) {
+
       activeTab.value = defaultTab
+
     }
+
   } catch {
+
     localStorage.removeItem('user')
+
     isLoggedIn.value = false
+
   }
+
 }
+
+
 
 function handleLoginSuccess() {
+
   checkLoginStatus()
+
   activeTab.value = defaultTab
+
 }
+
+
 
 async function handleLogout() {
+
   try {
+
     await logout()
+
   } catch (_) {
+
     // ignore
+
   }
+
   localStorage.removeItem('user')
+
   isLoggedIn.value = false
+
 }
+
+
 
 function handleUserMenuCommand(command) {
+
   if (command === 'profile') {
+
     activeTab.value = 'profile-center'
+
     return
+
   }
+
   if (command === 'system-config') {
+
     activeTab.value = 'system-config'
+
     return
+
   }
+
   if (command === 'logout') {
+
     handleLogout()
+
   }
+
 }
+
+
 
 function callComponentMethod(methodName, args = [], attempts = 12) {
+
   nextTick(() => {
+
     const fn = componentRef.value?.[methodName]
+
     if (typeof fn === 'function') {
+
       fn(...args)
+
       return
+
     }
+
     if (attempts <= 0) return
+
     setTimeout(() => callComponentMethod(methodName, args, attempts - 1), 100)
+
   })
+
 }
+
+
 
 function handleOpsNavigateAgent(event) {
+
   const message = event.detail?.message
+
   if (typeof message !== 'string' || !message.trim()) return
+
   activeTab.value = 'ops-chat'
+
   callComponentMethod('applyPrefill', [message.trim()])
+
 }
+
+
 
 function handleSelect(key) {
+
   activeTab.value = key
+
+  if (isMobile.value) {
+
+    isSidebarCollapsed.value = true
+
+  }
+
 }
+
+
+
+function handleAgentNewChat() {
+
+  createSession()
+
+  activeTab.value = 'ops-chat'
+
+}
+
+
+
+function handleSelectSession(id) {
+
+  switchSession(id)
+
+  activeTab.value = 'ops-chat'
+
+}
+
+
+
+function handleDeleteSession(id) {
+
+  deleteSession(id)
+
+}
+
+
 
 function handleGlobalKeydown(event) {
+
   const target = event.target
+
   const tagName = target?.tagName?.toLowerCase?.() || ''
+
   const isTyping = target?.isContentEditable || tagName === 'input' || tagName === 'textarea'
+
   if (isTyping || event.ctrlKey || event.altKey || event.metaKey) return
 
+
+
   const targetTab = shortcutTabMap[event.key?.toLowerCase?.() || '']
+
   if (!targetTab) return
+
   event.preventDefault()
+
   activeTab.value = targetTab
+
 }
+
+
 
 function handleViewTask(taskId) {
+
   targetTaskId.value = taskId
+
   activeTab.value = 'analysis'
+
   callComponentMethod('loadTask', [taskId])
+
 }
+
+
 
 function handleOpsNavigateTab(event) {
+
   const tab = event?.detail?.tab
+
+  const section = event?.detail?.section
+
   if (tab && tabConfig[tab]) {
+
     activeTab.value = tab
+
+    if (section && tab === 'system-config') {
+
+      callComponentMethod('focusSection', [section])
+
+    }
+
   }
+
 }
+
+
+
+function handleOpenPathPolicy() {
+
+  window.dispatchEvent(new CustomEvent('ops-navigate-tab', {
+
+    detail: { tab: 'system-config', section: 'pathPolicy' }
+
+  }))
+
+}
+
+
 
 function handleProfileUpdated(user) {
+
   syncUserState(user || {})
+
 }
+
+
 
 onMounted(() => {
+
   checkLoginStatus()
+
   handleResize()
+
   window.addEventListener('resize', handleResize)
+
   window.addEventListener('keydown', handleGlobalKeydown)
+
   window.addEventListener('ops-navigate-agent', handleOpsNavigateAgent)
+
   window.addEventListener('ops-navigate-tab', handleOpsNavigateTab)
+
 })
+
+
 
 onUnmounted(() => {
+
   window.removeEventListener('resize', handleResize)
+
   window.removeEventListener('keydown', handleGlobalKeydown)
+
   window.removeEventListener('ops-navigate-agent', handleOpsNavigateAgent)
+
   window.removeEventListener('ops-navigate-tab', handleOpsNavigateTab)
+
 })
+
+
 
 watch(isMobile, value => {
+
   isSidebarCollapsed.value = value
+
 })
 
-watch(activeTab, (tab) => {
-  if (tab === 'live-wall' && !isMobile.value) {
-    isSidebarCollapsed.value = true
-  }
-})
+
 
 watch(
+
   visibleNavGroups,
+
   groups => {
+
     const visibleKeys = new Set(groups.flatMap(group => group.items.map(item => item.key)))
+
     if (
+
       !visibleKeys.has(activeTab.value)
+
       && activeTab.value !== 'profile-center'
+
       && activeTab.value !== 'system-config'
+
     ) {
+
       activeTab.value = defaultTab
+
     }
+
   },
+
   { flush: 'sync' }
+
 )
+
 </script>
 
+
+
 <style scoped>
+
 .app-shell {
+
   min-height: 100vh;
+
   display: flex;
+
   background: var(--shell-bg);
+
   font-family: var(--ops-font);
+
 }
 
-.shell-sidebar {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: 252px;
-  background: var(--shell-sidebar);
-  border-right: 1px solid var(--shell-border);
-  color: var(--shell-text);
-  display: flex;
-  flex-direction: column;
-  z-index: 1000;
-  transition: width 0.28s ease, transform 0.28s ease;
-}
 
-.shell-sidebar.collapsed {
-  width: 82px;
-}
-
-.brand-block {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 14px;
-  border-bottom: 1px solid var(--shell-border);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent);
-}
-
-.brand-logo-wrap {
-  width: 56px;
-  height: 56px;
-  border-radius: 10px;
-  overflow: hidden;
-  flex-shrink: 0;
-  filter: drop-shadow(0 0 10px var(--shell-glow));
-}
-
-.brand-logo {
-  width: 56px;
-  display: block;
-}
-
-.brand-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.brand-copy strong {
-  font-size: 16px;
-  color: var(--shell-text);
-}
-
-.brand-copy span {
-  font-size: 11px;
-  color: var(--shell-muted);
-}
-
-.sidebar-menu {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 0;
-}
 
 .shell-main {
+
   flex: 1;
-  margin-left: 252px;
-  width: calc(100vw - 252px);
+
+  margin-left: var(--agent-sidebar-w);
+
+  width: calc(100vw - var(--agent-sidebar-w));
+
   display: flex;
+
   flex-direction: column;
-  transition: margin-left 0.28s ease, width 0.28s ease;
+
+  height: 100vh;
+
+  min-height: 0;
+
+  overflow: hidden;
+
+  transition: margin-left 0.25s ease, width 0.25s ease;
+
 }
 
+
+
 .shell-main.collapsed {
-  margin-left: 82px;
-  width: calc(100vw - 82px);
+
+  margin-left: var(--agent-sidebar-collapsed-w);
+
+  width: calc(100vw - var(--agent-sidebar-collapsed-w));
+
 }
+
+
+
+.shell-main--agent {
+
+  background: var(--agent-surface);
+
+}
+
+
 
 .shell-topbar {
   position: sticky;
@@ -430,27 +901,21 @@ watch(
   z-index: 999;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 20px;
+  gap: 12px;
+  padding: 0 16px;
   min-height: var(--ops-header-h);
   background: var(--ops-panel);
   border-bottom: 1px solid var(--ops-border);
   box-shadow: var(--ops-shadow-sm);
 }
 
-.topbar-left,
-.topbar-right {
+.topbar-left {
   display: flex;
   align-items: center;
   gap: 14px;
-}
-
-.topbar-left {
   min-width: 0;
-}
-
-.topbar-right {
-  margin-left: auto;
+  flex: 0 1 auto;
+  max-width: min(220px, 28vw);
 }
 
 .topbar-title {
@@ -459,22 +924,57 @@ watch(
   min-width: 0;
 }
 
-.topbar-title h1 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--ops-text);
-}
-
 .topbar-title span {
   font-size: 11px;
   color: var(--ops-text-subtle);
 }
 
+.topbar-right {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.topbar-title h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ops-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.shell-topbar--minimal {
+  padding: 0 20px;
+  gap: 16px;
+}
+
+.shell-topbar--minimal .topbar-left {
+  max-width: none;
+  flex: 1;
+}
+
+.shell-topbar--minimal .topbar-title h1 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.topbar-status-btn,
+.topbar-perf-btn {
+  flex-shrink: 0;
+  font-weight: 500;
 }
 
 .user-info {
@@ -487,137 +987,214 @@ watch(
   background: var(--ops-panel-soft);
   border: 1px solid var(--ops-border);
   color: var(--ops-text);
+  flex-shrink: 0;
+  max-width: min(200px, 26vw);
 }
 
 .user-text {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .user-name {
   font-size: 13px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 88px;
 }
+
+
 
 .role-pill {
+
   border-color: rgba(15, 118, 110, 0.18);
+
   color: #0f766e;
+
 }
+
+
 
 .shell-content {
+
   flex: 1;
+
   padding: 16px 20px 20px;
+
   overflow-y: auto;
+
   background: var(--ops-bg);
+
 }
+
+
+
+.shell-content.shell-content--agent {
+
+  display: flex;
+
+  flex-direction: column;
+
+  flex: 1;
+
+  min-height: 0;
+
+  padding: 0 !important;
+
+  overflow: hidden !important;
+
+  background: var(--agent-surface);
+
+}
+
+
+
+.page-viewport {
+
+  flex: 1;
+
+  min-height: 0;
+
+}
+
+
+
+.page-viewport--agent {
+
+  display: flex;
+
+  flex-direction: column;
+
+  min-height: calc(100vh - var(--ops-header-h, 52px));
+
+  overflow: hidden;
+
+}
+
+
+
+.page-viewport--agent :deep(> *) {
+
+  flex: 1;
+
+  min-height: 0;
+
+  display: flex;
+
+  flex-direction: column;
+
+}
+
+
 
 .shell-content :deep(.el-card) {
+
   border-radius: var(--ops-radius);
+
   border: 1px solid var(--ops-border);
+
   box-shadow: var(--ops-shadow-sm);
+
 }
+
+
 
 .shell-content :deep(.el-card__header) {
+
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), var(--ops-panel-soft));
+
   border-bottom: 1px solid var(--ops-border-soft);
+
 }
+
+
 
 .shell-content :deep(.el-table) {
+
   --el-table-header-bg-color: rgba(245, 247, 251, 0.98);
+
   --el-table-tr-bg-color: #ffffff;
+
   --el-table-row-hover-bg-color: rgba(8, 145, 178, 0.05);
+
   --el-table-border-color: var(--ops-border-soft);
+
 }
 
-:deep(.el-menu) {
-  background: transparent !important;
-  border-right: none !important;
+
+
+.sidebar-backdrop {
+
+  position: fixed;
+
+  inset: 0;
+
+  z-index: 999;
+
+  background: rgba(15, 23, 42, 0.35);
+
 }
 
-:deep(.el-menu-item-group__title) {
-  padding: 16px 20px 8px !important;
-  font-size: 10px !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.12em !important;
-  text-transform: uppercase !important;
-  color: rgba(148, 163, 184, 0.55) !important;
-  pointer-events: none;
+
+
+:deep(.context-drawer .ops-context-panel) {
+
+  width: 100%;
+
+  border: none;
+
 }
 
-:deep(.el-menu-item) {
-  font-size: 13px;
-  font-weight: 500;
-  height: 42px;
-  line-height: 42px;
-  margin: 3px 12px;
-  border-radius: 10px;
-  color: rgba(226, 232, 240, 0.88);
-  transition: background 0.22s ease, color 0.22s ease;
-}
 
-:deep(.el-menu-item:hover) {
-  background: var(--shell-nav-hover) !important;
-  color: #f0fdfa !important;
-}
-
-:deep(.el-menu-item.is-active) {
-  background: var(--shell-nav-active) !important;
-  color: #f0fdfa !important;
-  box-shadow: inset 3px 0 0 var(--shell-accent);
-}
-
-:deep(.el-menu-item .el-icon) {
-  font-size: 18px;
-  margin-right: 12px;
-}
-
-@media (max-width: 1200px) {
-  .shell-sidebar {
-    width: 240px;
-  }
-
-  .shell-main {
-    margin-left: 240px;
-    width: calc(100vw - 240px);
-  }
-
-  .shell-main.collapsed {
-    margin-left: 82px;
-    width: calc(100vw - 82px);
-  }
-}
 
 @media (max-width: 768px) {
-  .shell-sidebar {
-    transform: translateX(-100%);
-    width: 250px;
-  }
-
-  .shell-sidebar:not(.collapsed) {
-    transform: translateX(0);
-  }
 
   .shell-main,
+
   .shell-main.collapsed {
+
     margin-left: 0;
+
     width: 100vw;
+
   }
+
+
 
   .shell-topbar {
+
     padding: 0 14px;
+
   }
+
+
 
   .toolbar-actions {
+
     display: none;
+
   }
+
+
 
   .user-text {
+
     display: none;
+
   }
 
+
+
   .shell-content {
+
     padding: 14px;
+
   }
+
 }
+
 </style>

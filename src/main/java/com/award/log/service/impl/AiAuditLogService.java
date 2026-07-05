@@ -61,6 +61,12 @@ public class AiAuditLogService {
         return jdbcTemplate.queryForList("SELECT * FROM ai_audit_log ORDER BY id DESC LIMIT ?", size);
     }
 
+    public Map<String, Object> findById(long id) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT * FROM ai_audit_log WHERE id = ? LIMIT 1", id);
+        return rows.isEmpty() ? Map.of() : rows.get(0);
+    }
+
     /** 个人中心「登录 / 请求足迹」：按用户过滤 HTTP 审计记录 */
     public List<Map<String, Object>> listRecentByUserId(String userId, int limit) {
         if (userId == null || userId.isBlank()) {

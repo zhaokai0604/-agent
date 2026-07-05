@@ -1,32 +1,45 @@
 <template>
   <div :class="embedded ? 'audit-pane' : 'ops-page'">
-  <el-card shadow="never" class="ops-surface-card">
-    <template #header>
-      <div class="header">
-        <span v-if="!embedded">访问记录</span>
-        <div class="header-actions" :class="{ 'header-actions--solo': embedded }">
+    <OpsPageHeader
+      v-if="!embedded"
+      title="访问记录"
+      subtitle="API 与页面访问审计，含用户、IP、耗时与状态码"
+    >
+      <template #actions>
+        <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
+        <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
+        <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">
+          导出 CSV
+        </el-button>
+      </template>
+    </OpsPageHeader>
+
+    <el-card shadow="never" class="ops-surface-card">
+      <template v-if="embedded" #header>
+        <div class="header-actions header-actions--solo">
           <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />
           <el-button size="small" type="primary" :loading="loading" @click="loadData">刷新</el-button>
-          <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">导出 CSV</el-button>
+          <el-button size="small" type="success" plain :disabled="!rows.length" :loading="exporting" @click="onExportCsv">
+            导出 CSV
+          </el-button>
         </div>
-      </div>
-    </template>
+      </template>
 
-    <div class="audit-export-wrap">
-    <el-table :data="rows" border stripe height="560">
-      <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="user_id" label="用户ID" width="100" />
-      <el-table-column prop="user_role" label="角色" width="80" />
-      <el-table-column prop="remote_ip" label="IP" width="140" />
-      <el-table-column prop="method" label="方法" width="80" />
-      <el-table-column prop="path" label="路径" min-width="240" />
-      <el-table-column prop="status" label="状态码" width="90" />
-      <el-table-column prop="duration_ms" label="耗时(ms)" width="110" />
-      <el-table-column prop="request_bytes" label="请求字节" width="100" />
-      <el-table-column prop="created_at" label="时间" min-width="180" />
-    </el-table>
-    </div>
-  </el-card>
+      <div class="audit-export-wrap">
+        <el-table :data="rows" border stripe height="560" v-loading="loading">
+          <el-table-column prop="id" label="ID" width="80" />
+          <el-table-column prop="user_id" label="用户ID" width="100" />
+          <el-table-column prop="user_role" label="角色" width="80" />
+          <el-table-column prop="remote_ip" label="IP" width="140" />
+          <el-table-column prop="method" label="方法" width="80" />
+          <el-table-column prop="path" label="路径" min-width="240" show-overflow-tooltip />
+          <el-table-column prop="status" label="状态码" width="90" />
+          <el-table-column prop="duration_ms" label="耗时(ms)" width="110" />
+          <el-table-column prop="request_bytes" label="请求字节" width="100" />
+          <el-table-column prop="created_at" label="时间" min-width="180" />
+        </el-table>
+      </div>
+    </el-card>
   </div>
 </template>
 
@@ -36,6 +49,11 @@ import { ElMessage } from 'element-plus'
 import { getAiAuditRecent } from '../api'
 import { formatLocalDateKey } from '../utils/formatDate.js'
 import { exportRowsAsCsv } from '../utils/tableExport.js'
+import OpsPageHeader from './OpsPageHeader.vue'
+
+defineProps({
+  embedded: { type: Boolean, default: false }
+})
 
 const AUDIT_CSV_COLUMNS = [
   { key: 'id', label: 'ID' },
@@ -90,9 +108,25 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.header { display: flex; align-items: center; justify-content: space-between; }
-.header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.header-actions--solo { margin-left: auto; width: 100%; justify-content: flex-end; }
-.audit-pane .ops-surface-card { border: none; box-shadow: none; }
-.audit-export-wrap { background: #fff; }
+.header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.header-actions--solo {
+  margin-left: auto;
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.audit-pane .ops-surface-card {
+  border: none;
+  box-shadow: none;
+}
+
+.audit-export-wrap {
+  background: var(--ops-panel);
+}
 </style>

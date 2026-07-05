@@ -1,5 +1,6 @@
 import { reactive, ref, computed, onMounted, onUnmounted } from 'vue'
 import {
+  buildManagementWsUrl,
   getPerformanceData,
   getPatrolAlertsRecent,
   getPatrolCorrelationLatest,
@@ -16,14 +17,13 @@ const METRIC_DEFS = [
   { key: 'networkUsage', label: '网络', color: '#34d399' }
 ]
 
-const RING_CAP = 360
-const INTERVAL_MS = 5000
-const PATROL_POLL_MS = 15000
-const SLOW_POLL_MS = 60000
-const HTTP_SKIP_AFTER_WS_MS = 12000
+const RING_CAP = 180
+const INTERVAL_MS = 15000
+const PATROL_POLL_MS = 60000
+const SLOW_POLL_MS = 300000
+const HTTP_SKIP_AFTER_WS_MS = 30000
 const WS_RECONNECT_CAP = 10
 
-const runtimeProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
 const VITE_AWARD_LOG_WS_URL =
   typeof import.meta.env?.VITE_AWARD_LOG_WS_URL === 'string'
     ? import.meta.env.VITE_AWARD_LOG_WS_URL.trim()
@@ -31,9 +31,7 @@ const VITE_AWARD_LOG_WS_URL =
 
 function performanceWsUrl () {
   if (VITE_AWARD_LOG_WS_URL) return VITE_AWARD_LOG_WS_URL
-  const wsScheme = runtimeProtocol === 'https:' ? 'wss:' : 'ws:'
-  const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8088'
-  return `${wsScheme}//${host}/award-log/ws/performance`
+  return buildManagementWsUrl('/ws/performance')
 }
 
 function formatClockTime (d = new Date()) {
@@ -42,6 +40,10 @@ function formatClockTime (d = new Date()) {
 
 function formatAxisLabel (d = new Date()) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function isDocumentVisible () {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
 }
 
 /**
@@ -225,6 +227,7 @@ export function useLiveWallFeed () {
   }
 
   async function httpPerformanceFallback () {
+    if (!isDocumentVisible()) return
     const wsFresh = lastPerfWsAt.value && Date.now() - lastPerfWsAt.value < HTTP_SKIP_AFTER_WS_MS
     if (wsFresh) return
     try {
@@ -237,6 +240,33 @@ export function useLiveWallFeed () {
       pushSeriesPoint()
     } catch {
       loadError.value = '性能数据拉取失败'
+    }
+  }
+
+  async function fetchPatrolRealtime () {
+    if (!isDocumentVisible()) return
+    try {
+      const [alerts, corr, pending] = await Promise.all([
+        getPatrolAlertsRecent(30),
+        getPatrolCorrelationLatest(),
+        getPatrolRemediationPending()
+      ])
+      patrolAlerts.value = Array.isArray(alerts) ? alerts : []
+      correlation.value = corr && typeof corr === 'object' ? { ...corr } : {}
+      pendingRemediation.value =
+        pending && typeof pending === 'object' ? { ...pending } : { hasPending: false }
+    } catch {
+      /* 淇濈暀涓婃鐪熷疄鏁版嵁 */
+    }
+  }
+
+  async function fetchPatrolTrendOnly () {
+    if (!isDocumentVisible()) return
+    try {
+      const trend = await getPatrolHistoryTrend(7)
+      patrolTrend.value = Array.isArray(trend) ? trend : []
+    } catch {
+      /* 淇濈暀涓婃鐪熷疄鏁版嵁 */
     }
   }
 
@@ -259,6 +289,7 @@ export function useLiveWallFeed () {
   }
 
   async function fetchTraces () {
+    if (!isDocumentVisible()) return
     try {
       const rows = await getOpsTraceRecent(20)
       recentTraces.value = (Array.isArray(rows) ? rows : [])
@@ -270,6 +301,7 @@ export function useLiveWallFeed () {
   }
 
   async function fetchPlatform () {
+    if (!isDocumentVisible()) return
     try {
       platformInfo.value = await getPlatformInfo()
     } catch {
@@ -278,35 +310,64 @@ export function useLiveWallFeed () {
   }
 
   async function refreshAll () {
-    await Promise.all([httpPerformanceFallback(), fetchPatrolBundle(), fetchTraces(), fetchPlatform()])
+    await Promise.all([
+      httpPerformanceFallback(),
+      fetchPatrolRealtime(),
+      fetchPatrolTrendOnly(),
+      fetchTraces(),
+      fetchPlatform()
+    ])
   }
 
   function start () {
+    if (!isDocumentVisible() || tickTimer || patrolTimer || slowTimer) {
+      return
+    }
     connectPerformanceWs()
     httpPerformanceFallback()
-    fetchPatrolBundle()
+    fetchPatrolRealtime()
+    fetchPatrolTrendOnly()
     fetchTraces()
     fetchPlatform()
     tickTimer = window.setInterval(httpPerformanceFallback, INTERVAL_MS)
-    patrolTimer = window.setInterval(fetchPatrolBundle, PATROL_POLL_MS)
+    patrolTimer = window.setInterval(fetchPatrolRealtime, PATROL_POLL_MS)
     slowTimer = window.setInterval(() => {
+      fetchPatrolTrendOnly()
       fetchTraces()
       fetchPlatform()
     }, SLOW_POLL_MS)
   }
 
-  function stop () {
+  function stop (forUnmount = true) {
     if (tickTimer) clearInterval(tickTimer)
     if (patrolTimer) clearInterval(patrolTimer)
     if (slowTimer) clearInterval(slowTimer)
     tickTimer = null
     patrolTimer = null
     slowTimer = null
-    disconnectPerformanceWs(true, true)
+    disconnectPerformanceWs(true, forUnmount)
   }
 
-  onMounted(start)
-  onUnmounted(stop)
+  function handleVisibilityChange () {
+    if (isDocumentVisible()) {
+      start()
+      return
+    }
+    stop(false)
+  }
+
+  onMounted(() => {
+    start()
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange)
+    }
+  })
+  onUnmounted(() => {
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+    stop(true)
+  })
 
   return {
     METRIC_DEFS,

@@ -1,12 +1,14 @@
 package com.award.log.service.impl;
 
+import com.award.log.agent.OpsReportFormat;
 import com.award.log.agent.awm.FailureInsightService;
+import com.award.log.security.IntentRiskFilter;
+import com.award.log.security.McpInvocationSecurityGate;
+import com.award.log.security.PromptInjectionGuard;
+import com.award.log.security.RiskLevel;
 import com.award.log.service.*;
 import com.award.log.util.AiChatResponseSupport;
 import com.award.log.service.ChatMemoryService.MemoryEntry;
-import com.award.log.service.IntentRecognitionService;
-import com.award.log.service.ToolRegistryService;
-import com.award.log.util.AiChatResponseSupport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -15,19 +17,17 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -48,20 +48,35 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
     @Autowired(required = false)
     private FailureInsightService failureInsightService;
 
+    @Autowired(required = false)
+    private PromptInjectionGuard promptInjectionGuard;
+
+    @Autowired(required = false)
+    private IntentRiskFilter intentRiskFilter;
+
+    @Autowired
+    private ChatSessionRetention sessionRetention;
+
     private final Map<String, List<ChatMessage>> conversationHistories = new ConcurrentHashMap<>();
     private static final int MAX_HISTORY_SIZE = 50;
-    private static final String DEFAULT_SESSION_ID = "default";
-
-    private String currentSessionId = DEFAULT_SESSION_ID;
 
     private static final Pattern TOOL_CALL_PATTERN = Pattern.compile(
             "【([a-z_]+)】\\s*\\{\\s*([^}]*?)\\s*\\}",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL
     );
 
+    static String requireSessionId(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("sessionId required");
+        }
+        return sessionId.trim();
+    }
+
     @Override
-    public Flux<String> chat(String userMessage) {
-        log.info("收到聊天消息: [{}]", userMessage);
+    public Flux<String> chat(String sessionId, String userMessage) {
+        final String sid = requireSessionId(sessionId);
+        sessionRetention.touch(sid);
+        log.info("收到聊天消息 session={}: [{}]", sid, userMessage);
         String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
                 userMessage == null ? "" : userMessage.trim(), 16_000);
         if (safe.isBlank()) {
@@ -77,12 +92,11 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         try {
             IntentRecognitionService.RecognitionResult intent = intentRecognitionService.recognize(safe);
 
-            String memoryContext = buildMemoryContext(userMessage);
-            String toolResult = null;
-            String analysisContext = "";
+            String memoryContext = buildMemoryContext(sid, userMessage);
+            String analysisContext;
 
             if (shouldCallTool(intent, safe)) {
-                toolResult = executeToolWithMemory(intent, safe);
+                String toolResult = executeToolWithMemory(sid, intent, safe);
                 if (toolResult != null) {
                     analysisContext = "\n\n工具执行结果：\n" + toolResult;
                 } else {
@@ -92,34 +106,34 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
                 analysisContext = "\n\n【未调用工具】请勿陈述未经验证的具体日志内容或指标。";
             }
 
-            String aiResponse = generateAiResponse(safe, intent, analysisContext, memoryContext);
+            String aiResponse = generateAiResponse(sid, safe, intent, analysisContext, memoryContext);
 
-            addToHistory(new ChatMessage("user", userMessage, intent.getIntent().name()));
-            addToHistory(new ChatMessage("assistant", aiResponse));
+            addToHistory(sid, new ChatMessage("user", userMessage, intent.getIntent().name()));
+            addToHistory(sid, new ChatMessage("assistant", aiResponse));
 
-            memoryService.addToMemory(currentSessionId, new MemoryEntry("user", userMessage));
-            memoryService.addToMemory(currentSessionId, new MemoryEntry("assistant", aiResponse));
+            memoryService.addToMemory(sid, new MemoryEntry("user", userMessage));
+            memoryService.addToMemory(sid, new MemoryEntry("assistant", aiResponse));
 
             return Flux.just(aiResponse);
 
         } catch (Exception e) {
-            log.error("处理聊天消息失败", e);
+            log.error("处理聊天消息失败 session={}", sid, e);
             return Flux.just("抱歉，处理您的请求时出现了错误：" + e.getMessage());
         }
     }
 
-    private String buildMemoryContext(String userMessage) {
+    private String buildMemoryContext(String sessionId, String userMessage) {
         StringBuilder context = new StringBuilder();
-        List<MemoryEntry> recentMemory = memoryService.getRecentMemory(currentSessionId, 6);
+        List<MemoryEntry> recentMemory = memoryService.getRecentMemory(sessionId, 6);
         if (!recentMemory.isEmpty()) {
             context.append("\n\n【对话记忆摘要】\n");
 
-            ChatMemoryService.MemorySummary summary = memoryService.getMemorySummary(currentSessionId);
+            ChatMemoryService.MemorySummary summary = memoryService.getMemorySummary(sessionId);
             if (summary.getLastIntent() != null) {
-                context.append(String.format("- 最近意图：%s\n", summary.getLastIntent()));
+                context.append(String.format("- 最近意图：%s%n", summary.getLastIntent()));
             }
             if (summary.getAnalysisCount() > 0) {
-                context.append(String.format("- 已完成%d次分析\n", summary.getAnalysisCount()));
+                context.append(String.format("- 已完成%d次分析%n", summary.getAnalysisCount()));
             }
 
             context.append("\n最近对话：\n");
@@ -128,7 +142,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
                 String preview = entry.getContent().length() > 100
                         ? entry.getContent().substring(0, 100) + "..."
                         : entry.getContent();
-                context.append(String.format("- %s: %s\n", entry.getRole(), preview));
+                context.append(String.format("- %s: %s%n", entry.getRole(), preview));
             }
         }
         if (failureInsightService != null) {
@@ -140,12 +154,12 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
     private boolean shouldCallTool(IntentRecognitionService.RecognitionResult intent, String userMessage) {
         IntentRecognitionService.Intent intentType = intent.getIntent();
 
-        if (intentType == IntentRecognitionService.Intent.QUERY_ANOMALIES ||
-            intentType == IntentRecognitionService.Intent.QUERY_ERRORS ||
-            intentType == IntentRecognitionService.Intent.QUERY_BY_TIME ||
-            intentType == IntentRecognitionService.Intent.DIAGNOSE_ISSUE ||
-            intentType == IntentRecognitionService.Intent.GENERATE_REPORT ||
-            intentType == IntentRecognitionService.Intent.STATISTICS) {
+        if (intentType == IntentRecognitionService.Intent.QUERY_ANOMALIES
+                || intentType == IntentRecognitionService.Intent.QUERY_ERRORS
+                || intentType == IntentRecognitionService.Intent.QUERY_BY_TIME
+                || intentType == IntentRecognitionService.Intent.DIAGNOSE_ISSUE
+                || intentType == IntentRecognitionService.Intent.GENERATE_REPORT
+                || intentType == IntentRecognitionService.Intent.STATISTICS) {
             return true;
         }
 
@@ -156,7 +170,9 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
                 || lowerMsg.contains("错误") || lowerMsg.contains("异常");
     }
 
-    private String executeToolWithMemory(IntentRecognitionService.RecognitionResult intent, String userMessage) {
+    private String executeToolWithMemory(String sessionId,
+                                         IntentRecognitionService.RecognitionResult intent,
+                                         String userMessage) {
         try {
             IntentRecognitionService.Intent intentType = intent.getIntent();
             Map<String, Object> params = extractParameters(intent, userMessage);
@@ -199,15 +215,14 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
                     memoryEntry.setIntent(intentType.name());
                     memoryEntry.setToolUsed(toolName);
                     memoryEntry.setAnalysis(true);
-                    memoryService.addToMemory(currentSessionId, memoryEntry);
+                    memoryService.addToMemory(sessionId, memoryEntry);
                     return result.getContent();
-                } else {
-                    return "工具执行失败：" + result.getError();
                 }
+                return "工具执行失败：" + result.getError();
             }
 
         } catch (Exception e) {
-            log.error("工具执行失败", e);
+            log.error("工具执行失败 session={}", sessionId, e);
             return null;
         }
         return null;
@@ -240,23 +255,8 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         return params;
     }
 
-    private Map<String, Object> parseParameters(String paramsStr) {
-        Map<String, Object> params = new HashMap<>();
-        if (paramsStr == null || paramsStr.isEmpty()) return params;
-
-        Pattern kvPattern = Pattern.compile("([a-zA-Z_]+)\\s*[=:]\\s*[\"']?([^\"'\\n]+)[\"']?");
-        Matcher matcher = kvPattern.matcher(paramsStr);
-
-        while (matcher.find()) {
-            String key = matcher.group(1).trim();
-            String value = matcher.group(2).trim();
-            params.put(key, value);
-        }
-
-        return params;
-    }
-
-    private String generateAiResponse(String userMessage,
+    private String generateAiResponse(String sessionId,
+                                     String userMessage,
                                      IntentRecognitionService.RecognitionResult intent,
                                      String analysisContext,
                                      String memoryContext) {
@@ -268,11 +268,11 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
                         "工具执行结果：\n" + analysisContext + "\n\n" +
                         "请基于上述工具执行结果和专业背景知识，用专业但友好的语气回答用户的问题。\n" +
                         "如果工具结果中包含日志详情，请引用关键信息并给出分析。\n" +
-                        "适当使用Markdown格式，重点内容加粗，列表清晰呈现。";
+                        "严格遵循系统提示中的 Markdown 输出格式规范.";
         } else {
             userPrompt = "用户问题：「" + userMessage + "」" + memoryContext + "\n\n" +
                         "请根据你的专业知识，帮助用户解答问题。\n" +
-                        "适当使用Markdown格式，重点内容加粗。";
+                        "严格遵循系统提示中的 Markdown 输出格式规范.";
         }
 
         try {
@@ -281,7 +281,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
 
             List<Message> messages = new ArrayList<>();
             messages.add(systemMessage);
-            messages.addAll(getConversationHistoryMessages());
+            messages.addAll(getConversationHistoryMessages(sessionId));
             messages.add(userMessageObj);
 
             Prompt prompt = new Prompt(messages);
@@ -296,7 +296,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
                     .join();
             return response != null ? response : "抱歉，AI暂时无法回答这个问题。";
         } catch (Exception e) {
-            log.error("AI调用失败", e);
+            log.error("AI调用失败 session={}", sessionId, e);
             if (analysisContext != null && !analysisContext.isEmpty()) {
                 return buildDirectResponse(intent, analysisContext);
             }
@@ -304,8 +304,8 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         }
     }
 
-    private List<Message> getConversationHistoryMessages() {
-        List<ChatMessage> history = conversationHistories.getOrDefault(currentSessionId, new ArrayList<>());
+    private List<Message> getConversationHistoryMessages(String sessionId) {
+        List<ChatMessage> history = conversationHistories.getOrDefault(sessionId, List.of());
         List<Message> messages = new ArrayList<>();
 
         int startIndex = Math.max(0, history.size() - 10);
@@ -338,9 +338,8 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         prompt.append("- **回答范围**：结论与建议只能围绕用户提供的日志/上下文；禁止引用、编造或与当前片段无关的外部事件、系统或数据。\n");
         prompt.append("- 对 FATAL / ERROR / CRITICAL：默认提示 **上报时效与升级路径**（叙述层面）。\n\n");
 
-        prompt.append("## Markdown 交付规范\n");
-        prompt.append("- 章节层级清晰；日志片段置于 fenced code block 并注明来源组件。\n");
-        prompt.append("- 关键结论 **加粗**；枚举使用 `- `。\n\n");
+        prompt.append(OpsReportFormat.markdownOutputSpecForPrompt()).append("\n");
+        prompt.append("- 日志片段置于 fenced code block 并注明来源组件.\n\n");
 
         if (toolRegistry.getToolCount() > 0) {
             prompt.append("## Registered Tools（JSON Schema 摘要）\n");
@@ -379,12 +378,10 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         return response.toString();
     }
 
-    private void addToHistory(ChatMessage message) {
-        String sessionId = currentSessionId;
-        conversationHistories.computeIfAbsent(sessionId, k -> new ArrayList<>());
-        List<ChatMessage> history = conversationHistories.get(sessionId);
+    private void addToHistory(String sessionId, ChatMessage message) {
+        List<ChatMessage> history = conversationHistories.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>());
         history.add(message);
-        if (history.size() > MAX_HISTORY_SIZE) {
+        while (history.size() > MAX_HISTORY_SIZE) {
             history.remove(0);
         }
     }
@@ -397,22 +394,27 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
     }
 
     @Override
-    public Flux<String> analyzeStream(String userMessage) {
-        return chat(userMessage);
+    public Flux<String> analyzeStream(String sessionId, String userMessage) {
+        return chat(sessionId, userMessage);
     }
 
     @Override
-    public List<ChatMessage> getConversationHistory() {
-        return conversationHistories.getOrDefault(currentSessionId, new ArrayList<>());
+    public List<ChatMessage> getConversationHistory(String sessionId) {
+        return List.copyOf(conversationHistories.getOrDefault(requireSessionId(sessionId), List.of()));
     }
 
     @Override
-    public void clearHistory() {
-        conversationHistories.remove(currentSessionId);
-        memoryService.clearMemory(currentSessionId);
+    public void clearHistory(String sessionId) {
+        String sid = requireSessionId(sessionId);
+        conversationHistories.remove(sid);
+        memoryService.clearMemory(sid);
     }
 
-    public void setCurrentSessionId(String sessionId) {
-        this.currentSessionId = sessionId;
+    @Scheduled(fixedDelay = 600_000, initialDelay = 240_000)
+    public void evictStaleConversationHistories() {
+        sessionRetention.evictExpired(sessionId -> {
+            conversationHistories.remove(sessionId);
+            memoryService.clearMemory(sessionId);
+        });
     }
 }

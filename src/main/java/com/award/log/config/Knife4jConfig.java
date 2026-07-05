@@ -14,7 +14,7 @@ public class Knife4jConfig {
                 .info(new Info()
                         .title("ThreshCore API 接口文档")
                         .description("ThreshCore 后端服务 REST 接口说明（日志分析、智能诊断、运维工具与审计等能力）")
-                        .contact(new Contact().name("开发团队").url("https://github.com/award").email("dev@award.com"))
+                        .contact(new Contact().name("ThreshCore 开发团队").email("dev@threshcore.local"))
                         .version("1.0"));
     }
 }

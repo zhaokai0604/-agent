@@ -1,148 +1,143 @@
 <template>
   <div class="ops-page ops-effect-dashboard">
-    <el-card class="effect-card">
-      <template #header>
-        <div class="card-header">
-          <div class="card-header-left">
-            <span>运维效果评分</span>
-            <span class="card-sub">综合分 + 五维雷达：安全拦截 · 成功执行 · 巡检闭环 · 资源优化 · 自愈效果</span>
-          </div>
-          <div class="card-header-actions">
-            <el-radio-group v-model="periodDays" size="small" @change="loadData">
-              <el-radio-button :value="7">近7日</el-radio-button>
-              <el-radio-button :value="14">近14日</el-radio-button>
-              <el-radio-button :value="30">近30日</el-radio-button>
-            </el-radio-group>
-            <el-button type="primary" :loading="loading" @click="loadData">刷新</el-button>
-          </div>
-        </div>
+    <OpsPageHeader
+      title="运维效果评分"
+      :subtitle="`近 ${periodDays} 日综合表现 · 五维能力雷达与审计/巡检趋势`"
+    >
+      <template #actions>
+        <el-radio-group v-model="periodDays" size="small" @change="loadData">
+          <el-radio-button :value="7">7 日</el-radio-button>
+          <el-radio-button :value="14">14 日</el-radio-button>
+          <el-radio-button :value="30">30 日</el-radio-button>
+        </el-radio-group>
+        <el-button type="primary" :loading="loading" @click="loadData">刷新</el-button>
       </template>
+    </OpsPageHeader>
 
-      <div v-loading="loading" class="effect-body">
-        <template v-if="data">
-          <section class="score-hero-panel">
-            <div class="gauge-panel">
-              <div class="gauge-ring-bg" aria-hidden="true" />
-              <div ref="gaugeRef" class="gauge-chart" />
-              <div class="gauge-meta">
-                <span class="gauge-grade" :style="{ color: overallGradeColor }">{{ data.overallGrade }}</span>
-                <span class="gauge-window">{{ data.periodDays }} 日评估窗口</span>
-              </div>
+    <div v-loading="loading" class="effect-body">
+      <template v-if="data">
+        <!-- 综合概览 -->
+        <section class="overview-card">
+          <div class="overview-gauge">
+            <div ref="gaugeRef" class="gauge-chart" />
+            <div class="gauge-foot">
+              <span class="gauge-grade" :style="{ color: overallGradeColor }">{{ data.overallGrade }}</span>
+              <span class="gauge-window">{{ data.periodDays }} 日窗口</span>
             </div>
+          </div>
 
-            <div class="hero-text">
-              <div class="hero-score-line">
-                <span class="hero-score-num">{{ Math.round(Number(data.overallScore) || 0) }}</span>
-                <span class="hero-score-unit">分</span>
-                <el-tag class="hero-grade-tag" :style="gradeTagStyle(data.overallGrade)" effect="dark" size="small">
-                  {{ data.overallGrade }}
-                </el-tag>
-              </div>
-              <p class="hero-headline">{{ summaryHeadline }}</p>
-              <ul class="hero-bullets">
-                <li v-for="(b, i) in summaryBullets" :key="i">{{ b }}</li>
-              </ul>
-              <div v-if="valueStatement" class="value-kpi-row">
-                <div
-                  v-for="vk in valueKpiItems"
-                  :key="vk.key"
-                  class="value-kpi"
-                  :class="{ accent: vk.accent }"
-                >
-                  <span class="vk-num">{{ vk.value }}</span>
-                  <span class="vk-label">{{ vk.label }}</span>
-                </div>
-              </div>
-              <div v-if="highlights.length" class="highlight-tags">
-                <el-tag
-                  v-for="(h, i) in highlights"
-                  :key="i"
-                  :type="highlightTagType(h.type)"
-                  effect="light"
-                  round
-                  class="hl-tag"
-                >
-                  {{ h.title }}
-                </el-tag>
-              </div>
+          <div class="overview-copy">
+            <p v-if="summaryHeadline" class="overview-headline">{{ summaryHeadline }}</p>
+            <ul v-if="summaryBullets.length" class="overview-bullets">
+              <li v-for="(b, i) in summaryBullets" :key="i">{{ b }}</li>
+            </ul>
+            <div v-if="highlights.length" class="overview-tags">
+              <el-tag
+                v-for="(h, i) in highlights"
+                :key="i"
+                :type="highlightTagType(h.type)"
+                effect="plain"
+                size="small"
+                round
+              >
+                {{ h.title }}
+              </el-tag>
             </div>
-          </section>
+          </div>
+        </section>
 
-          <div class="dim-row">
-            <div
+        <!-- 五维评分 -->
+        <section class="section-block">
+          <div class="section-head">
+            <h2>五维评分</h2>
+            <span class="section-hint">点击维度查看说明，悬停详情可看完整描述</span>
+          </div>
+          <div class="dim-grid">
+            <article
               v-for="dim in dimensionList"
               :key="dim.id"
               class="dim-card"
-              :style="{ '--dim-accent': scoreColor(dim.score) }"
             >
-              <div class="dim-head">
-                <span class="dim-name">{{ dim.name }}</span>
-                <span class="dim-grade-badge" :style="gradeTagStyle(dim.grade)">{{ dim.grade }}</span>
+              <div class="dim-card__head">
+                <span class="dim-card__name">{{ dim.name }}</span>
+                <div class="dim-card__score">
+                  <strong :style="{ color: scoreColor(dim.score) }">{{ displayDimensionScore(dim) }}</strong>
+                  <span class="dim-card__grade">{{ dim.grade }}</span>
+                </div>
               </div>
               <el-progress
-                :percentage="dim.score"
-                :stroke-width="8"
+                v-if="isMeasuredDimension(dim)"
+                :percentage="normalizedDimensionScore(dim)"
+                :stroke-width="6"
                 :show-text="false"
                 :color="scoreColor(dim.score)"
               />
-              <div class="dim-score-row">
-                <span class="dim-score">{{ dim.score }}</span>
-                <span class="dim-score-unit">分</span>
-              </div>
-              <div class="dim-detail">{{ dim.detail }}</div>
-            </div>
+              <div v-else class="dim-card__progress-placeholder">暂无真实样本</div>
+              <p class="dim-card__detail" :title="dim.detail">{{ dim.detail }}</p>
+            </article>
           </div>
+        </section>
 
-          <div class="kpi-strip">
-            <div v-for="k in kpiCards" :key="k.key" class="kpi-chip">
-              <span class="kpi-val">{{ k.value }}</span>
-              <span class="kpi-label">{{ k.label }}</span>
-            </div>
+        <!-- 补充指标（不与五维重复） -->
+        <section v-if="supplementaryMetrics.length" class="supp-row">
+          <div v-for="m in supplementaryMetrics" :key="m.key" class="supp-item">
+            <span class="supp-item__val">{{ m.value }}</span>
+            <span class="supp-item__label">{{ m.label }}</span>
           </div>
+          <div v-if="resourceLine" class="supp-item supp-item--resource">
+            <span class="supp-item__val supp-item__val--text">
+              <el-icon><Odometer /></el-icon>
+            </span>
+            <span class="supp-item__label" :title="resourceLine">{{ resourceLine }}</span>
+          </div>
+        </section>
 
-          <div class="charts-row">
-            <el-card class="chart-card" shadow="never">
-              <template #header>
-                <span class="chart-title">五维能力雷达</span>
-              </template>
-              <div ref="radarRef" class="chart-box" />
+        <!-- 图表 -->
+        <section class="section-block">
+          <div class="section-head">
+            <h2>趋势分析</h2>
+          </div>
+          <div class="charts-grid">
+            <el-card class="chart-panel" shadow="never">
+              <template #header><span class="chart-panel__title">五维能力雷达</span></template>
+              <div ref="radarRef" class="chart-panel__box chart-panel__box--radar" />
             </el-card>
-            <el-card class="chart-card" shadow="never">
+            <el-card class="chart-panel" shadow="never">
               <template #header>
-                <span class="chart-title">审计处置趋势</span>
+                <span class="chart-panel__title">审计处置趋势</span>
+                <span v-if="auditDayCount" class="chart-panel__meta">{{ auditDayCount }} 天</span>
               </template>
-              <div ref="auditTrendRef" class="chart-box" />
+              <div ref="auditTrendRef" class="chart-panel__box" />
             </el-card>
-            <el-card class="chart-card" shadow="never">
+            <el-card class="chart-panel" shadow="never">
               <template #header>
-                <span class="chart-title">巡检告警趋势</span>
+                <span class="chart-panel__title">巡检告警趋势</span>
+                <span v-if="patrolDayCount" class="chart-panel__meta">{{ patrolDayCount }} 天</span>
               </template>
-              <div ref="patrolTrendRef" class="chart-box" />
+              <div ref="patrolTrendRef" class="chart-panel__box" />
             </el-card>
           </div>
+        </section>
 
-          <el-card v-if="recentHealing.length" class="table-card" shadow="never">
-            <template #header>近期自愈评分记录</template>
-            <el-table :data="recentHealing" size="small" stripe>
-              <el-table-column prop="traceId" label="Trace ID" min-width="200" show-overflow-tooltip />
-              <el-table-column prop="channel" label="通道" width="100" />
-              <el-table-column prop="healingScore" label="评分" width="90">
-                <template #default="{ row }">
-                  <el-tag :type="healingTagType(row.healingScore)">{{ row.healingScore }}/100</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="createdAt" label="时间" min-width="160" />
-            </el-table>
-          </el-card>
+        <el-card v-if="recentHealing.length" class="healing-table" shadow="never">
+          <template #header><span class="chart-panel__title">近期自愈评分</span></template>
+          <el-table :data="recentHealing" size="small" stripe>
+            <el-table-column prop="traceId" label="Trace ID" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="channel" label="通道" width="100" />
+            <el-table-column prop="healingScore" label="评分" width="100">
+              <template #default="{ row }">
+                <el-tag size="small" :type="healingTagType(row.healingScore)">
+                  {{ row.healingScore }}/100
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="createdAt" label="时间" min-width="160" />
+          </el-table>
+        </el-card>
+      </template>
 
-          <div v-if="resourceLine" class="resource-foot">
-            <el-icon><Odometer /></el-icon>
-            <span>当前资源：{{ resourceLine }}</span>
-          </div>
-        </template>
-        <el-empty v-else-if="!loading" description="暂无评分数据" />
-      </div>
-    </el-card>
+      <el-empty v-else-if="!loading" description="暂无评分数据，请先产生审计或巡检记录" />
+    </div>
   </div>
 </template>
 
@@ -150,8 +145,14 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Odometer } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+import { loadEcharts } from '../utils/echartsLoader.js'
 import { getOpsEffectDashboard } from '../api/index.js'
+import OpsPageHeader from './OpsPageHeader.vue'
+import {
+  sparseBarLayout,
+  formatChartDayLabel,
+  chartEmptyGraphic
+} from '../utils/chartOptions.js'
 
 const loading = ref(false)
 const data = ref(null)
@@ -165,6 +166,15 @@ let gaugeChart = null
 let radarChart = null
 let auditChart = null
 let patrolChart = null
+let echartsApi = null
+
+async function echarts() {
+  if (!echartsApi) {
+    const mod = await loadEcharts()
+    echartsApi = mod.default || mod
+  }
+  return echartsApi
+}
 
 const summaryHeadline = computed(() => data.value?.summary?.headline || '')
 const summaryBullets = computed(() => {
@@ -182,38 +192,35 @@ const dimensionList = computed(() => {
     .map((id) => dims[id])
     .filter(Boolean)
 })
-const valueStatement = computed(() => data.value?.valueStatement || null)
 const overallGradeColor = computed(() => gradeColor(data.value?.overallGrade))
 
-const valueKpiItems = computed(() => {
-  const v = valueStatement.value
-  if (!v) return []
-  return [
-    { key: 'block', value: v.securityBlocked ?? 0, label: '安全拦截（次）', accent: false },
-    { key: 'ok', value: v.executionSuccess ?? 0, label: '成功执行（次）', accent: false },
-    { key: 'patrol', value: v.patrolClosedLoops ?? 0, label: '巡检闭环（轮）', accent: false },
-    { key: 'space', value: formatReleasedGb(v.releasedSpaceGb), label: '释放空间（GB）', accent: true }
+const supplementaryMetrics = computed(() => {
+  const k = data.value?.kpis || {}
+  const items = [
+    { key: 'confirm', label: '二次确认（次）', value: k.auditNeedConfirm ?? 0 },
+    {
+      key: 'heal',
+      label: '自愈均分',
+      value: k.healingSamples > 0 ? Math.round(k.avgHealingScore) : '—'
+    },
+    { key: 'audit', label: '审计总量', value: k.auditTotal ?? 0 }
   ]
+  const space = formatReleasedGb(k.releasedSpaceGb)
+  if (space !== '0') {
+    items.unshift({ key: 'space', label: '释放空间（GB）', value: space })
+  }
+  return items
 })
+
 const recentHealing = computed(() => {
   const r = data.value?.recentEffectRuns
   return Array.isArray(r) ? r : []
 })
 
-const kpiCards = computed(() => {
-  const k = data.value?.kpis || {}
-  return [
-    { key: 'block', label: '安全拦截', value: k.auditBlocked ?? 0 },
-    { key: 'ok', label: '成功执行', value: k.auditSuccessExec ?? 0 },
-    { key: 'patrol', label: '巡检闭环', value: k.patrolClosedLoops ?? k.patrolRuns ?? 0 },
-    { key: 'space', label: '释放空间 GB', value: formatReleasedGb(k.releasedSpaceGb) },
-    { key: 'confirm', label: '二次确认', value: k.auditNeedConfirm ?? 0 },
-    { key: 'heal', label: '自愈均分', value: k.healingSamples > 0 ? Math.round(k.avgHealingScore) : '—' },
-    { key: 'audit', label: '审计总量', value: k.auditTotal ?? 0 }
-  ]
-})
+const auditDayCount = computed(() => data.value?.trends?.auditByDay?.length || 0)
+const patrolDayCount = computed(() => data.value?.trends?.patrolByDay?.length || 0)
 
-function formatReleasedGb (v) {
+function formatReleasedGb(v) {
   const n = Number(v)
   if (!Number.isFinite(n) || n <= 0) return '0'
   return n < 0.01 ? '<0.01' : n.toFixed(2)
@@ -226,14 +233,30 @@ const resourceLine = computed(() => {
   return `CPU ${fmt(r.cpuUsagePct)} · 内存 ${fmt(r.memoryUsagePct)} · 磁盘 ${fmt(r.diskUsagePct)}`
 })
 
-function scoreColor (score) {
+function scoreColor(score) {
+  const n = Number(score)
+  if (!Number.isFinite(n)) return '#94a3b8'
   if (score >= 85) return '#16a34a'
   if (score >= 70) return '#0d9488'
   if (score >= 55) return '#d97706'
   return '#dc2626'
 }
 
-function gradeColor (grade) {
+function isMeasuredDimension(dim) {
+  if (!dim || dim.measured === false) return false
+  return Number.isFinite(Number(dim.score))
+}
+
+function normalizedDimensionScore(dim) {
+  if (!isMeasuredDimension(dim)) return 0
+  return Number(dim.score)
+}
+
+function displayDimensionScore(dim) {
+  return isMeasuredDimension(dim) ? String(dim.score) : '—'
+}
+
+function gradeColor(grade) {
   if (grade === '优秀') return '#16a34a'
   if (grade === '良好') return '#0d9488'
   if (grade === '合格') return '#2563eb'
@@ -241,178 +264,99 @@ function gradeColor (grade) {
   return '#64748b'
 }
 
-function gradeTagStyle (grade) {
-  const c = gradeColor(grade)
-  return {
-    backgroundColor: c,
-    borderColor: c,
-    color: '#fff'
-  }
-}
-
-function highlightTagType (type) {
+function highlightTagType(type) {
   if (type === 'security') return 'danger'
   if (type === 'healing') return 'success'
   if (type === 'patrol') return 'warning'
   return 'info'
 }
 
-function healingTagType (score) {
+function healingTagType(score) {
   const n = Number(score)
   if (n >= 70) return 'success'
   if (n >= 45) return 'warning'
   return 'info'
 }
 
-function renderGauge () {
+async function renderGauge() {
   if (!gaugeRef.value || !data.value) return
-  if (!gaugeChart) gaugeChart = echarts.init(gaugeRef.value)
+  const ec = await echarts()
+  if (!gaugeChart) gaugeChart = ec.init(gaugeRef.value)
   const score = Number(data.value.overallScore) || 0
   const accent = scoreColor(score)
   gaugeChart.setOption({
-    animationDuration: 900,
-    animationEasing: 'cubicOut',
+    animationDuration: 600,
     series: [{
       type: 'gauge',
-      center: ['50%', '54%'],
-      radius: '92%',
-      startAngle: 215,
-      endAngle: -35,
+      center: ['50%', '58%'],
+      radius: '88%',
+      startAngle: 220,
+      endAngle: -40,
       min: 0,
       max: 100,
-      splitNumber: 5,
+      splitNumber: 4,
       progress: {
         show: true,
-        width: 16,
+        width: 12,
         roundCap: true,
-        itemStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 1,
-            y2: 0,
-            colorStops: [
-              { offset: 0, color: accent },
-              { offset: 1, color: '#2dd4bf' }
-            ]
-          },
-          shadowBlur: 8,
-          shadowColor: 'rgba(13, 148, 136, 0.35)'
-        }
+        itemStyle: { color: accent }
       },
       pointer: {
         show: true,
-        length: '58%',
-        width: 5,
-        roundCap: true,
-        itemStyle: {
-          color: '#0f172a',
-          shadowBlur: 4,
-          shadowColor: 'rgba(15, 23, 42, 0.2)'
-        }
+        length: '55%',
+        width: 4,
+        itemStyle: { color: '#334155' }
       },
       axisLine: {
         roundCap: true,
-        lineStyle: {
-          width: 16,
-          color: [
-            [0.55, '#fecaca'],
-            [0.7, '#fde68a'],
-            [0.85, '#bae6fd'],
-            [1, '#bbf7d0']
-          ]
-        }
+        lineStyle: { width: 12, color: [[1, '#e2e8f0']] }
       },
       axisTick: { show: false },
-      splitLine: {
-        length: 6,
-        distance: -20,
-        lineStyle: { width: 2, color: 'rgba(148, 163, 184, 0.6)' }
-      },
+      splitLine: { show: false },
       axisLabel: {
-        distance: 24,
-        fontSize: 11,
+        distance: 14,
+        fontSize: 10,
         color: '#94a3b8',
-        formatter: (v) => (v % 20 === 0 ? String(v) : '')
+        formatter: (v) => (v % 25 === 0 ? String(v) : '')
       },
-      anchor: {
-        show: true,
-        size: 10,
-        itemStyle: {
-          color: '#0f172a',
-          borderWidth: 2,
-          borderColor: '#fff'
-        }
-      },
-      title: {
-        show: true,
-        offsetCenter: [0, '78%'],
-        fontSize: 12,
-        color: '#64748b'
-      },
+      anchor: { show: false },
+      title: { show: false },
       detail: {
         valueAnimation: true,
-        fontSize: 36,
-        fontWeight: 800,
+        fontSize: 32,
+        fontWeight: 700,
         color: accent,
-        offsetCenter: [0, '8%'],
-        formatter: '{value|{value}}\n{sub|综合}',
-        rich: {
-          value: {
-            fontSize: 40,
-            fontWeight: 800,
-            color: accent,
-            lineHeight: 44,
-            fontFamily: 'Inter, PingFang SC, sans-serif'
-          },
-          sub: {
-            fontSize: 12,
-            color: '#64748b',
-            lineHeight: 18,
-            fontWeight: 500
-          }
-        }
+        offsetCenter: [0, '12%'],
+        formatter: '{value}'
       },
-      data: [{ value: score, name: '综合得分' }]
+      data: [{ value: score }]
     }]
   }, true)
 }
 
-function renderRadar () {
+async function renderRadar() {
   if (!radarRef.value || !data.value) return
-  if (!radarChart) radarChart = echarts.init(radarRef.value)
+  const ec = await echarts()
+  if (!radarChart) radarChart = ec.init(radarRef.value)
   const radar = data.value.trends?.dimensionRadar || []
-  const indicators = radar.map((r) => ({ name: r.name, max: 100 }))
-  const values = radar.map((r) => r.value)
   radarChart.setOption({
     tooltip: {},
+    graphic: radar.length ? undefined : [chartEmptyGraphic('暂无已测评分维度')],
     radar: {
-      indicator: indicators,
-      radius: '62%',
+      indicator: radar.map((r) => ({ name: r.name, max: 100 })),
+      radius: '65%',
       splitNumber: 4,
       axisName: { color: '#64748b', fontSize: 11 },
-      splitArea: { areaStyle: { color: ['rgba(241,245,249,0.8)', 'rgba(248,250,252,0.4)'] } },
+      splitArea: { areaStyle: { color: ['#f8fafc', '#fff'] } },
       splitLine: { lineStyle: { color: '#e2e8f0' } },
       axisLine: { lineStyle: { color: '#cbd5e1' } }
     },
     series: [{
       type: 'radar',
       data: [{
-        value: values,
+        value: radar.map((r) => r.value),
         name: '能力分',
-        areaStyle: {
-          color: {
-            type: 'radial',
-            x: 0.5,
-            y: 0.5,
-            r: 0.5,
-            colorStops: [
-              { offset: 0, color: 'rgba(13, 148, 136, 0.35)' },
-              { offset: 1, color: 'rgba(13, 148, 136, 0.05)' }
-            ]
-          }
-        },
+        areaStyle: { color: 'rgba(13, 148, 136, 0.15)' },
         lineStyle: { width: 2, color: '#0d9488' },
         itemStyle: { color: '#0d9488' }
       }]
@@ -420,19 +364,25 @@ function renderRadar () {
   }, true)
 }
 
-function renderAuditTrend () {
+async function renderAuditTrend() {
   if (!auditTrendRef.value || !data.value) return
-  if (!auditChart) auditChart = echarts.init(auditTrendRef.value)
+  const ec = await echarts()
+  if (!auditChart) auditChart = ec.init(auditTrendRef.value)
   const rows = data.value.trends?.auditByDay || []
+  const barLayout = sparseBarLayout(rows.length)
   auditChart.setOption({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['审计条数', '成功执行', '安全拦截'], bottom: 0, textStyle: { fontSize: 11 } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' }
+    },
+    legend: { data: ['审计总量', '成功执行', '安全拦截'], bottom: 0, textStyle: { fontSize: 11 } },
     grid: { left: 44, right: 16, top: 28, bottom: 52 },
+    graphic: rows.length ? undefined : [chartEmptyGraphic('暂无审计趋势')],
     xAxis: {
       type: 'category',
-      data: rows.map((r) => r.day),
-      axisLine: { lineStyle: { color: '#e2e8f0' } },
-      axisLabel: { color: '#64748b', fontSize: 10 }
+      data: rows.map((r) => formatChartDayLabel(r.day)),
+      axisLabel: { color: '#64748b', fontSize: 11 },
+      axisTick: { alignWithLabel: true }
     },
     yAxis: {
       type: 'value',
@@ -442,92 +392,87 @@ function renderAuditTrend () {
     },
     series: [
       {
-        name: '审计条数',
+        name: '审计总量',
         type: 'bar',
-        barMaxWidth: 28,
+        ...barLayout,
         data: rows.map((r) => r.total),
         itemStyle: { color: '#cbd5e1', borderRadius: [4, 4, 0, 0] }
       },
       {
         name: '成功执行',
-        type: 'line',
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 6,
+        type: 'bar',
+        ...barLayout,
         data: rows.map((r) => r.successExec),
-        itemStyle: { color: '#16a34a' },
-        lineStyle: { width: 2 }
+        itemStyle: { color: '#22c55e', borderRadius: [4, 4, 0, 0] }
       },
       {
         name: '安全拦截',
-        type: 'line',
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 6,
+        type: 'bar',
+        ...barLayout,
         data: rows.map((r) => r.blocked),
-        itemStyle: { color: '#dc2626' },
-        lineStyle: { width: 2 }
+        itemStyle: { color: '#ef4444', borderRadius: [4, 4, 0, 0] }
       }
     ]
   }, true)
 }
 
-function renderPatrolTrend () {
+async function renderPatrolTrend() {
   if (!patrolTrendRef.value || !data.value) return
-  if (!patrolChart) patrolChart = echarts.init(patrolTrendRef.value)
+  const ec = await echarts()
+  if (!patrolChart) patrolChart = ec.init(patrolTrendRef.value)
   const rows = data.value.trends?.patrolByDay || []
+  const barLayout = sparseBarLayout(rows.length)
   patrolChart.setOption({
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['告警线索', '巡检轮次'], bottom: 0, textStyle: { fontSize: 11 } },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { data: ['巡检轮次', '告警线索'], bottom: 0, textStyle: { fontSize: 11 } },
     grid: { left: 44, right: 16, top: 28, bottom: 52 },
+    graphic: rows.length ? undefined : [chartEmptyGraphic('暂无巡检趋势')],
     xAxis: {
       type: 'category',
-      data: rows.map((r) => r.day),
-      axisLine: { lineStyle: { color: '#e2e8f0' } },
-      axisLabel: { color: '#64748b', fontSize: 10 }
+      data: rows.map((r) => formatChartDayLabel(r.day)),
+      axisLabel: { color: '#64748b', fontSize: 11 },
+      axisTick: { alignWithLabel: true }
     },
-    yAxis: {
-      type: 'value',
-      minInterval: 1,
-      splitLine: { lineStyle: { color: '#f1f5f9' } },
-      axisLabel: { color: '#64748b', fontSize: 10 }
-    },
-    series: [
+    yAxis: [
       {
-        name: '告警线索',
-        type: 'line',
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 6,
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(217, 119, 6, 0.25)' },
-              { offset: 1, color: 'rgba(217, 119, 6, 0.02)' }
-            ]
-          }
-        },
-        data: rows.map((r) => r.alertCount),
-        itemStyle: { color: '#d97706' },
-        lineStyle: { width: 2 }
+        type: 'value',
+        name: '轮次',
+        minInterval: 1,
+        splitLine: { lineStyle: { color: '#f1f5f9' } },
+        axisLabel: { color: '#64748b', fontSize: 10 }
       },
+      {
+        type: 'value',
+        name: '告警',
+        minInterval: 1,
+        splitLine: { show: false },
+        axisLabel: { color: '#64748b', fontSize: 10 }
+      }
+    ],
+    series: [
       {
         name: '巡检轮次',
         type: 'bar',
-        barMaxWidth: 28,
+        ...barLayout,
         data: rows.map((r) => r.runCount),
         itemStyle: { color: '#0d9488', borderRadius: [4, 4, 0, 0] }
+      },
+      {
+        name: '告警线索',
+        type: 'line',
+        yAxisIndex: 1,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 6,
+        data: rows.map((r) => r.alertCount),
+        itemStyle: { color: '#d97706' },
+        lineStyle: { width: 2.5 }
       }
     ]
   }, true)
 }
 
-function renderCharts () {
+function renderCharts() {
   nextTick(() => {
     renderGauge()
     renderRadar()
@@ -540,7 +485,7 @@ function renderCharts () {
   })
 }
 
-async function loadData () {
+async function loadData() {
   loading.value = true
   try {
     data.value = await getOpsEffectDashboard(periodDays.value)
@@ -553,7 +498,7 @@ async function loadData () {
   }
 }
 
-function onResize () {
+function onResize() {
   gaugeChart?.resize()
   radarChart?.resize()
   auditChart?.resize()
@@ -580,391 +525,316 @@ onUnmounted(() => {
 .ops-effect-dashboard {
   padding: 0;
 }
-.effect-card {
-  border-radius: var(--ops-radius, 12px);
-  border: 1px solid var(--ops-border, #e2e8f0);
-}
-.card-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.card-header-left {
+
+.effect-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 20px;
 }
-.card-header-left > span:first-child {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--ops-text, #0f172a);
-}
-.card-sub {
-  font-size: 12px;
-  color: var(--ops-text-subtle, #64748b);
-  font-weight: normal;
-}
-.card-header-actions {
-  display: flex;
+
+/* ── 概览 ── */
+.overview-card {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  padding: 20px 24px;
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius);
+  background: var(--ops-panel);
 }
 
-/* ── 计分盘 Hero ── */
-.score-hero-panel {
-  display: flex;
-  gap: 28px;
-  align-items: stretch;
-  flex-wrap: wrap;
-  margin-bottom: 22px;
-  padding: 20px 22px;
-  border-radius: 14px;
-  border: 1px solid var(--ops-border, #e2e8f0);
-  background:
-    radial-gradient(ellipse 120% 80% at 0% 0%, rgba(45, 212, 191, 0.12) 0%, transparent 55%),
-    linear-gradient(135deg, #f8fafc 0%, #ffffff 48%, #f0fdfa 100%);
-  box-shadow: var(--ops-shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.05));
-}
-
-.gauge-panel {
-  position: relative;
-  width: 300px;
-  flex-shrink: 0;
+.overview-gauge {
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-
-.gauge-ring-bg {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 220px;
-  height: 220px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(13, 148, 136, 0.06) 0%, transparent 70%);
-  pointer-events: none;
 }
 
 .gauge-chart {
-  width: 300px;
-  height: 240px;
-  position: relative;
-  z-index: 1;
+  width: 220px;
+  height: 200px;
 }
 
-.gauge-meta {
+.gauge-foot {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  margin-top: -8px;
-  z-index: 1;
+  margin-top: -6px;
 }
 
 .gauge-grade {
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.04em;
 }
 
 .gauge-window {
-  font-size: 11px;
-  color: var(--ops-text-subtle, #64748b);
+  font-size: 12px;
+  color: var(--ops-text-subtle);
 }
 
-.hero-text {
-  flex: 1;
-  min-width: 280px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.hero-score-line {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.hero-score-num {
-  font-size: 48px;
-  font-weight: 800;
-  line-height: 1;
-  color: var(--ops-text, #0f172a);
-  font-variant-numeric: tabular-nums;
-}
-
-.hero-score-unit {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ops-text-subtle, #64748b);
-  margin-right: 8px;
-}
-
-.hero-grade-tag {
-  border: none;
-}
-
-.hero-headline {
+.overview-headline {
+  margin: 0 0 12px;
   font-size: 15px;
-  color: #334155;
-  margin: 0 0 10px;
-  line-height: 1.55;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--ops-text);
 }
 
-.hero-bullets {
+.overview-bullets {
   margin: 0 0 14px;
   padding-left: 18px;
-  color: #475569;
   font-size: 13px;
   line-height: 1.65;
+  color: var(--ops-text-subtle);
 }
 
-.hero-bullets li::marker {
-  color: var(--ops-primary, #0d9488);
+.overview-bullets li::marker {
+  color: var(--ops-primary);
 }
 
-.highlight-tags {
+.overview-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 4px;
 }
 
-.hl-tag {
-  max-width: 100%;
+/* ── 区块标题 ── */
+.section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ops-text);
+}
+
+.section-hint {
+  font-size: 12px;
+  color: var(--ops-text-subtle);
 }
 
 /* ── 五维卡片 ── */
-.dim-row {
+.dim-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
-  margin-bottom: 18px;
-}
-
-@media (max-width: 1200px) {
-  .dim-row {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
-@media (max-width: 768px) {
-  .dim-row {
-    grid-template-columns: 1fr 1fr;
-  }
 }
 
 .dim-card {
-  background: var(--ops-panel, #fff);
-  border: 1px solid var(--ops-border, #e2e8f0);
-  border-left: 3px solid var(--dim-accent, #0d9488);
-  border-radius: var(--ops-radius, 10px);
   padding: 14px 14px 12px;
-  transition: box-shadow 0.2s, transform 0.2s;
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius-sm);
+  background: var(--ops-panel);
 }
 
-.dim-card:hover {
-  box-shadow: var(--ops-shadow-md, 0 4px 16px rgba(15, 23, 42, 0.06));
-  transform: translateY(-1px);
-}
-
-.dim-head {
+.dim-card__head {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  align-items: center;
   gap: 8px;
   margin-bottom: 10px;
 }
 
-.dim-name {
+.dim-card__name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--ops-text, #1e293b);
+  color: var(--ops-text);
+  line-height: 1.3;
 }
 
-.dim-grade-badge {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-  color: #fff;
-  line-height: 1.4;
-}
-
-.dim-score-row {
+.dim-card__score {
   display: flex;
-  align-items: baseline;
-  gap: 2px;
-  margin: 8px 0 4px;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
 }
 
-.dim-score {
-  font-size: 26px;
-  font-weight: 800;
-  color: var(--ops-text, #0f172a);
-  font-variant-numeric: tabular-nums;
+.dim-card__score strong {
+  font-size: 22px;
+  font-weight: 700;
   line-height: 1;
-}
-
-.dim-score-unit {
-  font-size: 12px;
-  color: var(--ops-text-subtle, #64748b);
-  font-weight: 500;
-}
-
-.dim-detail {
-  font-size: 11px;
-  color: var(--ops-text-subtle, #64748b);
-  line-height: 1.45;
-}
-
-/* ── 快速 KPI ── */
-.value-kpi-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  margin: 0 0 12px;
-}
-
-@media (max-width: 768px) {
-  .value-kpi-row {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-.value-kpi {
-  text-align: center;
-  padding: 12px 8px;
-  border-radius: var(--ops-radius, 10px);
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid #ccfbf1;
-  backdrop-filter: blur(4px);
-}
-
-.value-kpi.accent {
-  border-color: #99f6e4;
-  background: rgba(240, 253, 250, 0.9);
-}
-
-.vk-num {
-  display: block;
-  font-size: 24px;
-  font-weight: 800;
-  color: var(--ops-primary, #0d9488);
-  line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
 
-.value-kpi.accent .vk-num {
-  color: #0f766e;
-}
-
-.vk-label {
+.dim-card__grade {
   font-size: 11px;
-  color: var(--ops-text-subtle, #64748b);
-  margin-top: 4px;
+  color: var(--ops-text-subtle);
+  margin-top: 2px;
 }
 
-/* ── 底部 KPI 条 ── */
-.kpi-strip {
+.dim-card__detail {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ops-text-subtle);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dim-card__progress-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+/* ── 补充指标 ── */
+.supp-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 18px;
-  padding: 12px 14px;
-  border-radius: var(--ops-radius, 10px);
-  background: var(--ops-panel-soft, #f8fafc);
-  border: 1px solid var(--ops-border-soft, #f1f5f9);
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--ops-border-soft);
+  border-radius: var(--ops-radius-sm);
+  background: var(--ops-panel-soft);
 }
 
-.kpi-chip {
-  flex: 1 1 calc(14.28% - 8px);
-  min-width: 88px;
+.supp-item {
+  flex: 1 1 120px;
+  min-width: 100px;
+  padding: 10px 12px;
+  border-radius: var(--ops-radius-sm);
+  background: var(--ops-panel);
+  border: 1px solid var(--ops-border);
   text-align: center;
-  padding: 10px 6px;
-  border-radius: var(--ops-radius-sm, 6px);
-  background: var(--ops-panel, #fff);
-  border: 1px solid var(--ops-border, #e2e8f0);
 }
 
-@media (max-width: 900px) {
-  .kpi-chip {
-    flex: 1 1 calc(25% - 8px);
-  }
+.supp-item--resource {
+  flex: 2 1 200px;
+  text-align: left;
 }
 
-.kpi-val {
+.supp-item__val {
   display: block;
   font-size: 20px;
   font-weight: 700;
-  color: #0f766e;
+  color: var(--ops-primary);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
 
-.kpi-label {
-  display: block;
-  font-size: 10px;
-  color: var(--ops-text-subtle, #64748b);
-  margin-top: 3px;
+.supp-item__val--text {
+  font-size: 16px;
+  color: var(--ops-text-subtle);
 }
 
-/* ── 图表区 ── */
-.charts-row {
+.supp-item__label {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--ops-text-subtle);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supp-item--resource .supp-item__label {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ── 图表 ── */
+.charts-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin-bottom: 16px;
+}
+
+.chart-panel {
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius-sm);
+  overflow: hidden;
+}
+
+.chart-panel :deep(.el-card__body) {
+  padding: 8px 10px 12px;
+}
+
+.chart-panel :deep(.el-card__header) {
+  padding: 10px 14px;
+  background: var(--ops-panel-soft);
+  border-bottom: 1px solid var(--ops-border-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chart-panel__meta {
+  font-size: 11px;
+  color: var(--ops-text-subtle);
+  font-weight: normal;
+}
+
+.chart-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ops-text);
+}
+
+.chart-panel__box {
+  height: 240px;
+  width: 100%;
+}
+
+.chart-panel__box--radar {
+  height: 240px;
+}
+
+.healing-table {
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius-sm);
+}
+
+@media (max-width: 900px) {
+  .overview-card {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+
+  .overview-copy {
+    text-align: left;
+  }
+}
+
+@media (max-width: 1200px) {
+  .dim-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1100px) {
-  .charts-row {
+  .charts-grid {
     grid-template-columns: 1fr;
   }
 }
 
-.chart-card {
-  border: 1px solid var(--ops-border, #e2e8f0);
-  border-radius: var(--ops-radius, 10px);
-}
-
-.chart-card :deep(.el-card__header) {
-  padding: 10px 14px;
-  background: var(--ops-panel-soft, #f8fafc);
-  border-bottom: 1px solid var(--ops-border-soft, #f1f5f9);
-}
-
-.chart-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ops-text, #0f172a);
-}
-
-.chart-box {
-  height: 268px;
-  width: 100%;
-}
-
-.table-card {
-  margin-bottom: 12px;
-}
-
-.resource-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--ops-text-subtle, #64748b);
-  padding-top: 8px;
-  border-top: 1px dashed var(--ops-border, #e2e8f0);
-  margin-top: 4px;
+@media (max-width: 520px) {
+  .dim-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

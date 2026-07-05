@@ -1,8 +1,9 @@
 package com.award.log.agent.awm;
 
-import org.junit.jupiter.api.Test;
-
+import com.award.log.util.TestRuntimePlatform;
+import com.award.log.util.TestTraceIdGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
@@ -39,7 +40,10 @@ class TrajectoryEvaluatorTest {
     @Test
     void extractToolSequence_fromDiskPlaybookSteps() {
         WorkflowInductionService induction = new WorkflowInductionService(
-                null, evaluator, null, new LlmWorkflowInductor(new ObjectMapper()));
+                null, evaluator, null,
+                new LlmWorkflowInductor(new ObjectMapper(), new TestTraceIdGenerator("llm-trace-12345678")),
+                new TestRuntimePlatform(false),
+                new TestTraceIdGenerator("online-trace-12345678"));
         List<Map<String, Object>> steps = List.of(
                 Map.of("phase", "perceive", "detail", "disk df output"),
                 Map.of("phase", "execute", "detail", "CleanTemp deleted=3"),
@@ -57,7 +61,10 @@ class TrajectoryEvaluatorTest {
     @Test
     void extractToolSequence_cpuPlaybook() {
         WorkflowInductionService induction = new WorkflowInductionService(
-                null, evaluator, null, new LlmWorkflowInductor(new ObjectMapper()));
+                null, evaluator, null,
+                new LlmWorkflowInductor(new ObjectMapper(), new TestTraceIdGenerator("llm-trace-12345678")),
+                new TestRuntimePlatform(false),
+                new TestTraceIdGenerator("online-trace-12345678"));
         List<Map<String, Object>> steps = List.of(
                 Map.of("phase", "perceive", "detail", "SystemLoad json CpuPressure"),
                 Map.of("phase", "perceive", "detail", "Process list top")
@@ -66,5 +73,22 @@ class TrajectoryEvaluatorTest {
         assertTrue(seq.contains("SystemLoadTool"));
         assertTrue(seq.contains("ProcessTool"));
         assertFalse(seq.contains("DiskAnalyzeTool"));
+    }
+
+    @Test
+    void extractToolSequence_prefersStructuredAuditSteps() {
+        WorkflowInductionService induction = new WorkflowInductionService(
+                null, evaluator, null,
+                new LlmWorkflowInductor(new ObjectMapper(), new TestTraceIdGenerator("llm-trace-12345678")),
+                new TestRuntimePlatform(false),
+                new TestTraceIdGenerator("online-trace-12345678"));
+        List<Map<String, Object>> steps = List.of(
+                Map.of("phase", "preview", "toolName", "DiskTool"),
+                Map.of("phase", "preview", "toolName", "DiskTool"),
+                Map.of("phase", "execute", "toolName", "LogCleanupTool", "parameters", Map.of("path", "/var/log")),
+                Map.of("phase", "execute", "detail", Map.of("toolName", "ServiceRestartTool"))
+        );
+        List<String> seq = induction.extractToolSequenceFromSteps(steps);
+        assertEquals(List.of("DiskTool", "LogCleanupTool", "ServiceRestartTool"), seq);
     }
 }

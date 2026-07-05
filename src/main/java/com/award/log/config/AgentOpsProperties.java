@@ -96,23 +96,24 @@ public class AgentOpsProperties {
         );
 
         private List<String> windowsReadPrefixes = list(
-                "C:/Windows",
                 "C:/Windows/Logs",
-                "C:/ProgramData",
                 "C:/Windows/System32/winevt/Logs",
                 "C:/inetpub/logs",
-                "D:/",
-                "E:/"
+                "C:/ProgramData/logs",
+                "C:/ProgramData/Microsoft/Windows/WER/ReportArchive",
+                "C:/ProgramData/Microsoft/Windows/WER/ReportQueue"
         );
 
         private List<String> windowsCleanRoots = list(
-                "C:/Windows/Temp",
-                "C:/Temp",
-                "D:/Temp",
-                "E:/Temp"
+                "C:/Temp"
         );
 
-        private List<String> windowsLogCleanupRoots = list("C:/Windows/Logs", "C:/ProgramData");
+        private List<String> windowsLogCleanupRoots = list(
+                "C:/Windows/Logs",
+                "C:/Windows/System32/winevt/Logs",
+                "C:/inetpub/logs",
+                "C:/ProgramData/logs"
+        );
 
         private List<String> windowsConfigPrefixes = list(
                 "C:/Windows/System32/drivers/etc",

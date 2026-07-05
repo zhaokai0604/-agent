@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Tag(name = "LLM Chat")
@@ -24,29 +25,61 @@ public class LlmChatController {
 
     @Operation(summary = "流式对话与工具调用")
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@RequestBody Map<String, Object> body) {
-        String prompt = String.valueOf(body.getOrDefault("prompt", ""));
+    public SseEmitter chat(@RequestBody(required = false) Map<String, Object> body) {
+        String prompt = extractPrompt(body);
         SseEmitter emitter = new SseEmitter(60000L);
-        new Thread(() -> {
+        Thread worker = new Thread(() -> {
             try {
-                String result = aiAnalysisService.analyzeLog(prompt);
-                for (String token : result.split("")) {
-                    emitter.send(SseEmitter.event().name("token").data(token));
-                }
-                emitter.send(SseEmitter.event().name("done").data(Map.of("completed", true)));
+                String result = normalizeAnswer(aiAnalysisService.analyzeLog(prompt));
+                result.codePoints().forEach(codePoint -> {
+                    try {
+                        emitter.send(SseEmitter.event()
+                                .name("token")
+                                .data(new String(Character.toChars(codePoint))));
+                    } catch (IOException e) {
+                        throw new IllegalStateException(e);
+                    }
+                });
+                Map<String, Object> done = new LinkedHashMap<>();
+                done.put("completed", true);
+                done.put("empty", result.isEmpty());
+                emitter.send(SseEmitter.event().name("done").data(done));
                 emitter.complete();
-            } catch (IOException e) {
+            } catch (IllegalStateException e) {
+                if (e.getCause() instanceof IOException ioException) {
+                    emitter.completeWithError(ioException);
+                    return;
+                }
+                emitter.completeWithError(e);
+            } catch (Exception e) {
                 emitter.completeWithError(e);
             }
-        }, "llm-sse-thread").start();
+        }, "llm-sse-thread");
+        worker.setDaemon(true);
+        worker.start();
         return emitter;
     }
 
     @Operation(summary = "非流式对话")
     @PostMapping("/chat-sync")
-    public Result<Map<String, Object>> chatSync(@RequestBody Map<String, Object> body) {
-        String prompt = String.valueOf(body.getOrDefault("prompt", ""));
-        String answer = aiAnalysisService.analyzeLog(prompt);
-        return Result.success(Map.of("answer", answer));
+    public Result<Map<String, Object>> chatSync(@RequestBody(required = false) Map<String, Object> body) {
+        String prompt = extractPrompt(body);
+        String answer = normalizeAnswer(aiAnalysisService.analyzeLog(prompt));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("answer", answer);
+        payload.put("empty", answer.isEmpty());
+        return Result.success(payload);
+    }
+
+    private static String extractPrompt(Map<String, Object> body) {
+        if (body == null) {
+            return "";
+        }
+        Object prompt = body.get("prompt");
+        return prompt == null ? "" : String.valueOf(prompt);
+    }
+
+    private static String normalizeAnswer(String answer) {
+        return answer == null ? "" : answer;
     }
 }

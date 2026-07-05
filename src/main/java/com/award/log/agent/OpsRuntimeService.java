@@ -9,45 +9,42 @@ import org.springframework.stereotype.Service;
 import java.util.Map;
 
 /**
- * Agent 运行时统一入口：编排 Playbook，对外暴露单一 run API。
+ * Runtime router for patrol automation and playbook orchestration.
  */
 @Service
 @RequiredArgsConstructor
 public class OpsRuntimeService {
 
     private final OpsIntentRouter opsIntentRouter;
-    private final AutonomousOpsOrchestrator autonomousOpsOrchestrator;
     private final AssistantOrchestrator assistantOrchestrator;
+    private final OpsPatrolAutomationService patrolAutomationService;
 
     @Value("${agent.runtime.enabled:true}")
     private boolean enabled;
-
-    public record RunResult(String markdown, String traceId, Map<String, Object> report) {}
 
     public boolean shouldOrchestrate(String userMessage) {
         return enabled && opsIntentRouter.shouldOrchestrate(userMessage);
     }
 
-    public RunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
+    public boolean shouldOrchestrateFromContext(
+            String userMessage,
+            java.util.List<com.award.log.service.impl.UnifiedAssistantService.ChatTurn> history) {
+        return enabled && opsIntentRouter.shouldOrchestrateFromContext(userMessage, history);
+    }
+
+    public OpsRunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
         OpsIntentRouter.Playbook playbook = opsIntentRouter.resolve(userMessage);
         return switch (playbook) {
-            case FULL_AUTONOMOUS -> {
-                AutonomousOpsOrchestrator.RunResult r =
-                        autonomousOpsOrchestrator.run(userMessage, surface, intentRisk);
-                yield new RunResult(r.markdown(), r.traceId(), r.report());
-            }
+            case PATROL_AUTOMATION -> patrolAutomationService.run();
             case DISK_CLEANUP, CPU_PRESSURE, PATROL_CONTINUATION -> {
-                AssistantOrchestrator.RunResult r =
-                        assistantOrchestrator.run(userMessage, surface, intentRisk);
-                yield new RunResult(r.markdown(), r.traceId(), null);
+                AssistantOrchestrator.RunResult result = assistantOrchestrator.run(userMessage, surface, intentRisk);
+                yield new OpsRunResult(result.markdown(), result.traceId(), result.streamMeta());
             }
-            case NONE -> new RunResult("未匹配运维 Playbook", null, Map.of());
+            case NONE -> new OpsRunResult("No matching playbook.", null, Map.of());
         };
     }
 
-    public RunResult runScheduledAutonomous(McpToolSurface surface, boolean forceRemediate) {
-        AutonomousOpsOrchestrator.RunResult r =
-                autonomousOpsOrchestrator.runScheduled(surface, forceRemediate);
-        return new RunResult(r.markdown(), r.traceId(), r.report());
+    public OpsRunResult runScheduledAutonomous(McpToolSurface surface, boolean forceRemediate) {
+        return patrolAutomationService.run();
     }
 }

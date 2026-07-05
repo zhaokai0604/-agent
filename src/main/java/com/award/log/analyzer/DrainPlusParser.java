@@ -26,8 +26,7 @@ import java.util.regex.Pattern;
  *   <li>无匹配则新建簇并分配单调模板 ID</li>
  * </ol>
  * <p>
- * 线程安全：{@link #parse} / {@link #parallelParse} 对树与簇的写路径使用同一把锁，
- * 保证在线模板库一致（吞吐依赖单实例时可横向分片多实例）。
+ * 线程安全：按令牌长度分桶后仅在桶内加锁，并行分片解析时不同长度桶可并发写入。
  */
 @Component
 @Qualifier("drainPlusParser")
@@ -53,7 +52,6 @@ public class DrainPlusParser implements DrainParser {
 
     private final Map<Integer, LengthBucket> lengthBuckets = new ConcurrentHashMap<>();
     private final AtomicLong templateCounter = new AtomicLong(1);
-    private final Object parseLock = new Object();
 
     @Autowired
     public DrainPlusParser(
@@ -77,13 +75,13 @@ public class DrainPlusParser implements DrainParser {
         if (raw == null || raw.isBlank()) {
             return "EMPTY";
         }
-        synchronized (parseLock) {
-            String[] tokens = preprocessAndTokenize(raw);
-            if (tokens.length == 1 && "EMPTY".equals(tokens[0])) {
-                return "EMPTY";
-            }
-            int len = tokens.length;
-            LengthBucket bucket = lengthBuckets.computeIfAbsent(len, k -> new LengthBucket());
+        String[] tokens = preprocessAndTokenize(raw);
+        if (tokens.length == 1 && "EMPTY".equals(tokens[0])) {
+            return "EMPTY";
+        }
+        int len = tokens.length;
+        LengthBucket bucket = lengthBuckets.computeIfAbsent(len, k -> new LengthBucket());
+        synchronized (bucket) {
             TrieNode leaf = bucket.walkOrCreateLeaf(tokens, maxDepth);
             return leaf.matchOrCreateCluster(tokens, raw, onNewTemplate, templateCounter, similarityThresholdPercent);
         }
@@ -127,13 +125,13 @@ public class DrainPlusParser implements DrainParser {
 
     @Override
     public int getTemplateCount() {
-        synchronized (parseLock) {
-            int sum = 0;
-            for (LengthBucket b : lengthBuckets.values()) {
+        int sum = 0;
+        for (LengthBucket b : lengthBuckets.values()) {
+            synchronized (b) {
                 sum += b.clusterCount();
             }
-            return sum;
         }
+        return sum;
     }
 
     @Override

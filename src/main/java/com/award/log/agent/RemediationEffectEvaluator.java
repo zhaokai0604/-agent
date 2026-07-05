@@ -1,6 +1,7 @@
 package com.award.log.agent;
 
 import com.award.log.service.StatisticsService;
+import com.award.log.util.TimeSource;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +16,7 @@ import java.util.Map;
 public class RemediationEffectEvaluator {
 
     private final StatisticsService statisticsService;
+    private final TimeSource timeSource;
 
     public Map<String, Object> captureMetrics() {
         Map<String, Object> snap = new LinkedHashMap<>();
@@ -28,7 +30,7 @@ public class RemediationEffectEvaluator {
         } catch (Exception ignored) {
             snap.put("error", "metrics_unavailable");
         }
-        snap.put("capturedAtMs", System.currentTimeMillis());
+        snap.put("capturedAtMs", timeSource.currentTimeMillis());
         return snap;
     }
 

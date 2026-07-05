@@ -287,3 +287,52 @@
 .ops-page .tool-console {
   padding: 0 !important;
 }
+
+/* 共享统计胶囊（工具箱 / MCP 技能 / 各页顶栏） */
+.ops-stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.ops-stat-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--ops-border);
+  background: var(--ops-panel);
+  font-size: 13px;
+}
+
+.ops-stat-pill--ok {
+  border-color: rgba(13, 148, 136, 0.35);
+  background: rgba(13, 148, 136, 0.06);
+}
+
+.ops-stat-pill__label {
+  color: var(--ops-text-subtle);
+}
+
+.ops-stat-pill__value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ops-text);
+}
+
+/* 表内工具栏 */
+.ops-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ops-table-toolbar__hint {
+  font-size: 12px;
+  color: var(--ops-text-subtle);
+}

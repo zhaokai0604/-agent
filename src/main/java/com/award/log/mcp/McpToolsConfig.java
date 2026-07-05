@@ -1,11 +1,12 @@
 package com.award.log.mcp;
 
+import com.award.log.config.TtlConcurrentMapCacheManager;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
-import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -41,14 +42,16 @@ public class McpToolsConfig {
     }
 
     @Bean("mcpCacheManager")
-    public CacheManager cacheManager() {
-        ConcurrentMapCacheManager cacheManager = new ConcurrentMapCacheManager(
-            CACHE_DISK_USAGE,
-            CACHE_SYSTEM_LOAD,
-            CACHE_PROCESS_LIST,
-            CACHE_LOG_ANALYSIS
+    public CacheManager cacheManager(
+            @Value("${agent.mcp.cache-ttl-ms:45000}") long cacheTtlMs) {
+        TtlConcurrentMapCacheManager cacheManager = new TtlConcurrentMapCacheManager(
+                cacheTtlMs,
+                CACHE_DISK_USAGE,
+                CACHE_SYSTEM_LOAD,
+                CACHE_PROCESS_LIST,
+                CACHE_LOG_ANALYSIS
         );
-        log.info("MCP Tools 缓存管理器初始化完成");
+        log.info("MCP Tools 缓存管理器初始化完成，TTL={}ms", cacheTtlMs);
         return cacheManager;
     }
 

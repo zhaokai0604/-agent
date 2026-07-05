@@ -24,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
 
@@ -42,7 +43,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 @Slf4j
 @Component
@@ -58,7 +58,7 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
 
     @Autowired
     public LogAnalysisTool(
-            @Autowired(required = false) ExecutorService mcpToolExecutor,
+            @Qualifier("mcpToolExecutorService") ExecutorService mcpToolExecutor,
             ObjectMapper objectMapper,
             DrainPlusParser drainPlusParser,
             AiDiagnosisService aiDiagnosisService,
@@ -66,7 +66,7 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
             OpsPathPolicy opsPathPolicy,
             LogCleaner logCleaner,
             DrainTemplateNoveltyTracker drainTemplateNoveltyTracker) {
-        super(mcpToolExecutor != null ? mcpToolExecutor : Executors.newCachedThreadPool());
+        super(mcpToolExecutor);
         this.objectMapper = objectMapper;
         this.drainPlusParser = drainPlusParser;
         this.aiDiagnosisService = aiDiagnosisService;
@@ -391,8 +391,13 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
         }
         
         if (count == 1) {
-            recommendation.append("1) 查看完整错误日志: tail -n 100 /var/log/syslog\n");
-            recommendation.append("2) 检查相关服务状态: systemctl status\n");
+            if (OsRuntime.isWindows()) {
+                recommendation.append("1) 查看完整错误日志: Get-Content -Tail 100 <log-path>\n");
+                recommendation.append("2) 检查相关服务状态: Get-Service 或 sc query\n");
+            } else {
+                recommendation.append("1) 查看完整错误日志: tail -n 100 /var/log/syslog\n");
+                recommendation.append("2) 检查相关服务状态: systemctl status\n");
+            }
         }
         
         return recommendation.toString();

@@ -43,6 +43,8 @@ public class OpsWorkflowController {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("enabled", workflowMemoryService.isEnabled());
         resp.put("storedCount", workflowMemoryService.countEnabled());
+        resp.put("totalRuns", workflowMemoryService.countAllRuns());
+        resp.put("supportedToolCount", com.award.log.agent.awm.AwmToolProfile.supportedTools().size());
         resp.put("llmInductionAvailable", llmWorkflowInductor.isAvailable());
 
         List<OpsWorkflow> workflows;
@@ -58,8 +60,30 @@ public class OpsWorkflowController {
             );
         }
         resp.put("domain", domain == null || domain.isBlank() ? "all" : domain.trim());
-        resp.put("workflows", workflows.stream().map(OpsWorkflow::toContextMap).toList());
+        resp.put("workflows", workflows.stream().map(this::enrichWorkflow).toList());
         return Result.success(resp);
+    }
+
+    @GetMapping("/runs")
+    public Result<Map<String, Object>> runs(
+            @RequestParam String workflowId,
+            @RequestParam(defaultValue = "8") int limit
+    ) {
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("workflowId", workflowId);
+        resp.put("runCount", workflowMemoryService.countRuns(workflowId));
+        resp.put("successCount", workflowMemoryService.getSuccessCount(workflowId));
+        resp.put("runs", workflowMemoryService.listRecentRuns(workflowId, limit));
+        return Result.success(resp);
+    }
+
+    private Map<String, Object> enrichWorkflow(OpsWorkflow wf) {
+        Map<String, Object> m = new LinkedHashMap<>(wf.toContextMap());
+        if (wf.workflowId() != null) {
+            m.put("successCount", workflowMemoryService.getSuccessCount(wf.workflowId()));
+            m.put("runCount", workflowMemoryService.countRuns(wf.workflowId()));
+        }
+        return m;
     }
 
     @GetMapping("/failure-insights")
@@ -84,9 +108,15 @@ public class OpsWorkflowController {
 
     @PostMapping("/induce-from-audit")
     public Result<Map<String, Object>> induceFromAudit(@RequestParam(defaultValue = "20") int limit) {
-        int created = workflowInductionService.induceFromRecentTraces(Math.min(100, Math.max(1, limit)));
+        WorkflowInductionService.InductionResult result =
+                workflowInductionService.induceFromRecentTraces(Math.min(100, Math.max(1, limit)));
         Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("created", created);
+        resp.put("created", result.created());
+        resp.put("scanned", result.scanned());
+        resp.put("skippedNotEligible", result.skippedNotEligible());
+        resp.put("skippedDuplicate", result.skippedDuplicate());
+        resp.put("skippedShortTools", result.skippedShortTools());
+        resp.put("hint", result.hintZh());
         resp.put("storedCount", workflowMemoryService.countEnabled());
         return Result.success(resp);
     }
@@ -97,7 +127,7 @@ public class OpsWorkflowController {
         }
         return switch (domain.trim().toLowerCase(Locale.ROOT)) {
             case "disk" -> List.of("DISK_PRESSURE");
-            case "cpu" -> List.of("CPU_PRESSURE");
+            case "cpu" -> List.of("CPU_HIGH");
             case "service" -> List.of("FAILED_SERVICE");
             default -> List.of();
         };

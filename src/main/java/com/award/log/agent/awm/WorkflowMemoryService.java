@@ -102,8 +102,40 @@ public class WorkflowMemoryService {
                       KEY idx_enabled (enabled)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent Workflow Memory'
                     """);
+            jdbcTemplate.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ops_workflow_run (
+                      id BIGINT NOT NULL AUTO_INCREMENT,
+                      workflow_id VARCHAR(64) NOT NULL,
+                      trace_id VARCHAR(64) DEFAULT NULL,
+                      success TINYINT(1) NOT NULL DEFAULT 0,
+                      steps_ok INT NOT NULL DEFAULT 0,
+                      steps_total INT NOT NULL DEFAULT 0,
+                      summary VARCHAR(512) DEFAULT NULL,
+                      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                      PRIMARY KEY (id),
+                      KEY idx_workflow_run_wf (workflow_id),
+                      KEY idx_workflow_run_trace (trace_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AWM workflow execution runs'
+                    """);
+            ensureSuccessCountColumn();
         } catch (Exception e) {
-            log.warn("创建 ops_workflow_memory 表失败（可能无库权限）: {}", e.getMessage());
+            log.warn("创建 AWM 表失败（可能无库权限）: {}", e.getMessage());
+        }
+    }
+
+    private void ensureSuccessCountColumn() {
+        try {
+            jdbcTemplate.queryForObject(
+                    "SELECT success_count FROM ops_workflow_memory LIMIT 1",
+                    Integer.class);
+        } catch (Exception e) {
+            try {
+                jdbcTemplate.execute(
+                        "ALTER TABLE ops_workflow_memory ADD COLUMN success_count INT NOT NULL DEFAULT 0");
+            } catch (Exception ignored) {
+                log.debug("success_count 列迁移跳过: {}", ignored.getMessage());
+            }
         }
     }
 
@@ -220,6 +252,111 @@ public class WorkflowMemoryService {
         }
     }
 
+    public void recordSuccess(String workflowId) {
+        if (workflowId == null || workflowId.isBlank()) {
+            return;
+        }
+        try {
+            jdbcTemplate.update(
+                    "UPDATE ops_workflow_memory SET success_count = success_count + 1 WHERE workflow_id = ?",
+                    workflowId);
+            reloadCache();
+        } catch (Exception e) {
+            log.debug("recordSuccess 失败: {}", e.getMessage());
+        }
+    }
+
+    public void recordRun(
+            String workflowId,
+            String traceId,
+            boolean success,
+            int stepsOk,
+            int stepsTotal,
+            String summary
+    ) {
+        if (workflowId == null || workflowId.isBlank()) {
+            return;
+        }
+        try {
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO ops_workflow_run
+                      (workflow_id, trace_id, success, steps_ok, steps_total, summary)
+                    VALUES (?,?,?,?,?,?)
+                    """,
+                    workflowId,
+                    traceId,
+                    success ? 1 : 0,
+                    stepsOk,
+                    stepsTotal,
+                    truncate(summary, 500));
+        } catch (Exception e) {
+            log.debug("recordRun 失败 workflowId={}: {}", workflowId, e.getMessage());
+        }
+    }
+
+    public int countRuns(String workflowId) {
+        if (workflowId == null || workflowId.isBlank()) {
+            return 0;
+        }
+        try {
+            Integer n = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM ops_workflow_run WHERE workflow_id = ?",
+                    Integer.class,
+                    workflowId);
+            return n != null ? n : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public int getSuccessCount(String workflowId) {
+        if (workflowId == null || workflowId.isBlank()) {
+            return 0;
+        }
+        try {
+            Integer n = jdbcTemplate.queryForObject(
+                    "SELECT success_count FROM ops_workflow_memory WHERE workflow_id = ?",
+                    Integer.class,
+                    workflowId);
+            return n != null ? n : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public int countAllRuns() {
+        try {
+            Integer n = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM ops_workflow_run",
+                    Integer.class);
+            return n != null ? n : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    public List<Map<String, Object>> listRecentRuns(String workflowId, int limit) {
+        if (workflowId == null || workflowId.isBlank()) {
+            return List.of();
+        }
+        int cap = Math.min(50, Math.max(1, limit));
+        try {
+            return jdbcTemplate.queryForList(
+                    """
+                    SELECT id, workflow_id, trace_id, success, steps_ok, steps_total, summary, created_at
+                    FROM ops_workflow_run
+                    WHERE workflow_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    workflowId,
+                    cap);
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
     public boolean existsWithToolSequence(String domainTag, List<String> toolSequence) {
         if (toolSequence == null || toolSequence.size() < 2) {
             return false;
@@ -285,5 +422,12 @@ public class WorkflowMemoryService {
 
     private static String str(Object o) {
         return o == null ? null : String.valueOf(o);
+    }
+
+    private static String truncate(String text, int max) {
+        if (text == null) {
+            return null;
+        }
+        return text.length() <= max ? text : text.substring(0, max) + "...";
     }
 }

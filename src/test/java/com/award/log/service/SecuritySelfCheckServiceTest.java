@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 全栈自检（需 MySQL：设置环境变量 {@code DB_PASSWORD} 后运行）。
+ * 全栈自检（需 MariaDB：设置环境变量 {@code DB_PASSWORD} 后运行）。
  * 日常 CI 以 {@link com.award.log.security.McpInvocationSecurityGateProbeTest} 为准。
  */
 @SpringBootTest(properties = {
@@ -26,7 +26,7 @@ class SecuritySelfCheckServiceTest {
     @Autowired
     private SecuritySelfCheckService securitySelfCheckService;
 
-    /** 避免 @PostConstruct 建表探针在无 DB 密码/无 MySQL 时拖垮整包 SpringBootTest */
+    /** 避免 @PostConstruct 建表探针在无 DB 密码/无 MariaDB 时拖垮整包 SpringBootTest */
     @MockBean
     private OpsAuditTraceService opsAuditTraceService;
 

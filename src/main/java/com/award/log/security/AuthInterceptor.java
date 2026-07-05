@@ -27,24 +27,36 @@ public class AuthInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        String uri = request.getRequestURI();
-        if (uri.contains("/admin/user/login")
-                || uri.contains("/admin/user/register")
-                || uri.contains("/admin/user/check-user")
-                || uri.contains("/admin/user/reset-password")) {
+        String path = normalizedPath(request);
+
+        if (AdminAccessPaths.isPublic(path)) {
             return true;
         }
 
-        if (requestUserResolver.currentUserId(request) != null) {
-            return true;
+        Integer userId = requestUserResolver.currentUserId(request);
+        if (userId == null) {
+            HttpSession session = request.getSession(false);
+            if (session == null || session.getAttribute(SESSION_USER_ID) == null) {
+                writeJson(response, 401, "{\"code\":401,\"message\":\"未登录或登录已过期\"}");
+                return false;
+            }
         }
 
-        HttpSession session = request.getSession(false);
-        if (session == null || session.getAttribute(SESSION_USER_ID) == null) {
-            writeJson(response, 401, "{\"code\":401,\"message\":\"未登录或登录已过期\"}");
+        if (AdminAccessPaths.requiresAdmin(path) && !requestUserResolver.isAdmin(request)) {
+            writeJson(response, 403, "{\"code\":403,\"message\":\"需要管理员权限\"}");
             return false;
         }
+
         return true;
+    }
+
+    static String normalizedPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String context = request.getContextPath();
+        if (context != null && !context.isBlank() && uri.startsWith(context)) {
+            return uri.substring(context.length());
+        }
+        return uri;
     }
 
     private void writeJson(HttpServletResponse response, int status, String body) throws Exception {

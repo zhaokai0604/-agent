@@ -18,6 +18,7 @@
   --ops-border-soft: #f1f5f9;
   --ops-text: #0f172a;
   --ops-text-subtle: #64748b;
+  --ops-text-muted: #64748b;
   --ops-primary: #0d9488;
   --ops-primary-hover: #0f766e;
   --ops-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
@@ -27,16 +28,16 @@
   --ops-radius-sm: 6px;
   --ops-header-h: 52px;
 
-  --shell-bg: #0b1220;
-  --shell-sidebar: #0f172a;
-  --shell-border: rgba(255, 255, 255, 0.08);
-  --shell-glow: rgba(45, 212, 191, 0.08);
-  --shell-accent: #2dd4bf;
-  --shell-accent-soft: rgba(45, 212, 191, 0.12);
-  --shell-text: #f1f5f9;
-  --shell-muted: #94a3b8;
-  --shell-nav-hover: rgba(255, 255, 255, 0.06);
-  --shell-nav-active: rgba(45, 212, 191, 0.14);
+  --shell-bg: #fafafa;
+  --shell-sidebar: #ffffff;
+  --shell-border: #ebebeb;
+  --shell-glow: rgba(13, 148, 136, 0.06);
+  --shell-accent: #0d9488;
+  --shell-accent-soft: rgba(13, 148, 136, 0.08);
+  --shell-text: #1a1a1a;
+  --shell-muted: #888888;
+  --shell-nav-hover: rgba(0, 0, 0, 0.04);
+  --shell-nav-active: rgba(13, 148, 136, 0.1);
 }
 
 body {
@@ -48,6 +49,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.shell-content,
 .main-content,
 .el-main,
 .content-container,
@@ -280,4 +282,76 @@ body {
 .main-content .el-result,
 .main-content .el-empty {
   padding: 24px 16px;
+}
+
+/* 工作区滚动条 */
+.shell-content,
+.ops-page {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.shell-content::-webkit-scrollbar,
+.ops-page::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.shell-content::-webkit-scrollbar-thumb,
+.ops-page::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+.shell-content::-webkit-scrollbar-thumb:hover,
+.ops-page::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* 页面切换动画 */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* 统一 border-card 标签页 */
+.ops-tabs.el-tabs--border-card {
+  background: var(--ops-panel);
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius);
+  overflow: hidden;
+  box-shadow: var(--ops-shadow-sm);
+}
+
+.ops-tabs.el-tabs--border-card > .el-tabs__header {
+  margin: 0;
+  background: var(--ops-panel-soft);
+  border-bottom: 1px solid var(--ops-border);
+}
+
+.ops-tabs.el-tabs--border-card > .el-tabs__content {
+  padding: 16px 18px;
+}
+
+/* 语义色工具类 */
+.text-danger {
+  color: #dc2626;
+}
+
+.text-success {
+  color: #16a34a;
+}
+
+.topbar-perf-popover.el-popover.el-popper {
+  padding: 10px 12px !important;
 }

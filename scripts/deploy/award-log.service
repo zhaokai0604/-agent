@@ -8,7 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/threshcore
 EnvironmentFile=-/etc/threshcore/threshcore.env
-ExecStart=/usr/bin/java -Xms512m -Xmx2g -jar /opt/threshcore/award-log.jar
+ExecStart=/usr/bin/java -Xms256m -Xmx1024m -XX:MaxMetaspaceSize=256m -jar /opt/threshcore/award-log.jar
 Restart=on-failure
 RestartSec=10
 SuccessExitStatus=143

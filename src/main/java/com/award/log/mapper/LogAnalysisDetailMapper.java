@@ -28,4 +28,12 @@ public interface LogAnalysisDetailMapper {
      * 按日志等级统计近期任务窗口内的异常明细条数（关联任务创建时间）
      */
     List<Map<String, Object>> selectAnomalySeverityDistribution(@Param("days") int days);
+
+    /** 近 N 日任务窗口内的明细（ES 不可用时的 MariaDB 回退查询） */
+    List<LogAnalysisDetail> selectRecentDetails(
+            @Param("days") int days,
+            @Param("severity") String severity,
+            @Param("keyword") String keyword,
+            @Param("anomalyOnly") Boolean anomalyOnly,
+            @Param("limit") int limit);
 }

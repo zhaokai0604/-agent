@@ -2,292 +2,287 @@ package com.award.log.controller;
 
 import com.award.log.common.Result;
 import com.award.log.model.LogDocument;
+import com.award.log.security.RequestUserResolver;
 import com.award.log.service.ElasticsearchService;
+import com.award.log.task.AnalysisTaskManager;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 
-/**
- * Elasticsearch控制器
- * 用于暴露Elasticsearch的查询和管理接口
- */
 @Slf4j
 @RestController
 @RequestMapping("/api/elasticsearch")
+@RequiredArgsConstructor
 public class ElasticsearchController {
 
     @Autowired(required = false)
     private ElasticsearchService elasticsearchService;
 
-    /**
-     * 索引单条日志
-     * @param logDocument 日志文档
-     * @return 操作结果
-     */
+    private final RequestUserResolver requestUserResolver;
+    private final AnalysisTaskManager analysisTaskManager;
+
     @PostMapping("/index")
-    public Result<LogDocument> indexLog(@RequestBody LogDocument logDocument) {
+    public Result<LogDocument> indexLog(HttpServletRequest request, @RequestBody LogDocument logDocument) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can index Elasticsearch data");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                LogDocument result = elasticsearchService.indexLog(logDocument);
-                return Result.success(result, "索引日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            return Result.success(elasticsearchService.indexLog(logDocument), "Indexed successfully");
         } catch (Exception e) {
-            log.error("索引日志失败", e);
-            return Result.error("索引日志失败: " + e.getMessage());
+            log.error("Failed to index Elasticsearch log", e);
+            return Result.error("Index failed");
         }
     }
 
-    /**
-     * 批量索引日志
-     * @param logDocuments 日志文档列表
-     * @return 操作结果
-     */
     @PostMapping("/bulk-index")
-    public Result<Integer> bulkIndexLogs(@RequestBody List<LogDocument> logDocuments) {
+    public Result<Integer> bulkIndexLogs(HttpServletRequest request, @RequestBody List<LogDocument> logDocuments) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can bulk index Elasticsearch data");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                int count = elasticsearchService.bulkIndexLogs(logDocuments);
-                return Result.success(count, "批量索引日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            return Result.success(elasticsearchService.bulkIndexLogs(logDocuments), "Indexed successfully");
         } catch (Exception e) {
-            log.error("批量索引日志失败", e);
-            return Result.error("批量索引日志失败: " + e.getMessage());
+            log.error("Failed to bulk index Elasticsearch logs", e);
+            return Result.error("Bulk index failed");
         }
     }
 
-    /**
-     * 获取所有日志（分页）
-     * @param pageNum 页码
-     * @param pageSize 每页大小
-     * @return 操作结果
-     */
     @GetMapping("/logs")
-    public Result<Page<LogDocument>> getLogs(@RequestParam(defaultValue = "1") int pageNum, 
-                                           @RequestParam(defaultValue = "10") int pageSize) {
+    public Result<Page<LogDocument>> getLogs(HttpServletRequest request,
+                                             @RequestParam(defaultValue = "1") int pageNum,
+                                             @RequestParam(defaultValue = "10") int pageSize) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can browse Elasticsearch logs");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                // 这里可以根据实际需求实现获取所有日志的逻辑
-                // 暂时使用搜索接口，传入空查询
-                Pageable pageable = PageRequest.of(pageNum - 1, pageSize);
-                Page<LogDocument> result = elasticsearchService.searchLogs("", pageable);
-                return Result.success(result, "获取日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            Pageable pageable = PageRequest.of(Math.max(pageNum, 1) - 1, Math.max(pageSize, 1));
+            return Result.success(elasticsearchService.searchLogs("", pageable), "Loaded successfully");
         } catch (Exception e) {
-            log.error("获取日志失败", e);
-            return Result.error("获取日志失败: " + e.getMessage());
+            log.error("Failed to load Elasticsearch logs", e);
+            return Result.error("Load failed");
         }
     }
 
-    /**
-     * 根据ID查询日志
-     * @param id 日志ID
-     * @return 操作结果
-     */
     @GetMapping("/get/{id}")
-    public Result<LogDocument> getLogById(@PathVariable String id) {
+    public Result<LogDocument> getLogById(HttpServletRequest request, @PathVariable String id) {
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                LogDocument result = elasticsearchService.getLogById(id);
-                return Result.success(result, "查询日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
+            LogDocument result = elasticsearchService.getLogById(id);
+            if (result == null) {
+                return Result.error(404, "Log not found");
             }
+            if (!requestUserResolver.isAdmin(request) && !canAccessTask(request, result.getTaskId())) {
+                return Result.error(404, "Log not found or access denied");
+            }
+            return Result.success(result, "Loaded successfully");
         } catch (Exception e) {
-            log.error("查询日志失败", e);
-            return Result.error("查询日志失败: " + e.getMessage());
+            log.error("Failed to load Elasticsearch log {}", id, e);
+            return Result.error("Load failed");
         }
     }
 
-    /** 与旧版前端路径 {@code /logs/{id}} 兼容，行为同 {@link #getLogById(String)} */
     @GetMapping("/logs/{id}")
-    public Result<LogDocument> getLogByIdLegacyPath(@PathVariable String id) {
-        return getLogById(id);
+    public Result<LogDocument> getLogByIdLegacyPath(HttpServletRequest request, @PathVariable String id) {
+        return getLogById(request, id);
     }
 
-    /**
-     * 全文检索日志
-     * @param query 搜索关键词
-     * @param severity 日志级别
-     * @param pageNum 页码
-     * @param pageSize 每页大小
-     * @return 操作结果
-     */
     @GetMapping("/search")
-    public Result<Page<LogDocument>> searchLogs(@RequestParam(required = false, defaultValue = "") String query,
-                                                @RequestParam(required = false) String severity, 
+    public Result<Page<LogDocument>> searchLogs(HttpServletRequest request,
+                                                @RequestParam(required = false, defaultValue = "") String query,
+                                                @RequestParam(required = false) String severity,
                                                 @RequestParam(required = false) Boolean anomaly,
                                                 @RequestParam(required = false) String startTime,
                                                 @RequestParam(required = false) String endTime,
-                                                @RequestParam(defaultValue = "1") int pageNum, 
+                                                @RequestParam(defaultValue = "1") int pageNum,
                                                 @RequestParam(defaultValue = "10") int pageSize) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can search Elasticsearch logs");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                Pageable pageable = PageRequest.of(pageNum - 1, pageSize);
-                LocalDateTime start = (startTime == null || startTime.isEmpty()) ? null : LocalDateTime.parse(startTime);
-                LocalDateTime end = (endTime == null || endTime.isEmpty()) ? null : LocalDateTime.parse(endTime);
-                Page<LogDocument> result = elasticsearchService.searchLogs(query, severity, anomaly, start, end, pageable);
-                return Result.success(result, "搜索日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            Pageable pageable = PageRequest.of(Math.max(pageNum, 1) - 1, Math.max(pageSize, 1));
+            LocalDateTime start = blankToNull(startTime) == null ? null : LocalDateTime.parse(startTime);
+            LocalDateTime end = blankToNull(endTime) == null ? null : LocalDateTime.parse(endTime);
+            Page<LogDocument> result = elasticsearchService.searchLogs(query, severity, anomaly, start, end, pageable);
+            return Result.success(result, "Search completed");
+        } catch (DateTimeParseException e) {
+            return Result.error("Invalid date time format");
         } catch (Exception e) {
-            log.error("搜索日志失败", e);
-            return Result.error("搜索日志失败: " + e.getMessage());
+            log.error("Failed to search Elasticsearch logs", e);
+            return Result.error("Search failed");
         }
     }
 
-    /**
-     * 根据时间范围查询日志
-     * @param startTime 开始时间
-     * @param endTime 结束时间
-     * @param page 页码
-     * @param size 每页大小
-     * @return 操作结果
-     */
     @GetMapping("/time-range")
-    public Result<Page<LogDocument>> getLogsByTimeRange(@RequestParam String startTime, 
-                                                        @RequestParam String endTime, 
-                                                        @RequestParam(defaultValue = "0") int page, 
+    public Result<Page<LogDocument>> getLogsByTimeRange(HttpServletRequest request,
+                                                        @RequestParam String startTime,
+                                                        @RequestParam String endTime,
+                                                        @RequestParam(defaultValue = "0") int page,
                                                         @RequestParam(defaultValue = "10") int size) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can query Elasticsearch logs by time range");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                LocalDateTime start = LocalDateTime.parse(startTime);
-                LocalDateTime end = LocalDateTime.parse(endTime);
-                Pageable pageable = PageRequest.of(page, size);
-                Page<LogDocument> result = elasticsearchService.getLogsByTimeRange(start, end, pageable);
-                return Result.success(result, "按时间范围查询日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            LocalDateTime start = LocalDateTime.parse(startTime);
+            LocalDateTime end = LocalDateTime.parse(endTime);
+            Pageable pageable = PageRequest.of(Math.max(page, 0), Math.max(size, 1));
+            return Result.success(elasticsearchService.getLogsByTimeRange(start, end, pageable), "Loaded successfully");
+        } catch (DateTimeParseException e) {
+            return Result.error("Invalid date time format");
         } catch (Exception e) {
-            log.error("按时间范围查询日志失败", e);
-            return Result.error("按时间范围查询日志失败: " + e.getMessage());
+            log.error("Failed to query Elasticsearch logs by time range", e);
+            return Result.error("Load failed");
         }
     }
 
-    /**
-     * 根据严重程度查询日志
-     * @param severity 严重程度
-     * @param page 页码
-     * @param size 每页大小
-     * @return 操作结果
-     */
     @GetMapping("/severity")
-    public Result<Page<LogDocument>> getLogsBySeverity(@RequestParam String severity, 
-                                                      @RequestParam(defaultValue = "0") int page, 
-                                                      @RequestParam(defaultValue = "10") int size) {
+    public Result<Page<LogDocument>> getLogsBySeverity(HttpServletRequest request,
+                                                       @RequestParam String severity,
+                                                       @RequestParam(defaultValue = "0") int page,
+                                                       @RequestParam(defaultValue = "10") int size) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can query Elasticsearch logs by severity");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                Pageable pageable = PageRequest.of(page, size);
-                Page<LogDocument> result = elasticsearchService.getLogsBySeverity(severity, pageable);
-                return Result.success(result, "按严重程度查询日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            Pageable pageable = PageRequest.of(Math.max(page, 0), Math.max(size, 1));
+            return Result.success(elasticsearchService.getLogsBySeverity(severity, pageable), "Loaded successfully");
         } catch (Exception e) {
-            log.error("按严重程度查询日志失败", e);
-            return Result.error("按严重程度查询日志失败: " + e.getMessage());
+            log.error("Failed to query Elasticsearch logs by severity", e);
+            return Result.error("Load failed");
         }
     }
 
-    /**
-     * 根据任务ID查询日志
-     * @param taskId 任务ID
-     * @param page 页码
-     * @param size 每页大小
-     * @return 操作结果
-     */
     @GetMapping("/task/{taskId}")
-    public Result<Page<LogDocument>> getLogsByTaskId(@PathVariable String taskId, 
-                                                    @RequestParam(defaultValue = "0") int page, 
-                                                    @RequestParam(defaultValue = "10") int size) {
+    public Result<Page<LogDocument>> getLogsByTaskId(HttpServletRequest request,
+                                                     @PathVariable String taskId,
+                                                     @RequestParam(defaultValue = "0") int page,
+                                                     @RequestParam(defaultValue = "10") int size) {
+        if (!canAccessTask(request, taskId)) {
+            return Result.error(404, "Task not found or access denied");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                Pageable pageable = PageRequest.of(page, size);
-                Page<LogDocument> result = elasticsearchService.getLogsByTaskId(taskId, pageable);
-                return Result.success(result, "按任务ID查询日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            Pageable pageable = PageRequest.of(Math.max(page, 0), Math.max(size, 1));
+            return Result.success(elasticsearchService.getLogsByTaskId(taskId, pageable), "Loaded successfully");
         } catch (Exception e) {
-            log.error("按任务ID查询日志失败", e);
-            return Result.error("按任务ID查询日志失败: " + e.getMessage());
+            log.error("Failed to query Elasticsearch logs for task {}", taskId, e);
+            return Result.error("Load failed");
         }
     }
 
-    /**
-     * 查询异常日志
-     * @param page 页码
-     * @param size 每页大小
-     * @return 操作结果
-     */
     @GetMapping("/anomaly")
-    public Result<Page<LogDocument>> getAnomalyLogs(@RequestParam(defaultValue = "0") int page, 
-                                                   @RequestParam(defaultValue = "10") int size) {
+    public Result<Page<LogDocument>> getAnomalyLogs(HttpServletRequest request,
+                                                    @RequestParam(defaultValue = "0") int page,
+                                                    @RequestParam(defaultValue = "10") int size) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can query Elasticsearch anomaly logs");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                Pageable pageable = PageRequest.of(page, size);
-                Page<LogDocument> result = elasticsearchService.getAnomalyLogs(pageable);
-                return Result.success(result, "查询异常日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            Pageable pageable = PageRequest.of(Math.max(page, 0), Math.max(size, 1));
+            return Result.success(elasticsearchService.getAnomalyLogs(pageable), "Loaded successfully");
         } catch (Exception e) {
-            log.error("查询异常日志失败", e);
-            return Result.error("查询异常日志失败: " + e.getMessage());
+            log.error("Failed to query Elasticsearch anomaly logs", e);
+            return Result.error("Load failed");
         }
     }
 
-    /**
-     * 删除指定时间范围之前的日志
-     * @param beforeTime 时间点
-     * @return 操作结果
-     */
     @DeleteMapping("/delete/before")
-    public Result<Long> deleteLogsBefore(@RequestParam String beforeTime) {
+    public Result<Long> deleteLogsBefore(HttpServletRequest request, @RequestParam String beforeTime) {
+        if (!requireAdmin(request)) {
+            return Result.error(403, "Only administrators can delete Elasticsearch logs by time range");
+        }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
         try {
-            if (elasticsearchService != null) {
-                LocalDateTime time = LocalDateTime.parse(beforeTime);
-                long count = elasticsearchService.deleteLogsBefore(time);
-                return Result.success(count, "删除日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
+            LocalDateTime time = LocalDateTime.parse(beforeTime);
+            return Result.success(elasticsearchService.deleteLogsBefore(time), "Deleted successfully");
+        } catch (DateTimeParseException e) {
+            return Result.error("Invalid date time format");
         } catch (Exception e) {
-            log.error("删除日志失败", e);
-            return Result.error("删除日志失败: " + e.getMessage());
+            log.error("Failed to delete Elasticsearch logs", e);
+            return Result.error("Delete failed");
         }
     }
 
-    /**
-     * 删除指定任务的日志
-     * @param taskId 任务ID
-     * @return 操作结果
-     */
     @DeleteMapping("/delete/task/{taskId}")
-    public Result<Long> deleteLogsByTaskId(@PathVariable String taskId) {
-        try {
-            if (elasticsearchService != null) {
-                long count = elasticsearchService.deleteLogsByTaskId(taskId);
-                return Result.success(count, "删除任务日志成功");
-            } else {
-                return Result.error("Elasticsearch服务未启用");
-            }
-        } catch (Exception e) {
-            log.error("删除任务日志失败", e);
-            return Result.error("删除任务日志失败: " + e.getMessage());
+    public Result<Long> deleteLogsByTaskId(HttpServletRequest request, @PathVariable String taskId) {
+        if (!canAccessTask(request, taskId)) {
+            return Result.error(404, "Task not found or access denied");
         }
+        if (elasticsearchService == null) {
+            return unavailable();
+        }
+        try {
+            return Result.success(elasticsearchService.deleteLogsByTaskId(taskId), "Deleted successfully");
+        } catch (Exception e) {
+            log.error("Failed to delete Elasticsearch logs for task {}", taskId, e);
+            return Result.error("Delete failed");
+        }
+    }
+
+    private Result unavailable() {
+        return Result.error(503, "Elasticsearch is disabled");
+    }
+
+    private boolean requireAdmin(HttpServletRequest request) {
+        return requestUserResolver.isAdmin(request);
+    }
+
+    private boolean canAccessTask(HttpServletRequest request, String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return false;
+        }
+        Integer userId = requestUserResolver.currentUserId(request);
+        boolean admin = requestUserResolver.isAdmin(request);
+        return analysisTaskManager.canAccessTask(taskId, userId, admin);
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

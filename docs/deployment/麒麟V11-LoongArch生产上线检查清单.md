@@ -74,7 +74,8 @@ sudo systemctl enable --now award-log
 - [ ] `SPRING_PROFILES_ACTIVE=prod-kylin`
 - [ ] `RF_FORCE_HEURISTIC_LOONGARCH=true`（ONNX 龙架构回退）
 - [ ] `APP_AI_AUDIT_RELAXED_READ=false`
-- [ ] `AGENT_MIN_PRIVILEGE=true`，已配置 `award-agent` + sudoers
+- [ ] 麒麟真删验收：`AGENT_MIN_PRIVILEGE=false` 且 `OPS_DRY_RUN_GLOBAL=false`
+- [ ] 最小权限演示：如改回 `AGENT_MIN_PRIVILEGE=true`，需确认清理目录权限与 `award-agent` + sudoers 匹配
 
 ---
 
@@ -98,14 +99,14 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 | Actuator | `/actuator/health` → UP |
 | 平台信息 | `acceptance.deliveryTargetMatch` = true（目标机） |
 | MCP | 工具列表含 `AutonomousOpsTool` |
-| 自主运维 | `POST /api/ops/autonomous/run?readOnly=true` 返回 traceId |
+| 巡检自动化 | `POST /api/ops/autonomous/run?readOnly=true` 返回 traceId（兼容入口） |
 
 ---
 
 ## 六、功能验收（建议截图留档）
 
 1. **登录** → 仪表盘有数据  
-2. **工作台** → 「自主运维」→ 全工具融合报告  
+2. **工作台** → 「自主运维」→ 巡检自动化 / 感知报告  
 3. **工具控制台** → `AutonomousOpsTool` / `DiskTool` 可执行  
 4. **写操作护栏** → 清理类工具需风险确认 + 「确认执行」  
 5. **运维链路审计** → traceId 可查到感知→处置步骤  
@@ -140,9 +141,9 @@ sudo systemctl start award-log
 - [ ] `deploy/release-kylin/` 构建产物  
 - [ ] 目标机 `uname -a`、`java -version` 截图  
 - [ ] `/api/platform/info` JSON 截图（`deliveryTargetMatch: true`）  
-- [ ] 自主运维 Markdown 报告截图  
+- [ ] 巡检自动化 Markdown 报告截图  
 - [ ] journalctl / systemctl 样例（可选）
 
 ---
 
-*文档版本：与工程 `prod-kylin` profile 同步（2026-05）*
+*文档版本：与工程 `prod-kylin` profile 同步（2026-06-20）*

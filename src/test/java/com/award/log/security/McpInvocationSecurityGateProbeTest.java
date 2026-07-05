@@ -78,9 +78,16 @@ class McpInvocationSecurityGateProbeTest {
 
     @Test
     void writeToolNotHttpAllowedByDefault() {
-        var d = gate.evaluate("ServiceRestartTool", Map.of("service", "nginx", "dryRun", true),
+        var d = gate.evaluate("FirstMcpTools", Map.of(),
                 McpInvocationSecurityGate.McpSecurityProfile.INITIAL_REQUEST);
         assertEquals(McpInvocationSecurityGate.GateDecision.Type.BLOCK, d.getType());
-        assertEquals("TOOL_NOT_HTTP_ALLOWED", d.getCode());
+        assertEquals("UNKNOWN_TOOL", d.getCode());
+    }
+
+    @Test
+    void remediationWriteToolHttpAllowedInDryRun() {
+        var d = gate.evaluate("CleanTempTool", Map.of("path", "/tmp", "days", 7, "dryRun", true),
+                McpInvocationSecurityGate.McpSecurityProfile.INITIAL_REQUEST);
+        assertEquals(McpInvocationSecurityGate.GateDecision.Type.ALLOW, d.getType());
     }
 }

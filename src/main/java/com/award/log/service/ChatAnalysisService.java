@@ -6,15 +6,13 @@ import java.util.List;
 
 public interface ChatAnalysisService {
 
-    Flux<String> chat(String userMessage);
+    Flux<String> chat(String sessionId, String userMessage);
 
-    Flux<String> analyzeStream(String userMessage);
+    Flux<String> analyzeStream(String sessionId, String userMessage);
 
-    List<ChatMessage> getConversationHistory();
+    List<ChatMessage> getConversationHistory(String sessionId);
 
-    void clearHistory();
-
-    void setCurrentSessionId(String sessionId);
+    void clearHistory(String sessionId);
 
     AnalysisResult analyze(String userMessage);
 

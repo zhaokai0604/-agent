@@ -6,11 +6,12 @@
 #
 # 环境变量（可选）：
 #   DB_NAME           默认 log_analysis
-#   DB_USER           默认 threshcore
+#   DB_USER           默认 root
 #   DB_PASSWORD       数据库用户密码（未设则交互输入）
 #   AGENT_USER        默认 award-agent
 #   INSTALL_ROOT      默认 /opt/threshcore
 #   SKIP_MARIADB      1 跳过库初始化（库已存在时）
+#   SKIP_MYSQL        兼容旧变量名，效果同上
 #
 set -euo pipefail
 
@@ -18,11 +19,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 DB_NAME="${DB_NAME:-log_analysis}"
-DB_USER="${DB_USER:-threshcore}"
+DB_USER="${DB_USER:-root}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 AGENT_USER="${AGENT_USER:-award-agent}"
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/threshcore}"
-SKIP_MARIADB="${SKIP_MARIADB:-0}"
+SKIP_MARIADB="${SKIP_MARIADB:-${SKIP_MYSQL:-0}}"
 SCHEMA="${ROOT}/src/main/resources/schema.sql"
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -50,31 +51,49 @@ esac
 need_cmds=(java mvn node npm mariadb systemctl)
 for c in "${need_cmds[@]}"; do
   if ! command -v "$c" >/dev/null 2>&1; then
-    echo "[缺失] 未找到命令: $c（请先安装 JDK 17、Maven、Node、MariaDB）" >&2
+    if [[ "$c" == "mariadb" ]] && command -v mysql >/dev/null 2>&1; then
+      echo "[OK] mysql -> $(command -v mysql)（兼容 MariaDB 客户端）"
+    else
+      echo "[缺失] 未找到命令: $c（请先安装 JDK 17、Maven、Node、MariaDB）" >&2
+    fi
   else
     echo "[OK] $c -> $(command -v "$c")"
   fi
 done
 echo ""
 
+db_cli() {
+  if command -v mariadb >/dev/null 2>&1; then
+    mariadb "$@"
+  else
+    mysql "$@"
+  fi
+}
+
 if [[ "$SKIP_MARIADB" != "1" ]]; then
   echo "[MariaDB] 启动服务并初始化库..."
-  systemctl enable --now mariadb
+  systemctl enable --now mariadb 2>/dev/null || systemctl enable --now mysql 2>/dev/null || systemctl enable --now mysqld 2>/dev/null || true
   if [[ -z "$DB_PASSWORD" ]]; then
-    read -rsp "请输入 MariaDB 用户 ${DB_USER} 的密码: " DB_PASSWORD
+    read -rsp "请输入数据库用户 ${DB_USER} 的密码: " DB_PASSWORD
     echo ""
   fi
   if [[ ! -f "$SCHEMA" ]]; then
     echo "错误: 未找到 $SCHEMA" >&2
     exit 1
   fi
-  mariadb -u root <<SQL
+  if [[ "$DB_USER" == "root" ]]; then
+    db_cli -u root -p"$DB_PASSWORD" <<SQL
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
+SQL
+  else
+    db_cli -u root -p"$DB_PASSWORD" <<SQL
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 SQL
-  mariadb -u root "$DB_NAME" < "$SCHEMA"
+  fi
+  db_cli -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$SCHEMA"
   echo "[MariaDB] 库 ${DB_NAME} 与 schema 已就绪"
 else
   echo "[MariaDB] 跳过（SKIP_MARIADB=1）"
@@ -87,8 +106,10 @@ else
   echo "[用户] ${AGENT_USER} 已存在"
 fi
 
-mkdir -p "${INSTALL_ROOT}/logs"
-chmod 755 "${INSTALL_ROOT}"
+mkdir -p "${INSTALL_ROOT}/logs" "${INSTALL_ROOT}/tmp"
+chmod 755 "${INSTALL_ROOT}" "${INSTALL_ROOT}/logs"
+chown "${AGENT_USER}:${AGENT_USER}" "${INSTALL_ROOT}/tmp" || true
+chmod 1777 "${INSTALL_ROOT}/tmp"
 echo "[目录] ${INSTALL_ROOT} 已创建"
 
 if [[ ! -f /etc/sudoers.d/award-agent ]]; then

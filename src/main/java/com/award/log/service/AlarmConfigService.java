@@ -11,5 +11,7 @@ public interface AlarmConfigService {
 
     TaskAlarmConfig getEffectiveConfig(String taskId);
 
+    TaskAlarmConfig saveDefaultConfig(Map<String, Object> rawConfig);
+
     TaskAlarmConfig saveTaskConfig(String taskId, Map<String, Object> rawConfig);
 }

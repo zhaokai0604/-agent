@@ -3,6 +3,7 @@ package com.award.log.mcp.tools;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.LogSafetyClassifier;
 import com.award.log.mcp.MinPrivilegeExecutor;
+import com.award.log.security.ChatWriteExecutionPolicy;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -57,8 +58,12 @@ public class LogCleanupTool extends AbstractCommandExecutor {
         long startTime = System.currentTimeMillis();
         String targetPath = path != null && !path.isBlank() ? path.trim()
                 : (OsRuntime.isWindows() ? "C:\\Windows\\Logs" : "/var/log");
-        int targetDays = days != null ? Math.min(Math.max(days, 1), 3650) : 30;
-        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
+        int defaultDays = days != null ? Math.min(Math.max(days, 1), 3650) : 30;
+        ChatWriteExecutionPolicy.ResolvedWrite write = ChatWriteExecutionPolicy.resolve(
+                opsPathPolicy, targetPath, defaultDays, dryRun, confirmDelete, false);
+        int targetDays = Math.max(1, Math.min(write.days(), 3650));
+        boolean isDryRun = write.dryRun();
+        boolean confirmDeleteResolved = write.confirmDelete();
 
         log.info("[LogCleanup] path={} days={} dryRun={}", targetPath, targetDays, isDryRun);
 
@@ -66,7 +71,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
             if (!opsPathPolicy.isAllowedLogCleanupPath(targetPath)) {
                 return buildErrorResponse(opsPathPolicy.rejectReason("日志清理路径不在白名单"), startTime);
             }
-            if (!isDryRun && !Boolean.TRUE.equals(confirmDelete)) {
+            if (!isDryRun && !confirmDeleteResolved) {
                 return buildErrorResponse(
                         "安全策略：实际删除需 dryRun=false 且 confirmDelete=true（或通过 MCP 二次确认后执行）",
                         startTime);
@@ -106,7 +111,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
             if (!isDryRun) {
                 for (String file : deletable) {
                     AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
-                    if (delResult.success()) {
+                    if (delResult.success() && !isSimulatedDryRun(delResult)) {
                         filesDeleted++;
                     }
                 }
@@ -124,6 +129,10 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                         jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
                         previewCount, toJsonArray(previewFiles), toJsonArray(truncateDenied(filtered.deniedReasons(), 8)));
             } else {
+                if (filesDeleted == 0 && !deletable.isEmpty()) {
+                    return buildErrorResponse(
+                            "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
+                }
                 data = String.format(
                         "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d}",
                         jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped, filesDeleted);
@@ -178,7 +187,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                 AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
                         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
                         "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
-                if (delResult.success()) {
+                if (delResult.success() && !isSimulatedDryRun(delResult)) {
                     filesDeleted++;
                 }
             }
@@ -194,11 +203,19 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                     jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
                     previewCount, toJsonArray(previewFiles), toJsonArray(truncateDenied(filtered.deniedReasons(), 8)));
         } else {
+            if (filesDeleted == 0 && !deletable.isEmpty()) {
+                return buildErrorResponse(
+                        "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
+            }
             data = String.format(
                     "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"platform\":\"windows\"}",
                     jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped, filesDeleted);
         }
         return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+    }
+
+    private boolean isSimulatedDryRun(AbstractCommandExecutor.CommandResult result) {
+        return result != null && result.output() != null && result.output().contains("[DRY-RUN]");
     }
 
     private static String jsonEscape(String s) {

@@ -7,6 +7,7 @@ import com.award.log.model.RuleDefinition;
 import com.award.log.service.EngineHealthService;
 import com.award.log.service.ExperimentService;
 import com.award.log.service.RuleRegistryService;
+import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +44,11 @@ public class EngineHealthServiceImpl implements EngineHealthService {
         this.ruleRegistryService = ruleRegistryService;
         this.experimentService = experimentService;
         this.opsDryRunProperties = opsDryRunProperties;
+    }
+
+    @PostConstruct
+    void warmSnapshotOnStartup() {
+        collect();
     }
 
     @Scheduled(fixedDelay = 30000)

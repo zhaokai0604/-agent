@@ -45,19 +45,23 @@ public class SystemdTool extends AbstractCommandExecutor {
     }
 
     @Tool(name = "listFailedSystemdUnits",
-            description = "列出失败或异常的 systemd 单元（systemctl --failed）；Windows 下列出非 Running 的 Windows 服务摘要")
+            description = "列出异常服务：Linux 用 systemctl --failed；Windows 用「应自动启动但未运行」的服务")
     public String listFailedSystemdUnits() throws JsonProcessingException {
         long start = System.currentTimeMillis();
         List<String> cmd;
         if (OsRuntime.isWindows()) {
-            String ps = "Get-Service | Where-Object { $_.Status -ne 'Running' }"
-                    + " | Select-Object Name,Status,StartType | Format-Table -AutoSize | Out-String -Width 300";
+            // 仅「应自动启动却未运行」或异常状态；排除大量正常的 Disabled/手动停止服务
+            String ps = "Get-Service | Where-Object {"
+                    + " ($_.Status -eq 'Stopped' -and $_.StartType -eq 'Automatic')"
+                    + " -or ($_.Status -in @('StopPending','Paused'))"
+                    + " } | Select-Object Name,Status,StartType"
+                    + " | Format-Table -AutoSize | Out-String -Width 200";
             cmd = List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps);
         } else {
             cmd = List.of("systemctl", "--failed", "--no-pager", "--no-legend");
         }
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 45_000L);
-        return wrap("systemd-failed", cmd, r, start);
+        return wrap(OsRuntime.isWindows() ? "windows-service-anomaly" : "systemd-failed", cmd, r, start);
     }
 
     @Tool(name = "getServiceStatus",

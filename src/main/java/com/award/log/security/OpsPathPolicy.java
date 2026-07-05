@@ -3,6 +3,7 @@ package com.award.log.security;
 import com.award.log.collector.LogCollectorPathResolver;
 import com.award.log.config.AgentOpsProperties;
 import com.award.log.util.OsRuntime;
+import com.award.log.util.WindowsDriveSupport;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -97,6 +98,13 @@ public class OpsPathPolicy {
             }
             for (String root : LogCollectorPathResolver.resolve(logCollectorFilePath)) {
                 addIfAbsent(windowsReadPrefixes, root.trim());
+                if (isWindowsLogCleanupCandidate(root)) {
+                    addIfAbsent(windowsLogCleanupRoots, root.trim());
+                }
+            }
+            for (String temp : WindowsDriveSupport.discoverTempCleanCandidates()) {
+                addIfAbsent(windowsCleanRoots, temp);
+                addIfAbsent(windowsReadPrefixes, temp);
             }
         }
         log.info("OpsPathPolicy [{}] read={} clean={} logCleanup={} config={} privilege={} winRead={} winClean={}",
@@ -131,6 +139,17 @@ public class OpsPathPolicy {
             }
         }
         list.add(path.trim());
+    }
+
+    private static boolean isWindowsLogCleanupCandidate(String path) {
+        String normalized = normalizeWindowsPath(path).toLowerCase();
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        return normalized.contains("/logs")
+                || normalized.endsWith("/log")
+                || normalized.contains("/wer/reportarchive")
+                || normalized.contains("/wer/reportqueue");
     }
 
     private static List<String> copyNormalize(List<String> raw) {

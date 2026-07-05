@@ -3,6 +3,7 @@ package com.award.log.agent;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpsIntentRouterTest {
@@ -30,8 +31,15 @@ class OpsIntentRouterTest {
 
     @Test
     void demoServiceRoutesAutonomous() {
-        assertEquals(OpsIntentRouter.Playbook.FULL_AUTONOMOUS, router.resolve("有 systemd 服务失败了"));
-        assertEquals(OpsIntentRouter.Playbook.FULL_AUTONOMOUS, router.resolve("服务挂了"));
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("有 systemd 服务失败了"));
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("服务挂了"));
+    }
+
+    @Test
+    void generalHealthCheckRoutesAutonomous() {
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("帮我全面检查系统状态"));
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("检查一下本机环境是否正常"));
+        assertTrue(router.shouldOrchestrate("健康检查"));
     }
 
     @Test
@@ -40,8 +48,22 @@ class OpsIntentRouterTest {
     }
 
     @Test
-    void shouldOrchestrate_forDemoPaths() {
+    void shouldOrchestrateForDemoPaths() {
         assertTrue(router.shouldOrchestrate("磁盘满了"));
         assertTrue(router.shouldOrchestrate("一键巡检"));
+    }
+
+    @Test
+    void forceRemediateOnDirectCleanupPhrases() {
+        assertTrue(router.forceRemediate("清理垃圾"));
+        assertTrue(router.forceRemediate("帮我清理磁盘临时文件"));
+        assertTrue(router.forceRemediate("删除 C:\\Users\\Administrator\\AppData\\Local\\Temp\\foo"));
+        assertTrue(router.forceRemediate("磁盘满了清理临时"));
+    }
+
+    @Test
+    void forceRemediateFalseWhenPreviewOnly() {
+        assertFalse(router.forceRemediate("仅预览清理临时文件"));
+        assertFalse(router.forceRemediate("帮我看看磁盘怎么样"));
     }
 }

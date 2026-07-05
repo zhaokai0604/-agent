@@ -14,7 +14,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * 从 systemd 感知结果与白名单/治理策略中选取可重启的服务名。
+ * 从服务感知结果与白名单/治理策略中选取可重启的服务名（Linux systemd / Windows Service）。
  */
 @Component
 public class ServiceRestartCandidateResolver {
@@ -66,6 +66,19 @@ public class ServiceRestartCandidateResolver {
         return null;
     }
 
+    public String pickFromUserMessage(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) {
+            return null;
+        }
+        String lower = userMessage.toLowerCase(Locale.ROOT);
+        for (String svc : normalizedAllowlist()) {
+            if (lower.contains(svc) && governanceAllowsRestart(svc)) {
+                return svc;
+            }
+        }
+        return null;
+    }
+
     public static List<String> parseFailedUnitsFromToolJson(String toolJson, ObjectMapper mapper) {
         if (toolJson == null || toolJson.isBlank() || mapper == null) {
             return List.of();
@@ -95,6 +108,9 @@ public class ServiceRestartCandidateResolver {
         return List.copyOf(names);
     }
 
+    private static final Set<String> OUTPUT_HEADER_TOKENS = Set.of(
+            "name", "status", "starttype", "unit", "load", "active", "sub", "description");
+
     private static void parseFailedUnitsFromOutput(String output, Set<String> names) {
         if (output == null || output.isBlank()) {
             return;
@@ -102,6 +118,9 @@ public class ServiceRestartCandidateResolver {
         for (String line : output.split("\\R")) {
             String trimmed = line.trim();
             if (trimmed.isEmpty() || trimmed.startsWith("UNIT ") || trimmed.startsWith("●") && trimmed.length() < 3) {
+                continue;
+            }
+            if (trimmed.matches("-{2,}.*") || trimmed.matches("={2,}.*")) {
                 continue;
             }
             if (trimmed.startsWith("●")) {
@@ -115,10 +134,14 @@ public class ServiceRestartCandidateResolver {
             if (token.endsWith(".service")) {
                 token = token.substring(0, token.length() - ".service".length());
             }
+            String lower = token.toLowerCase(Locale.ROOT);
+            if (OUTPUT_HEADER_TOKENS.contains(lower)) {
+                continue;
+            }
             if (SERVICE_TOKEN.matcher(token).matches()
                     && !"0".equals(token)
                     && !"loaded".equalsIgnoreCase(token)) {
-                names.add(token.toLowerCase(Locale.ROOT));
+                names.add(lower);
             }
         }
     }

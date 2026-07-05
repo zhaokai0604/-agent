@@ -25,6 +25,7 @@ import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -53,11 +54,39 @@ public class StatisticsServiceImpl implements StatisticsService {
     // 缓存过期时间（10分钟）
     private static final long CACHE_EXPIRE_TIME = 10;
 
-    // 网络使用率计算相关的静态变量，用于存储上次的网络传输字节数和时间戳
-    private static long lastBytesRecv = 0;
-    private static long lastBytesSent = 0;
-    private static long lastNetworkTimestamp = 0;
-    private static boolean networkInitialized = false;
+    /** Redis 未启用时的进程内短缓存 TTL（毫秒） */
+    private static final long LOCAL_STATS_TTL_MS = 20_000;
+
+    private volatile Map<String, Object> cachedPerformance;
+    private volatile long cachedPerformanceAtMs;
+    private volatile String cachedPerformanceKey = "";
+
+    private final ConcurrentHashMap<Integer, CachedAnomalyStats> cachedAnomalyStats = new ConcurrentHashMap<>();
+
+    private static final class CachedAnomalyStats {
+        final Map<String, Object> data;
+        final long cachedAtMs;
+
+        CachedAnomalyStats(Map<String, Object> data, long cachedAtMs) {
+            this.data = data;
+            this.cachedAtMs = cachedAtMs;
+        }
+    }
+
+    private static final class NetworkCounterState {
+        final long bytesRecv;
+        final long bytesSent;
+        final long timestampMs;
+
+        NetworkCounterState(long bytesRecv, long bytesSent, long timestampMs) {
+            this.bytesRecv = bytesRecv;
+            this.bytesSent = bytesSent;
+            this.timestampMs = timestampMs;
+        }
+    }
+
+    private static final ConcurrentHashMap<String, NetworkCounterState> networkCounterStates =
+            new ConcurrentHashMap<>();
 
     /** OSHI 在龙架构/部分麒麟内核上常无法初始化 LinuxOperatingSystem，探测后缓存结果 */
     private static volatile Boolean oshiAvailable;
@@ -151,17 +180,33 @@ public class StatisticsServiceImpl implements StatisticsService {
 
     @Override
     public Map<String, Object> getSystemPerformance(String preferredNetworkInterface) {
-        log.info("获取系统性能数据");
+        String cacheKey = preferredNetworkInterface == null ? "" : preferredNetworkInterface.trim();
+        long now = System.currentTimeMillis();
+        Map<String, Object> localHit = cachedPerformance;
+        if (localHit != null
+                && cacheKey.equals(cachedPerformanceKey)
+                && now - cachedPerformanceAtMs < LOCAL_STATS_TTL_MS) {
+            return new HashMap<>(localHit);
+        }
+
+        log.debug("获取系统性能数据");
+        Map<String, Object> performance;
         if (!useOshiMetrics()) {
-            return collectPerformanceFallback(preferredNetworkInterface);
+            performance = collectPerformanceFallback(preferredNetworkInterface);
+        } else {
+            try {
+                performance = collectPerformanceViaOshi(preferredNetworkInterface);
+            } catch (Throwable t) {
+                log.warn("OSHI 采集失败，降级 MXBean/proc：{}", t.toString());
+                oshiAvailable = false;
+                performance = collectPerformanceFallback(preferredNetworkInterface);
+            }
         }
-        try {
-            return collectPerformanceViaOshi(preferredNetworkInterface);
-        } catch (Throwable t) {
-            log.warn("OSHI 采集失败，降级 MXBean/proc：{}", t.toString());
-            oshiAvailable = false;
-            return collectPerformanceFallback(preferredNetworkInterface);
-        }
+
+        cachedPerformance = performance;
+        cachedPerformanceKey = cacheKey;
+        cachedPerformanceAtMs = now;
+        return new HashMap<>(performance);
     }
 
     private Map<String, Object> collectPerformanceViaOshi(String preferredNetworkInterface) {
@@ -285,40 +330,13 @@ public class StatisticsServiceImpl implements StatisticsService {
                 long packetsRecv = networkIF.getPacketsRecv();
                 long packetsSent = networkIF.getPacketsSent();
                 long currentTimestamp = System.currentTimeMillis();
-                
-                // 计算网络使用率（基于单位时间内的传输速率）
-                double networkUsage = 0.0;
-                if (lastNetworkTimestamp > 0) {
-                    // 计算时间差（秒）
-                    double timeDiff = (currentTimestamp - lastNetworkTimestamp) / 1000.0;
-                    if (timeDiff > 0) {
-                        // 计算单位时间内的传输字节数
-                        long deltaBytesRecv = bytesRecv - lastBytesRecv;
-                        long deltaBytesSent = bytesSent - lastBytesSent;
-                        long deltaTotalBytes = deltaBytesRecv + deltaBytesSent;
-                        
-                        // 计算每秒传输速率（字节/秒）
-                        double bytesPerSecond = deltaTotalBytes / timeDiff;
-                        
-                        // 网络带宽（字节/秒）；取不到速率时使用 100Mbps 兜底，避免长期0
-                        long speedMbps = networkIF.getSpeed() > 0 ? networkIF.getSpeed() : 100L;
-                        long bandwidth = speedMbps * 1000000 / 8;
-                        
-                        // 网络使用率
-                        networkUsage = (bytesPerSecond / bandwidth) * 100.0;
-                        networkUsage = Math.max(0, Math.min(100, networkUsage));
-                    }
-                } else if (!networkInitialized) {
-                    // 第一次调用时，使用一个默认值作为网络使用率
-                    networkUsage = 0.0;
-                    networkInitialized = true;
-                }
-                
-                // 更新上次的网络传输字节数和时间戳
-                lastBytesRecv = bytesRecv;
-                lastBytesSent = bytesSent;
-                lastNetworkTimestamp = currentTimestamp;
-                
+                double networkUsage = calculateNetworkUsage(
+                        networkIF.getName(),
+                        bytesRecv,
+                        bytesSent,
+                        currentTimestamp,
+                        normalizeBandwidthBytesPerSecond(networkIF.getSpeed()));
+
                 performance.put("networkUsage", networkUsage);
                 performance.put("networkInterface", networkIF.getName());
                 performance.put("bytesRecv", bytesRecv);
@@ -436,25 +454,49 @@ public class StatisticsServiceImpl implements StatisticsService {
         long bytesRecv = bytes[0];
         long bytesSent = bytes[1];
         long currentTimestamp = System.currentTimeMillis();
-        double networkUsage = 0.0;
-        if (lastNetworkTimestamp > 0) {
-            double timeDiff = (currentTimestamp - lastNetworkTimestamp) / 1000.0;
-            if (timeDiff > 0) {
-                long deltaTotalBytes = (bytesRecv - lastBytesRecv) + (bytesSent - lastBytesSent);
-                double bytesPerSecond = deltaTotalBytes / timeDiff;
-                long bandwidth = 100L * 1000000 / 8;
-                networkUsage = Math.max(0, Math.min(100, (bytesPerSecond / bandwidth) * 100.0));
-            }
-        } else {
-            networkInitialized = true;
-        }
-        lastBytesRecv = bytesRecv;
-        lastBytesSent = bytesSent;
-        lastNetworkTimestamp = currentTimestamp;
+        double networkUsage = calculateNetworkUsage(
+                iface, bytesRecv, bytesSent, currentTimestamp, defaultBandwidthBytesPerSecond());
         performance.put("networkUsage", networkUsage);
         performance.put("networkInterface", iface);
         performance.put("bytesRecv", bytesRecv);
         performance.put("bytesSent", bytesSent);
+    }
+
+    private double calculateNetworkUsage(
+            String interfaceKey,
+            long bytesRecv,
+            long bytesSent,
+            long currentTimestamp,
+            long bandwidthBytesPerSecond) {
+        String key = interfaceKey == null || interfaceKey.isBlank() ? "unknown" : interfaceKey.trim();
+        NetworkCounterState previous = networkCounterStates.put(
+                key, new NetworkCounterState(bytesRecv, bytesSent, currentTimestamp));
+        if (previous == null || previous.timestampMs <= 0 || currentTimestamp <= previous.timestampMs) {
+            return 0.0;
+        }
+        long deltaBytesRecv = bytesRecv - previous.bytesRecv;
+        long deltaBytesSent = bytesSent - previous.bytesSent;
+        if (deltaBytesRecv < 0 || deltaBytesSent < 0) {
+            return 0.0;
+        }
+        double timeDiff = (currentTimestamp - previous.timestampMs) / 1000.0;
+        if (timeDiff <= 0) {
+            return 0.0;
+        }
+        double bytesPerSecond = (deltaBytesRecv + deltaBytesSent) / timeDiff;
+        long normalizedBandwidth = Math.max(1L, bandwidthBytesPerSecond);
+        return Math.max(0, Math.min(100, (bytesPerSecond / normalizedBandwidth) * 100.0));
+    }
+
+    private long normalizeBandwidthBytesPerSecond(long linkSpeedBitsPerSecond) {
+        if (linkSpeedBitsPerSecond <= 0) {
+            return defaultBandwidthBytesPerSecond();
+        }
+        return Math.max(1L, linkSpeedBitsPerSecond / 8L);
+    }
+
+    private long defaultBandwidthBytesPerSecond() {
+        return 100L * 1_000_000L / 8L;
     }
 
     private static long[] readLinuxMemInfo() {
@@ -565,9 +607,16 @@ public class StatisticsServiceImpl implements StatisticsService {
 
     @Override
     public Map<String, Object> getAnomalyLogStatistics(int days) {
+        int windowDays = Math.max(1, days);
+        long now = System.currentTimeMillis();
+        CachedAnomalyStats hit = cachedAnomalyStats.get(windowDays);
+        if (hit != null && now - hit.cachedAtMs < LOCAL_STATS_TTL_MS) {
+            return new HashMap<>(hit.data);
+        }
+
         Map<String, Object> result = new HashMap<>();
-        result.put("days", days);
-        List<Map<String, Object>> distribution = detailMapper.selectAnomalySeverityDistribution(days);
+        result.put("days", windowDays);
+        List<Map<String, Object>> distribution = detailMapper.selectAnomalySeverityDistribution(windowDays);
         result.put("anomalyDistribution", distribution);
         long total = 0L;
         if (distribution != null) {
@@ -579,6 +628,7 @@ public class StatisticsServiceImpl implements StatisticsService {
             }
         }
         result.put("totalAnomalyLogs", total);
-        return result;
+        cachedAnomalyStats.put(windowDays, new CachedAnomalyStats(result, now));
+        return new HashMap<>(result);
     }
 }

@@ -26,7 +26,8 @@ public class OpsSecurityKernel {
     public McpInvocationSecurityGate.GateDecision evaluateChatTool(
             String toolBeanName,
             String instruction) {
-        return mcpInvocationSecurityGate.evaluateChatToolInvocation(toolBeanName, instruction);
+        return mcpInvocationSecurityGate.evaluateChatToolInvocation(
+                toolBeanName, Map.of(), instruction, null);
     }
 
     public OpsTrustTier trustTierForTool(String toolName, Map<String, Object> parameters, String instruction) {

@@ -1,32 +1,35 @@
 package com.award.log.service.impl;
 
 import com.award.log.analysis.AiDiagnosisContextBuilder;
-import com.award.log.mapper.LogAlarmMapper;
 import com.award.log.dto.EnhancedLogParseResultEntity;
+import com.award.log.mapper.LogAlarmMapper;
 import com.award.log.model.LogAlarm;
 import com.award.log.model.LogSeverityLevel;
 import com.award.log.model.TaskAlarmConfig;
-import com.award.log.service.AlarmConfigService;
 import com.award.log.service.AiLogAlarmService;
+import com.award.log.service.AlarmConfigService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Value;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * AI日志告警服务实现类
- * 负责AI识别异常日志、生成结构化告警信息、平台内告警记录
- */
 @Slf4j
 @Service
 public class AiLogAlarmServiceImpl implements AiLogAlarmService {
@@ -47,7 +50,6 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
     @Autowired
     private AnalysisTaskManager analysisTaskManager;
 
-    // 任务+告警指纹冷却去重缓存
     private final ConcurrentHashMap<String, Long> fingerprintCooldownMap = new ConcurrentHashMap<>();
 
     @Value("${alarm.aggregation.enabled:true}")
@@ -59,38 +61,25 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
     @Value("${alarm.aggregation.dimension:task_level_rootCause}")
     private String aggregationDimension;
 
-
-    
-    // AI分析Prompt模板
     private static final String AI_PROMPT_TEMPLATE = """
-            你是 **告警分诊引擎（Alert Triage Engine）** 背后的 **Staff SRE**：仅依据下方「日志样本」映射为可入库的告警对象；**禁止编造**样本中未出现的时间、条数、主机名或版本；**禁止**输出与样本正文无关的叙述或建议。
-            要求：
-            - `level`：取自 **FATAL | ERROR | WARNING | INFO**，须与样本语义一致。
-            - `rootCause`：**一句话**；其中的组件/类名/服务名 **必须为日志样本中出现的原文子串**（可复制其一截）；禁止自创名称或笼统「系统异常」。**禁止编造**样本中未出现的时间、次数或「集中爆发」；若仅能推测须含「可能」字样。
-            - `solution`：**可执行**、须对准样本中的**具体**异常形态（异常类、错误码、关键字）；禁止脱离样本的通用运维空话；信息不足则 **「待补充：」** 列缺口。
-            仅输出 **单行合法 JSON**（无 Markdown、无注释），Schema：
-            {"level":"…","rootCause":"…","solution":"…"}
-            
+            你是告警分诊引擎，只能根据下面的日志样本生成结构化告警 JSON。
+            输出要求：
+            - 只输出单行合法 JSON
+            - schema: {"level":"ERROR","rootCause":"...","solution":"..."}
             日志样本：
             %s
             """;
 
     @Override
     public LogAlarm analyzeLogAndGenerateAlarm(String taskId, String logContent) {
-        log.info("【告警分析】开始分析日志生成告警，任务ID: [{}]", taskId);
-        
-        // 1. 调用AI分析日志
-        log.info("【告警分析】调用AI分析日志，日志长度: [{}]", logContent.length());
+        log.info("Analyze alarm for task {}", taskId);
         String aiPrompt = String.format(AI_PROMPT_TEMPLATE, logContent);
-        String aiResponse = null;
+        String aiResponse;
         try {
             aiResponse = chatClient.prompt().user(aiPrompt).call().content();
-            log.info("【告警分析】AI分析完成，响应长度: [{}]", aiResponse.length());
         } catch (Exception e) {
-            log.error("【告警分析】AI分析失败，异常信息: [{}]", e.getMessage(), e);
-            // 创建默认告警
+            log.error("AI alarm analysis failed for task {}", taskId, e);
             LogAlarm defaultAlarm = new LogAlarm();
-            // 生成唯一告警ID
             defaultAlarm.setAlarmId(UUID.randomUUID().toString());
             defaultAlarm.setTaskId(taskId);
             defaultAlarm.setLogContent(logContent);
@@ -100,44 +89,29 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
             defaultAlarm.setLifecycleStatus("NEW");
             defaultAlarm.setEscalationLevel(0);
             defaultAlarm.setLevel("ERROR");
-            defaultAlarm.setRootCause("AI分析失败");
-            defaultAlarm.setSolution("请检查AI服务配置");
+            defaultAlarm.setRootCause("AI analysis unavailable");
+            defaultAlarm.setSolution("Check AI service configuration");
             addAlarmToHistory(defaultAlarm);
             return defaultAlarm;
         }
-        
-        // 2. 解析AI返回结果
+
         LogAlarm alarm = parseAIResponse(taskId, logContent, aiResponse);
-        log.info("【告警分析】解析AI返回结果完成，告警级别: [{}]", alarm.getLevel());
-        
-        // 3. 将告警添加到历史记录
         if (!shouldAggregate(alarm)) {
             addAlarmToHistory(alarm);
         } else {
-            log.info("【告警聚合】命中5分钟聚合窗口，跳过重复写入与推送，taskId={}, level={}", alarm.getTaskId(), alarm.getLevel());
             alarm.setPushStatus("AGGREGATED");
             return alarm;
         }
-        log.info("【告警分析】告警已添加到历史记录");
-        
-        // 4. 直接异步推送告警，频率控制在pushAlarm方法中处理
+
         logAnalysisExecutor.execute(() -> {
-            log.info("【告警推送】开始推送告警，告警ID: [{}]", alarm.getAlarmId());
             boolean result = pushAlarm(alarm);
-            log.info("【告警推送】推送完成，结果: [{}]", result);
+            log.info("Alarm push finished for {} result={}", alarm.getAlarmId(), result);
         });
-        
+
         return alarm;
     }
-    
-    /**
-     * 判断是否需要推送告警
-     * @param alarm 告警信息
-     * @return 是否需要推送
-     */
-    private AlarmDecision evaluatePushPolicy(LogAlarm alarm, TaskAlarmConfig config) {
-        log.info("【告警推送控制】开始检查推送条件，告警ID: [{}], 级别: [{}]", alarm.getAlarmId(), alarm.getLevel());
 
+    private AlarmDecision evaluatePushPolicy(LogAlarm alarm, TaskAlarmConfig config) {
         if (config == null) {
             return AlarmDecision.skip("CONFIG_NOT_FOUND");
         }
@@ -172,32 +146,21 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
 
         return AlarmDecision.pass(fingerprint);
     }
-    
-    /**
-     * 检查告警级别是否符合推送条件
-     * @param level 告警级别
-     * @param configAlarmLevel 配置的告警级别
-     * @return 是否符合条件
-     */
+
     private boolean isSeverityMatch(String level, String configAlarmLevel) {
-        // 定义告警级别优先级
         Map<String, Integer> severityPriority = new HashMap<>();
         severityPriority.put("INFO", 0);
         severityPriority.put("WARNING", 1);
         severityPriority.put("ERROR", 2);
         severityPriority.put("FATAL", 3);
-        
-        // 处理配置的告警级别格式（如ERROR_LEVEL）
+
         String normalizedConfigLevel = configAlarmLevel;
         if (normalizedConfigLevel != null && normalizedConfigLevel.endsWith("_LEVEL")) {
             normalizedConfigLevel = normalizedConfigLevel.substring(0, normalizedConfigLevel.length() - 6);
         }
-        
-        // 获取当前告警级别和配置的最小级别优先级
+
         Integer currentPriority = severityPriority.getOrDefault(level, -1);
         Integer minPriority = severityPriority.getOrDefault(normalizedConfigLevel, -1);
-        
-        // 当前告警级别优先级大于等于配置的最小级别优先级则推送
         return currentPriority >= minPriority;
     }
 
@@ -206,60 +169,47 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
         TaskAlarmConfig taskConfig = alarmConfigService.getEffectiveConfig(alarm.getTaskId());
         AlarmDecision decision = evaluatePushPolicy(alarm, taskConfig);
         if (!decision.allowed()) {
-            log.info("【告警推送】告警不符合推送条件，跳过推送，告警ID: [{}]", alarm.getAlarmId());
             alarm.setPushStatus("SKIPPED:" + decision.reason());
             alarm.setUpdateTime(LocalDateTime.now());
             updateAlarm(alarm);
             return false;
         }
-        
-        log.info("【告警】平台内记录告警，告警ID: [{}], 级别: [{}]（已停用邮箱/企业微信外发）",
-                alarm.getAlarmId(), alarm.getLevel());
 
         alarm.setPushStatus("RECORDED");
         alarm.setUpdateTime(LocalDateTime.now());
         fingerprintCooldownMap.put(decision.fingerprint(), System.currentTimeMillis());
         updateAlarm(alarm);
-
-        log.info("【告警】落库完成，告警ID: [{}], 状态: [{}]", alarm.getAlarmId(), alarm.getPushStatus());
         return true;
     }
-    
+
     @Override
     public boolean retryPushAlarm(Integer alarmId, int retryCount) {
-        log.info("手动重试推送告警，告警ID: [{}], 重试次数: [{}]", alarmId, retryCount);
-        
-        // 从数据库获取告警信息
         LogAlarm alarm = logAlarmMapper.selectById(alarmId != null ? Long.valueOf(alarmId) : null);
         if (alarm == null) {
-            log.warn("告警不存在，告警ID: [{}]", alarmId);
             return false;
         }
-        
-        // 重置推送状态为PENDING
         alarm.setPushStatus("PENDING");
         alarm.setLifecycleStatus("NEW");
         alarm.setEscalationLevel(0);
         alarm.setUpdateTime(LocalDateTime.now());
-        
-        // 调用pushAlarm方法进行推送
-        boolean success = pushAlarm(alarm);
-        log.info("手动重试推送告警结果，告警ID: [{}], 成功: [{}]", alarmId, success);
-        return success;
+        return pushAlarm(alarm);
     }
 
     @Override
     public void processAlarmsByTaskId(String taskId) {
-        log.info("根据任务ID处理告警，任务ID: [{}]", taskId);
-        
-        // 从数据库查询该任务的所有告警
-        List<LogAlarm> alarms = logAlarmMapper.selectByTaskId(taskId);
+        processAlarmsByTaskIdForUser(taskId, null, true);
+    }
 
-        // 若该任务没有历史告警，基于任务分析结果补偿生成
+    @Override
+    public void processAlarmsByTaskIdForUser(String taskId, Integer userId, boolean admin) {
+        if (!analysisTaskManager.canAccessTask(taskId, userId, admin)) {
+            throw new IllegalArgumentException("Task not found or access denied");
+        }
+
+        List<LogAlarm> alarms = logAlarmMapper.selectByTaskId(taskId);
         if (alarms == null || alarms.isEmpty()) {
-            TaskInfo task = analysisTaskManager.getTask(taskId);
+            TaskInfo task = admin ? analysisTaskManager.getTask(taskId) : analysisTaskManager.getTaskForUser(taskId, userId, false);
             if (task == null || task.getResult() == null || task.getResult().isEmpty()) {
-                log.warn("任务 [{}] 不存在或无分析结果，无法生成告警", taskId);
                 return;
             }
 
@@ -280,24 +230,22 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
             }
 
             if (samples.isEmpty()) {
-                log.info("任务 [{}] 未发现可告警异常，跳过补偿生成", taskId);
                 return;
             }
 
             StringBuilder alarmContent = new StringBuilder();
-            alarmContent.append("【任务告警补偿生成】\n")
-                    .append("任务ID: ").append(taskId).append("\n")
-                    .append("异常条数: ").append(samples.size()).append("\n")
-                    .append("异常原因: ").append(reasons.isEmpty() ? "未提取到明确原因" : String.join(" | ", reasons)).append("\n")
-                    .append("异常样例:\n");
+            alarmContent.append("TaskId: ").append(taskId).append("\n")
+                    .append("AnomalyCount: ").append(samples.size()).append("\n")
+                    .append("Reasons: ")
+                    .append(reasons.isEmpty() ? "unknown" : String.join(" | ", reasons))
+                    .append("\n")
+                    .append("Samples:\n");
             samples.stream().limit(10).forEach(s -> alarmContent.append("- ").append(s).append("\n"));
 
             analyzeLogAndGenerateAlarm(taskId, alarmContent.toString());
-            log.info("任务 [{}] 已补偿生成告警并写入历史", taskId);
             return;
         }
 
-        // 已有告警时执行推送补偿
         for (LogAlarm alarm : alarms) {
             String status = alarm.getPushStatus();
             if (!"SUCCESS".equals(status) && !"RECORDED".equals(status)) {
@@ -308,140 +256,149 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
 
     @Override
     public Map<String, Object> getAlarmHistory(int pageNum, int pageSize, String level, String taskId) {
-        log.info("获取告警历史列表，页码: [{}], 每页大小: [{}], 告警级别: [{}], 任务ID: [{}]", pageNum, pageSize, level, taskId);
-        
+        return getAlarmHistoryForUser(pageNum, pageSize, level, taskId, null, true);
+    }
+
+    @Override
+    public Map<String, Object> getAlarmHistoryForUser(int pageNum, int pageSize, String level, String taskId,
+                                                      Integer userId, boolean admin) {
+        String safeTaskId = accessibleTaskId(taskId, userId, admin);
+        int safePage = Math.max(pageNum, 1);
+        int safePageSize = Math.max(pageSize, 1);
+        int offset = (safePage - 1) * safePageSize;
+
+        List<LogAlarm> alarms = admin
+                ? logAlarmMapper.selectPage(safePage, safePageSize, offset, emptyToNull(level), safeTaskId)
+                : logAlarmMapper.selectPageByUserId(safePageSize, offset, userId, emptyToNull(level), safeTaskId);
+        long total = admin
+                ? logAlarmMapper.count(emptyToNull(level), safeTaskId)
+                : logAlarmMapper.countByUserId(userId, emptyToNull(level), safeTaskId);
+
         Map<String, Object> result = new HashMap<>();
-        
-        // 计算偏移量
-        int offset = (pageNum - 1) * pageSize;
-        
-        // 从数据库查询告警列表
-        List<LogAlarm> alarms = logAlarmMapper.selectPage(pageNum, pageSize, offset, level, taskId);
-        
-        // 查询总数
-        long total = logAlarmMapper.count(level, taskId);
-        
         result.put("total", total);
-        result.put("pageNum", pageNum);
-        result.put("pageSize", pageSize);
+        result.put("pageNum", safePage);
+        result.put("pageSize", safePageSize);
         result.put("list", alarms);
-        
         return result;
     }
 
     @Override
     public Map<String, Object> getAlarmStatistics(int days, String level, String taskId) {
-        log.info("获取告警统计分析，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        
+        return getAlarmStatisticsForUser(days, level, taskId, null, true);
+    }
+
+    @Override
+    public Map<String, Object> getAlarmStatisticsForUser(int days, String level, String taskId,
+                                                         Integer userId, boolean admin) {
+        String safeTaskId = accessibleTaskId(taskId, userId, admin);
         Map<String, Object> statistics = new HashMap<>();
-        
-        // 从数据库查询告警统计
-        Map<String, Object> dbStatistics = logAlarmMapper.selectAlarmStatistics(days, emptyToNull(level), emptyToNull(taskId));
-        
-        if (dbStatistics != null) {
-            long totalAlarms = 0;
-            long successAlarms = 0;
-            long failedAlarms = 0;
-            
-            // 处理total_alarms字段，可能是BigDecimal类型
-            Object totalObj = dbStatistics.get("total_alarms");
-            if (totalObj != null) {
-                if (totalObj instanceof BigDecimal) {
-                    totalAlarms = ((BigDecimal) totalObj).longValue();
-                } else if (totalObj instanceof Long) {
-                    totalAlarms = (Long) totalObj;
-                } else if (totalObj instanceof Integer) {
-                    totalAlarms = (Integer) totalObj;
-                }
-            }
-            
-            // 处理success_alarms字段，可能是BigDecimal类型
-            Object successObj = dbStatistics.get("success_alarms");
-            if (successObj != null) {
-                if (successObj instanceof BigDecimal) {
-                    successAlarms = ((BigDecimal) successObj).longValue();
-                } else if (successObj instanceof Long) {
-                    successAlarms = (Long) successObj;
-                } else if (successObj instanceof Integer) {
-                    successAlarms = (Integer) successObj;
-                }
-            }
-            
-            // 处理failed_alarms字段，可能是BigDecimal类型
-            Object failedObj = dbStatistics.get("failed_alarms");
-            if (failedObj != null) {
-                if (failedObj instanceof BigDecimal) {
-                    failedAlarms = ((BigDecimal) failedObj).longValue();
-                } else if (failedObj instanceof Long) {
-                    failedAlarms = (Long) failedObj;
-                } else if (failedObj instanceof Integer) {
-                    failedAlarms = (Integer) failedObj;
-                }
-            }
-            
-            double successRate = totalAlarms > 0 ? (double) successAlarms / totalAlarms * 100 : 0;
-            
-            statistics.put("totalAlarms", totalAlarms);
-            statistics.put("successAlarms", successAlarms);
-            statistics.put("failedAlarms", failedAlarms);
-            statistics.put("successRate", successRate);
-        } else {
-            statistics.put("totalAlarms", 0);
-            statistics.put("successAlarms", 0);
-            statistics.put("failedAlarms", 0);
-            statistics.put("successRate", 0);
-        }
-        
-        // 添加其他统计数据
-        statistics.put("alarmTrend", getAlarmTrend(days, level, taskId));
-        statistics.put("levelDistribution", getAlarmLevelDistribution(days, level, taskId));
-        statistics.put("rootCauseStatistics", getAlarmRootCauseStatistics(days, level, taskId));
-        
+        Map<String, Object> dbStatistics = admin
+                ? logAlarmMapper.selectAlarmStatistics(days, emptyToNull(level), safeTaskId)
+                : logAlarmMapper.selectAlarmStatisticsByUserId(days, userId, emptyToNull(level), safeTaskId);
+
+        long totalAlarms = toLong(dbStatistics == null ? null : dbStatistics.get("total_alarms"));
+        long successAlarms = toLong(dbStatistics == null ? null : dbStatistics.get("success_alarms"));
+        long failedAlarms = toLong(dbStatistics == null ? null : dbStatistics.get("failed_alarms"));
+        double successRate = totalAlarms > 0 ? (double) successAlarms / totalAlarms * 100 : 0;
+
+        statistics.put("totalAlarms", totalAlarms);
+        statistics.put("successAlarms", successAlarms);
+        statistics.put("failedAlarms", failedAlarms);
+        statistics.put("successRate", successRate);
+        statistics.put("alarmTrend", getAlarmTrendForUser(days, level, taskId, userId, admin));
+        statistics.put("levelDistribution", getAlarmLevelDistributionForUser(days, level, taskId, userId, admin));
+        statistics.put("rootCauseStatistics", getAlarmRootCauseStatisticsForUser(days, level, taskId, userId, admin));
         return statistics;
+    }
+
+    @Override
+    public List<Map<String, Object>> getAlarmTrend(int days, String level, String taskId) {
+        return getAlarmTrendForUser(days, level, taskId, null, true);
+    }
+
+    @Override
+    public List<Map<String, Object>> getAlarmTrendForUser(int days, String level, String taskId,
+                                                          Integer userId, boolean admin) {
+        String safeTaskId = accessibleTaskId(taskId, userId, admin);
+        return admin
+                ? logAlarmMapper.selectAlarmTrend(days, emptyToNull(level), safeTaskId)
+                : logAlarmMapper.selectAlarmTrendByUserId(days, userId, emptyToNull(level), safeTaskId);
+    }
+
+    @Override
+    public List<Map<String, Object>> getAlarmLevelDistribution(int days, String level, String taskId) {
+        return getAlarmLevelDistributionForUser(days, level, taskId, null, true);
+    }
+
+    @Override
+    public List<Map<String, Object>> getAlarmLevelDistributionForUser(int days, String level, String taskId,
+                                                                      Integer userId, boolean admin) {
+        String safeTaskId = accessibleTaskId(taskId, userId, admin);
+        return admin
+                ? logAlarmMapper.selectAlarmLevelDistribution(days, emptyToNull(level), safeTaskId)
+                : logAlarmMapper.selectAlarmLevelDistributionByUserId(days, userId, emptyToNull(level), safeTaskId);
+    }
+
+    @Override
+    public List<Map<String, Object>> getAlarmRootCauseStatistics(int days, String level, String taskId) {
+        return getAlarmRootCauseStatisticsForUser(days, level, taskId, null, true);
+    }
+
+    @Override
+    public List<Map<String, Object>> getAlarmRootCauseStatisticsForUser(int days, String level, String taskId,
+                                                                        Integer userId, boolean admin) {
+        String safeTaskId = accessibleTaskId(taskId, userId, admin);
+        return admin
+                ? logAlarmMapper.selectAlarmRootCauseStatistics(days, emptyToNull(level), safeTaskId)
+                : logAlarmMapper.selectAlarmRootCauseStatisticsByUserId(days, userId, emptyToNull(level), safeTaskId);
+    }
+
+    private String accessibleTaskId(String taskId, Integer userId, boolean admin) {
+        String safeTaskId = emptyToNull(taskId);
+        if (safeTaskId == null) {
+            return null;
+        }
+        if (!analysisTaskManager.canAccessTask(safeTaskId, userId, admin)) {
+            throw new IllegalArgumentException("Task not found or access denied");
+        }
+        return safeTaskId;
     }
 
     private static String emptyToNull(String s) {
         return (s == null || s.isBlank()) ? null : s.trim();
     }
 
-    @Override
-    public List<Map<String, Object>> getAlarmTrend(int days, String level, String taskId) {
-        log.info("获取告警趋势，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        return logAlarmMapper.selectAlarmTrend(days, emptyToNull(level), emptyToNull(taskId));
+    private long toLong(Object value) {
+        if (value == null) {
+            return 0L;
+        }
+        if (value instanceof BigDecimal bigDecimal) {
+            return bigDecimal.longValue();
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
-    @Override
-    public List<Map<String, Object>> getAlarmLevelDistribution(int days, String level, String taskId) {
-        log.info("获取告警级别分布，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        return logAlarmMapper.selectAlarmLevelDistribution(days, emptyToNull(level), emptyToNull(taskId));
-    }
-
-    @Override
-    public List<Map<String, Object>> getAlarmRootCauseStatistics(int days, String level, String taskId) {
-        log.info("获取告警根因分析统计，天数: [{}], 级别: [{}], 任务: [{}]", days, level, taskId);
-        return logAlarmMapper.selectAlarmRootCauseStatistics(days, emptyToNull(level), emptyToNull(taskId));
-    }
-
-    // 在推送告警后将告警添加到历史记录
     private void addAlarmToHistory(LogAlarm alarm) {
-        if (alarm != null) {
-            // 确保创建时间和更新时间不为null
-            if (alarm.getCreateTime() == null) {
-                alarm.setCreateTime(LocalDateTime.now());
-            }
-            if (alarm.getUpdateTime() == null) {
-                alarm.setUpdateTime(LocalDateTime.now());
-            }
-            
-            // 插入到数据库
-            try {
-                int result = logAlarmMapper.insert(alarm);
-                log.info("【告警分析】告警添加到历史记录成功，结果: [{}]", result);
-            } catch (Exception e) {
-                log.error("【告警分析】告警添加到历史记录失败，异常信息: [{}]", e.getMessage(), e);
-            }
-        } else {
-            log.warn("【告警分析】告警对象为null，无法添加到历史记录");
+        if (alarm == null) {
+            return;
+        }
+        if (alarm.getCreateTime() == null) {
+            alarm.setCreateTime(LocalDateTime.now());
+        }
+        if (alarm.getUpdateTime() == null) {
+            alarm.setUpdateTime(LocalDateTime.now());
+        }
+        try {
+            logAlarmMapper.insert(alarm);
+        } catch (Exception e) {
+            log.error("Failed to persist alarm history", e);
         }
     }
 
@@ -452,14 +409,20 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
         if (!"task_level_rootCause".equalsIgnoreCase(aggregationDimension)) {
             return false;
         }
-        String prefix = alarm.getRootCause() == null ? "" : alarm.getRootCause().substring(0, Math.min(20, alarm.getRootCause().length()));
-        LogAlarm latest = logAlarmMapper.selectLatestByFingerprint(alarm.getTaskId(), alarm.getLevel(), prefix, aggregationWindowMinutes);
+        String rootCause = alarm.getRootCause() == null ? "" : alarm.getRootCause();
+        String prefix = rootCause.substring(0, Math.min(20, rootCause.length()));
+        LogAlarm latest = logAlarmMapper.selectLatestByFingerprint(
+                alarm.getTaskId(), alarm.getLevel(), prefix, aggregationWindowMinutes);
         return latest != null;
     }
 
     private String generateAlarmFingerprint(LogAlarm alarm) {
         String rootCause = alarm.getRootCause() == null ? "" : alarm.getRootCause().replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
-        String source = (alarm.getTaskId() == null ? "unknownTask" : alarm.getTaskId()) + "|" + (alarm.getLevel() == null ? "UNKNOWN" : alarm.getLevel()) + "|" + rootCause;
+        String source = (alarm.getTaskId() == null ? "unknownTask" : alarm.getTaskId())
+                + "|"
+                + (alarm.getLevel() == null ? "UNKNOWN" : alarm.getLevel())
+                + "|"
+                + rootCause;
         try {
             java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
             byte[] bytes = md.digest(source.getBytes());
@@ -469,7 +432,6 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
             }
             return sb.toString();
         } catch (Exception e) {
-            log.warn("生成告警指纹失败，使用退化指纹", e);
             return source;
         }
     }
@@ -491,11 +453,9 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
 
     private void updateAlarm(LogAlarm alarm) {
         try {
-            int updateResult = logAlarmMapper.update(alarm);
-            log.info("【告警推送】数据库状态更新成功，告警ID: [{}], 结果: [{}]", alarm.getAlarmId(), updateResult);
+            logAlarmMapper.update(alarm);
         } catch (Exception e) {
-            log.error("【告警推送】数据库状态更新失败，告警ID: [{}], 异常信息: [{}]",
-                    alarm.getAlarmId(), e.getMessage(), e);
+            log.error("Failed to update alarm {}", alarm.getAlarmId(), e);
         }
     }
 
@@ -509,98 +469,52 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
         }
     }
 
-    /**
-     * 解析AI返回的结果，生成结构化的告警信息
-     * @param taskId 任务ID
-     * @param logContent 日志内容
-     * @param aiResponse AI返回的结果
-     * @return 结构化的告警信息
-     */
     private LogAlarm parseAIResponse(String taskId, String logContent, String aiResponse) {
         LogAlarm alarm = new LogAlarm();
-        // 生成唯一告警ID
         alarm.setAlarmId(UUID.randomUUID().toString());
         alarm.setTaskId(taskId);
         alarm.setLogContent(logContent);
         alarm.setCreateTime(LocalDateTime.now());
         alarm.setUpdateTime(LocalDateTime.now());
         alarm.setPushStatus("PENDING");
-        
+
         try {
-            // 从AI响应中提取纯JSON部分
             String jsonOnlyResponse = extractJsonFromResponse(aiResponse);
-            
-            // 使用FastJSON解析AI返回的JSON结果
-            // AI返回格式: {"level": "ERROR", "rootCause": "根因", "solution": "解决方案"}
             com.alibaba.fastjson.JSONObject aiResult = com.alibaba.fastjson.JSON.parseObject(jsonOnlyResponse);
-            
-            // 提取告警级别，默认ERROR
             String level = aiResult.getString("level");
             if (level == null || level.isEmpty()) {
                 level = "ERROR";
             }
             alarm.setLevel(level);
-            
-            // 提取根因分析，默认"AI分析的根因"
             String rootCause = aiResult.getString("rootCause");
             if (rootCause == null || rootCause.isEmpty()) {
-                rootCause = "AI分析的根因";
+                rootCause = "AI parsed root cause unavailable";
             }
             alarm.setRootCause(rootCause);
-            
-            // 提取解决方案，默认"AI提供的解决方案"
             String solution = aiResult.getString("solution");
             if (solution == null || solution.isEmpty()) {
-                solution = "AI提供的解决方案";
+                solution = "Review the original logs for remediation";
             }
             alarm.setSolution(solution);
-            
-            log.info("解析AI返回结果成功，告警级别: [{}], 根因: [{}]", level, rootCause);
-        } catch (com.alibaba.fastjson.JSONException e) {
-            log.error("解析AI返回结果JSON格式异常，AI返回内容: [{}], 异常信息: [{}]", 
-                    aiResponse, e.getMessage(), e);
-            // 如果解析失败，使用默认值
-            setDefaultAlarmValues(alarm, "AI返回结果格式异常");
         } catch (Exception e) {
-            log.error("解析AI返回结果异常，AI返回内容: [{}], 异常信息: [{}]", 
-                    aiResponse, e.getMessage(), e);
-            // 如果解析失败，使用默认值
-            setDefaultAlarmValues(alarm, "AI分析失败");
+            setDefaultAlarmValues(alarm, "AI analysis failed");
         }
-        
+
         return alarm;
     }
-    
-    /**
-     * 从AI响应中提取纯JSON部分
-     * AI响应可能包含描述性文字和JSON标记，例如：
-     * "根据提供的日志内容，以下是结构化的告警信息分析：
-     * ```json
-     * {"level": "ERROR", "rootCause": "根因", "solution": "解决方案"}
-     * ```"n     * 该方法会提取出其中的纯JSON内容
-     */
+
     private String extractJsonFromResponse(String aiResponse) {
-        // 查找JSON标记
         int jsonStart = aiResponse.indexOf("```json");
         int jsonEnd = aiResponse.indexOf("```", jsonStart + 1);
-        
         if (jsonStart >= 0 && jsonEnd > jsonStart) {
-            // 提取JSON标记之间的内容，去除前后空白
             return aiResponse.substring(jsonStart + 7, jsonEnd).trim();
-        } else {
-            // 如果没有JSON标记，尝试直接返回原始响应
-            return aiResponse.trim();
         }
+        return aiResponse.trim();
     }
-    
-    /**
-     * 设置告警默认值
-     * @param alarm 告警对象
-     * @param rootCause 根因
-     */
+
     private void setDefaultAlarmValues(LogAlarm alarm, String rootCause) {
         alarm.setLevel("ERROR");
         alarm.setRootCause(rootCause);
-        alarm.setSolution("请查看原始日志进行分析");
+        alarm.setSolution("Review the original logs for remediation");
     }
 }

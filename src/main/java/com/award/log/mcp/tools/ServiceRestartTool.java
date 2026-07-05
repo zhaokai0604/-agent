@@ -3,6 +3,7 @@ package com.award.log.mcp.tools;
 import com.award.log.config.AgentOpsProperties;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
+import com.award.log.security.ChatWriteExecutionPolicy;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -74,8 +75,11 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
                     startTime);
         }
 
-        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
-        if (!isDryRun && !Boolean.TRUE.equals(confirmRestart)) {
+        ChatWriteExecutionPolicy.ResolvedRestart write =
+                ChatWriteExecutionPolicy.resolveRestart(dryRun, confirmRestart);
+        boolean isDryRun = write.dryRun();
+        boolean confirmRestartResolved = write.confirmRestart();
+        if (!isDryRun && !confirmRestartResolved) {
             return buildErrorResponse("真实重启需 dryRun=false 且 confirmRestart=true（建议先经过 MCP 二次确认）", startTime);
         }
 
@@ -95,9 +99,15 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
 
             AbstractCommandExecutor.CommandResult r = minPrivilegeExecutor.executeSafely(
                     List.of("systemctl", "restart", svc), 120_000L);
+            if (isSimulatedDryRun(r)) {
+                return buildErrorResponse("全局演练模式已启用：systemctl restart 被模拟执行，服务未实际重启", startTime);
+            }
+            if (!r.success()) {
+                return buildErrorResponse("服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
+            }
             String data = String.format(Locale.ROOT,
                     "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"stderr\":\"%s\"}",
-                    svc, r.success(), escapeJson(r.error() == null ? "" : r.error()));
+                    svc, true, escapeJson(r.error() == null ? "" : r.error()));
             return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
         } catch (Exception e) {
             log.error("[ServiceRestart] 异常", e);
@@ -115,10 +125,20 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
         String ps = "Restart-Service -Name '" + unit.replace("'", "''") + "' -Force -ErrorAction Stop";
         AbstractCommandExecutor.CommandResult r = minPrivilegeExecutor.executeSafely(
                 List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 120_000L);
+        if (isSimulatedDryRun(r)) {
+            return buildErrorResponse("全局演练模式已启用：Restart-Service 被模拟执行，服务未实际重启", startTime);
+        }
+        if (!r.success()) {
+            return buildErrorResponse("服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
+        }
         String data = String.format(Locale.ROOT,
                 "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"platform\":\"windows\",\"stderr\":\"%s\"}",
-                unit, r.success(), escapeJson(r.error() == null ? "" : r.error()));
+                unit, true, escapeJson(r.error() == null ? "" : r.error()));
         return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+    }
+
+    private boolean isSimulatedDryRun(AbstractCommandExecutor.CommandResult result) {
+        return result != null && result.output() != null && result.output().contains("[DRY-RUN]");
     }
 
     private static String escapeJson(String s) {

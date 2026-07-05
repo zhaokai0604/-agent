@@ -1,12 +1,11 @@
 package com.award.log.service;
 
-import com.award.log.agent.AutonomousOpsOrchestrator;
 import com.award.log.agent.DrainTemplateNoveltyTracker;
+import com.award.log.handler.PerformanceWebSocketHandler;
 import com.award.log.model.patrol.PatrolCorrelationSnapshot;
 import com.award.log.model.patrol.PatrolFinding;
-import com.award.log.security.McpToolSurface;
-import com.award.log.handler.PerformanceWebSocketHandler;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.security.signal.SecuritySignalService;
 import com.award.log.util.OsRuntime;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,8 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
- * 主动巡检：多维关联、磁盘一级子目录热点、告警级别分布、异常日志基线、僵尸进程、Drain 新模板；
- * 支持去重冷却、WebSocket 推送 enriched envelope。
+ * Patrol service with hotspot detection and auto-remediation handoff.
  */
 @Slf4j
 @Service
@@ -49,21 +47,16 @@ public class OpsPatrolService {
     private final AiLogAlarmService aiLogAlarmService;
     private final DrainTemplateNoveltyTracker noveltyTracker;
     private final OpsPathPolicy opsPathPolicy;
+    private final SecuritySignalService securitySignalService;
 
     @Autowired(required = false)
     private OpsAutoRemediationService opsAutoRemediationService;
-
-    @Autowired(required = false)
-    private AutonomousOpsOrchestrator autonomousOpsOrchestrator;
 
     @Autowired(required = false)
     private PerformanceWebSocketHandler performanceWebSocketHandler;
 
     @Autowired(required = false)
     private PatrolHistoryService patrolHistoryService;
-
-    @Value("${agent.autonomous.run-after-patrol:false}")
-    private boolean autonomousRunAfterPatrol;
 
     @Value("${ops.patrol.disk-warn-percent:80}")
     private double diskWarnPercent;
@@ -86,18 +79,15 @@ public class OpsPatrolService {
     @Value("${ops.patrol.error-alarm-min:3}")
     private int errorAlarmMin;
 
-    /** 热点扫描递归深度（与 du --max-depth 对齐） */
     @Value("${ops.patrol.disk-hotspot-max-depth:3}")
     private int diskHotspotMaxDepth;
 
-    /** 纯 Java 递归扫描时的最大访问节点数，防止超大目录拖死巡检 */
     @Value("${ops.patrol.disk-hotspot-visit-budget:12000}")
     private int diskHotspotVisitBudget;
 
     @Value("${ops.patrol.anomaly-min-delta:5}")
     private int anomalyMinDelta;
 
-    /** 非突增轮次基线 EMA 系数（越大越紧跟当前值） */
     @Value("${ops.patrol.anomaly-baseline-ema-alpha:0.35}")
     private double anomalyBaselineEmaAlpha;
 
@@ -106,20 +96,20 @@ public class OpsPatrolService {
 
     private volatile List<Map<String, Object>> lastFindings = List.of();
     private volatile long lastAnomalyTotal = -1L;
-
     private volatile boolean anomalyBaselineInitialized = false;
-    /** 每轮巡检计算的关联快照（与告警条目解耦，供轻量 API / 顶栏展示） */
     private volatile Map<String, Object> lastCorrelationSnapshot = Map.of();
 
     public OpsPatrolService(
             StatisticsService statisticsService,
             AiLogAlarmService aiLogAlarmService,
             DrainTemplateNoveltyTracker noveltyTracker,
-            OpsPathPolicy opsPathPolicy) {
+            OpsPathPolicy opsPathPolicy,
+            SecuritySignalService securitySignalService) {
         this.statisticsService = statisticsService;
         this.aiLogAlarmService = aiLogAlarmService;
         this.noveltyTracker = noveltyTracker;
         this.opsPathPolicy = opsPathPolicy;
+        this.securitySignalService = securitySignalService;
     }
 
     public void applyHotConfig(List<String> inspectRoots,
@@ -139,8 +129,8 @@ public class OpsPatrolService {
     public List<Map<String, Object>> getRecentAlerts(int limit) {
         List<Map<String, Object>> out = new ArrayList<>();
         int i = 0;
-        for (Map<String, Object> a : recentAlerts) {
-            out.add(a);
+        for (Map<String, Object> alert : recentAlerts) {
+            out.add(alert);
             if (++i >= limit) {
                 break;
             }
@@ -159,8 +149,7 @@ public class OpsPatrolService {
     public void runPatrolCycle() {
         long nowMs = System.currentTimeMillis();
         List<Map<String, Object>> findings = new ArrayList<>();
-        LocalDateTime now = LocalDateTime.now();
-        String ts = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
         Map<String, Object> perf = safePerf();
         double disk = asDouble(perf.get("diskUsage"));
@@ -183,37 +172,36 @@ public class OpsPatrolService {
                 Object dist = alarmStats.get("levelDistribution");
                 if (dist instanceof List<?> list) {
                     for (Object row : list) {
-                        if (!(row instanceof Map)) {
+                        if (!(row instanceof Map<?, ?> map)) {
                             continue;
                         }
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> m = (Map<String, Object>) row;
-                        String lvl = String.valueOf(m.getOrDefault("level", "")).toUpperCase(Locale.ROOT);
-                        long c = asLong(m.get("count"));
-                        if (lvl.contains("ERROR")) {
-                            errorAlarms += c;
+                        Object levelValue = map.containsKey("level") ? map.get("level") : "";
+                        String level = String.valueOf(levelValue).toUpperCase(Locale.ROOT);
+                        long count = asLong(map.get("count"));
+                        if (level.contains("ERROR")) {
+                            errorAlarms += count;
                         }
-                        if (lvl.contains("FATAL")) {
-                            fatalAlarms += c;
+                        if (level.contains("FATAL")) {
+                            fatalAlarms += count;
                         }
                     }
                 }
             }
         } catch (Exception e) {
-            log.debug("巡检：告警统计不可用 {}", e.getMessage());
+            log.debug("patrol alarm statistics unavailable: {}", e.getMessage());
         }
         correlation.put("alarmTotal24h", totalAlarms);
         correlation.put("alarmErrorApprox", errorAlarms);
         correlation.put("alarmFatalApprox", fatalAlarms);
 
-        long anomalyTotal = -1;
+        long anomalyTotal = -1L;
         try {
-            Map<String, Object> an = statisticsService.getAnomalyLogStatistics(1);
-            if (an != null && an.get("totalAnomalyLogs") instanceof Number n) {
+            Map<String, Object> anomaly = statisticsService.getAnomalyLogStatistics(1);
+            if (anomaly != null && anomaly.get("totalAnomalyLogs") instanceof Number n) {
                 anomalyTotal = n.longValue();
             }
         } catch (Exception e) {
-            log.debug("巡检：异常日志统计不可用 {}", e.getMessage());
+            log.debug("patrol anomaly statistics unavailable: {}", e.getMessage());
         }
         correlation.put("anomalyLogsDay1", anomalyTotal);
 
@@ -226,52 +214,99 @@ public class OpsPatrolService {
         List<Map<String, Object>> diskHotspots = scanDiskHotspots();
         correlation.put("diskHotspotsTop", diskHotspots);
 
+        Map<String, Object> securitySummary = securitySignalService.summary();
+        correlation.put("securitySignals", securitySummary);
+
         lastCorrelationSnapshot = new LinkedHashMap<>(correlation);
 
-        maybeAddDeduped(finding("WARN", "disk", "磁盘使用率偏高",
-                String.format("当前约 %.1f%%，建议排查大文件与日志增长（可用 DiskInsight / LogAnalysis）", disk)),
+        maybeAddDeduped(finding(
+                "WARN",
+                "disk",
+                "disk usage high",
+                String.format(Locale.ROOT,
+                        "current disk usage is about %.1f%%, check large files and log growth",
+                        disk)),
                 findings, nowMs, disk >= diskWarnPercent);
 
-        maybeAddDeduped(finding("WARN", "cpu", "CPU 使用率偏高",
-                String.format("当前约 %.1f%%，建议结合进程列表排查热点", cpu)),
+        maybeAddDeduped(finding(
+                "WARN",
+                "cpu",
+                "cpu usage high",
+                String.format(Locale.ROOT,
+                        "current cpu usage is about %.1f%%, check hot processes",
+                        cpu)),
                 findings, nowMs, cpu >= cpuWarnPercent);
 
-        maybeAddDeduped(finding("WARN", "memory", "内存使用率极高",
-                String.format("当前约 %.1f%%，关注 OOM 与页交换", mem)),
+        maybeAddDeduped(finding(
+                "WARN",
+                "memory",
+                "memory usage high",
+                String.format(Locale.ROOT,
+                        "current memory usage is about %.1f%%, watch for swapping or OOM pressure",
+                        mem)),
                 findings, nowMs, mem >= 90);
 
         if (errorAlarms + fatalAlarms >= errorAlarmMin) {
-            maybeAddDeduped(finding("WARN", "alarm_severity", "ERROR/FATAL 级告警较多",
-                    String.format("近窗约 ERROR=%d、FATAL=%d（合计告警条目=%d），建议优先处理根因链", errorAlarms, fatalAlarms, totalAlarms)),
+            maybeAddDeduped(finding(
+                    "WARN",
+                    "alarm_severity",
+                    "many ERROR/FATAL alarms",
+                    String.format(Locale.ROOT,
+                            "recent window ERROR=%d, FATAL=%d, total alarms=%d",
+                            errorAlarms, fatalAlarms, totalAlarms)),
                     findings, nowMs, true);
         }
 
         applyAnomalyBaseline(anomalyTotal, correlation, findings, nowMs);
 
         if (zombies > 0) {
-            maybeAddDeduped(finding("WARN", "process", "检测到僵尸进程",
-                    String.format("约 %d 个（Unix Z 状态）；建议检查父进程是否未 wait", zombies)),
+            maybeAddDeduped(finding(
+                    "WARN",
+                    "process",
+                    "zombie process detected",
+                    String.format(Locale.ROOT,
+                            "about %d zombie processes detected, inspect unreaped parent processes",
+                            zombies)),
                     findings, nowMs, true);
         }
 
         if (novelKinds >= 3) {
-            maybeAddDeduped(finding("INFO", "drain", "近期出现多种新日志模板",
-                    String.format("过去约 1 小时首次出现的模板种类约 %d，建议关注是否为新故障模式", novelKinds)),
+            maybeAddDeduped(finding(
+                    "INFO",
+                    "drain",
+                    "new log templates appeared recently",
+                    String.format(Locale.ROOT,
+                            "about %d newly seen Drain templates appeared in the last hour",
+                            novelKinds)),
                     findings, nowMs, true);
         }
 
         if (!diskHotspots.isEmpty()) {
             Map<String, Object> top = diskHotspots.get(0);
-            maybeAddDeduped(finding("INFO", "disk_hotspot", "目录体积累计偏高（递归统计）",
-                    String.format("热点示例：%s ≈ %.1f MiB（深度≤%d，详见 correlation.diskHotspotsTop）",
-                            top.get("path"), asDouble(top.get("approxMiB")), diskHotspotMaxDepth)),
+            maybeAddDeduped(finding(
+                    "INFO",
+                    "disk_hotspot",
+                    "large directory hotspot",
+                    String.format(Locale.ROOT,
+                            "example hotspot %s is about %.1f MiB",
+                            top.get("path"),
+                            asDouble(top.get("approxMiB")))),
                     findings, nowMs, asDouble(top.get("approxMiB")) >= 256);
+        }
+
+        if (Boolean.TRUE.equals(securitySummary.get("hasThreat"))) {
+            maybeAddDeduped(finding(
+                    "HIGH",
+                    "security_signal",
+                    "IDS/PIDS security alert",
+                    securitySignalService.buildThreatSummaryText(securitySummary)),
+                    findings, nowMs, true);
         }
 
         lastFindings = List.copyOf(findings);
 
-        for (Map<String, Object> f : findings) {
-            Map<String, Object> alert = new LinkedHashMap<>(f);
+        for (Map<String, Object> finding : findings) {
+            Map<String, Object> alert = new LinkedHashMap<>(finding);
             alert.put("timestamp", ts);
             alert.put("patrolRunTs", ts);
             recentAlerts.addFirst(alert);
@@ -287,28 +322,19 @@ public class OpsPatrolService {
             try {
                 performanceWebSocketHandler.broadcastJson(envelope);
             } catch (Exception e) {
-                log.warn("巡检 WebSocket 推送失败: {}", e.getMessage());
+                log.warn("patrol WebSocket push failed: {}", e.getMessage());
             }
         }
 
         if (!findings.isEmpty()) {
-            log.info("[运维巡检] 本轮有效线索 {} 条（已去重冷却）", findings.size());
+            log.info("[ops patrol] {} effective findings generated after dedup", findings.size());
         }
 
         if (opsAutoRemediationService != null) {
             try {
                 opsAutoRemediationService.afterPatrol(lastCorrelationSnapshot, List.copyOf(findings));
             } catch (Exception e) {
-                log.warn("[运维巡检] 自动修复阶段异常: {}", e.getMessage());
-            }
-        }
-
-        if (autonomousRunAfterPatrol && autonomousOpsOrchestrator != null && !findings.isEmpty()) {
-            try {
-                autonomousOpsOrchestrator.runScheduled(McpToolSurface.FULL, false);
-                log.info("[运维巡检] 已触发全栈自主编排（agent.autonomous.run-after-patrol=true；与 ops.auto-remediation 并行，生产建议仅开其一）");
-            } catch (Exception e) {
-                log.warn("[运维巡检] 自主运维编排异常: {}", e.getMessage());
+                log.warn("[ops patrol] auto-remediation stage failed: {}", e.getMessage());
             }
         }
 
@@ -323,13 +349,16 @@ public class OpsPatrolService {
         }
     }
 
-    private void maybeAddDeduped(Map<String, Object> finding, List<Map<String, Object>> findings, long nowMs, boolean condition) {
+    private void maybeAddDeduped(Map<String, Object> finding,
+                                 List<Map<String, Object>> findings,
+                                 long nowMs,
+                                 boolean condition) {
         if (!condition) {
             return;
         }
         String key = String.valueOf(finding.get("level")) + "|"
-                + String.valueOf(finding.get("code")) + "|"
-                + String.valueOf(finding.get("title"));
+                + finding.get("code") + "|"
+                + finding.get("title");
         long until = dedupSuppressUntil.getOrDefault(key, 0L);
         if (until > nowMs) {
             return;
@@ -346,16 +375,13 @@ public class OpsPatrolService {
 
     private Map<String, Object> safePerf() {
         try {
-            Map<String, Object> p = statisticsService.getSystemPerformance(null);
-            return p != null ? p : Map.of();
+            Map<String, Object> perf = statisticsService.getSystemPerformance(null);
+            return perf != null ? perf : Map.of();
         } catch (Exception e) {
             return Map.of();
         }
     }
 
-    /**
-     * 磁盘热点：Unix 优先 du 递归统计；Windows 等对子路径做有界深度递归，避免只数一层文件导致误判。
-     */
     private List<Map<String, Object>> scanDiskHotspots() {
         List<Map<String, Object>> rows = new ArrayList<>();
         int depth = Math.min(Math.max(diskHotspotMaxDepth, 1), 5);
@@ -364,26 +390,26 @@ public class OpsPatrolService {
             if (root.isEmpty()) {
                 continue;
             }
-            String norm = root.replace("\\", "/");
-            if (!opsPathPolicy.isAllowedDiskInsightRoot(norm)) {
+            String normalized = root.replace("\\", "/");
+            if (!opsPathPolicy.isAllowedDiskInsightRoot(normalized)) {
                 continue;
             }
-            Path p = Paths.get(OsRuntime.isWindows() ? root : norm);
+            Path path = Paths.get(OsRuntime.isWindows() ? root : normalized);
             try {
-                if (!Files.isDirectory(p)) {
+                if (!Files.isDirectory(path)) {
                     continue;
                 }
                 if (OsRuntime.isUnixLike()) {
-                    rows.addAll(scanDiskHotspotsViaDu(p, depth));
+                    rows.addAll(scanDiskHotspotsViaDu(path, depth));
                 } else {
-                    rows.addAll(scanDiskHotspotsViaWalk(p, depth));
+                    rows.addAll(scanDiskHotspotsViaWalk(path, depth));
                 }
             } catch (Exception e) {
-                log.debug("磁盘热点扫描跳过 {}: {}", root, e.getMessage());
+                log.debug("skip disk hotspot root {}: {}", root, e.getMessage());
             }
         }
         return rows.stream()
-                .sorted(Comparator.comparingDouble(a -> -asDouble(a.get("approxMiB"))))
+                .sorted(Comparator.comparingDouble(item -> -asDouble(item.get("approxMiB"))))
                 .limit(Math.max(1, diskHotspotTopN))
                 .collect(Collectors.toList());
     }
@@ -396,17 +422,15 @@ public class OpsPatrolService {
                     .redirectErrorStream(true)
                     .start();
             String output;
-            try (BufferedReader br = new BufferedReader(
+            try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                output = br.lines().collect(Collectors.joining("\n"));
+                output = reader.lines().collect(Collectors.joining("\n"));
             }
             if (!process.waitFor(90, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                log.debug("du 热点扫描超时: {}", rootArg);
                 return scanDiskHotspotsViaWalk(root, depth);
             }
             if (process.exitValue() != 0) {
-                log.debug("du 热点扫描非零退出 {}: {}", process.exitValue(), rootArg);
                 return scanDiskHotspotsViaWalk(root, depth);
             }
             for (String line : output.split("\n")) {
@@ -414,31 +438,27 @@ public class OpsPatrolService {
                 if (trimmed.isEmpty()) {
                     continue;
                 }
-                int tab = trimmed.indexOf('\t');
-                if (tab <= 0) {
+                int tabIndex = trimmed.indexOf('\t');
+                if (tabIndex <= 0) {
                     continue;
                 }
                 long kb;
                 try {
-                    kb = Long.parseLong(trimmed.substring(0, tab).trim());
+                    kb = Long.parseLong(trimmed.substring(0, tabIndex).trim());
                 } catch (NumberFormatException e) {
                     continue;
                 }
-                String path = trimmed.substring(tab + 1).trim();
-                if (path.isEmpty() || kb <= 0) {
+                String path = trimmed.substring(tabIndex + 1).trim();
+                if (path.isEmpty() || kb <= 0 || path.equals(rootArg)) {
                     continue;
                 }
-                if (path.equals(rootArg)) {
-                    continue;
-                }
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("path", path);
-                m.put("approxMiB", kb / 1024.0);
-                m.put("scanMode", "du");
-                rows.add(m);
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("path", path);
+                row.put("approxMiB", kb / 1024.0);
+                row.put("scanMode", "du");
+                rows.add(row);
             }
         } catch (Exception e) {
-            log.debug("du 热点扫描失败 {}: {}", rootArg, e.getMessage());
             return scanDiskHotspotsViaWalk(root, depth);
         }
         return rows;
@@ -446,29 +466,28 @@ public class OpsPatrolService {
 
     private List<Map<String, Object>> scanDiskHotspotsViaWalk(Path root, int depth) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(root)) {
             int scanned = 0;
-            for (Path child : ds) {
+            for (Path child : stream) {
                 if (++scanned > 400) {
                     break;
                 }
                 AtomicInteger visits = new AtomicInteger();
-                // 与 du 子目录行一致：统计该子路径下整棵子树（仅用 visitBudget 截断）
-                long bytes = recursiveDirectorySizeBytes(child, 64, visits);
+                long bytes = recursiveDirectorySizeBytes(child, depth, visits);
                 if (bytes <= 0) {
                     continue;
                 }
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("path", child.toString());
-                m.put("approxMiB", bytes / (1024.0 * 1024.0));
-                m.put("scanMode", "walk");
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("path", child.toString());
+                row.put("approxMiB", bytes / (1024.0 * 1024.0));
+                row.put("scanMode", "walk");
                 if (visits.get() >= diskHotspotVisitBudget) {
-                    m.put("truncated", true);
+                    row.put("truncated", true);
                 }
-                rows.add(m);
+                rows.add(row);
             }
         } catch (Exception e) {
-            log.debug("walk 热点扫描失败 {}: {}", root, e.getMessage());
+            log.debug("walk hotspot scan failed {}: {}", root, e.getMessage());
         }
         return rows;
     }
@@ -486,8 +505,8 @@ public class OpsPatrolService {
                 return 0L;
             }
             long sum = 0L;
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(path)) {
-                for (Path entry : ds) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(path)) {
+                for (Path entry : stream) {
                     if (visitBudget.get() >= diskHotspotVisitBudget) {
                         break;
                     }
@@ -505,19 +524,14 @@ public class OpsPatrolService {
         }
     }
 
-    /**
-     * 异常日志基线：首轮播种；突增告警时不抬高基线；窗口回落时重置；常态下 EMA 平滑更新。
-     */
-    private void applyAnomalyBaseline(
-            long anomalyTotal,
-            Map<String, Object> correlation,
-            List<Map<String, Object>> findings,
-            long nowMs) {
+    private void applyAnomalyBaseline(long anomalyTotal,
+                                      Map<String, Object> correlation,
+                                      List<Map<String, Object>> findings,
+                                      long nowMs) {
         if (anomalyTotal < 0) {
             return;
         }
-
-        long prev = lastAnomalyTotal;
+        long previous = lastAnomalyTotal;
         if (!anomalyBaselineInitialized) {
             lastAnomalyTotal = anomalyTotal;
             anomalyBaselineInitialized = true;
@@ -526,22 +540,25 @@ public class OpsPatrolService {
             return;
         }
 
-        boolean windowShrink = prev > 0 && anomalyTotal < prev * 0.55;
+        boolean windowShrink = previous > 0 && anomalyTotal < previous * 0.55;
         boolean spike = !windowShrink
-                && prev > 0
-                && anomalyTotal >= prev * anomalySpikeFactor
-                && anomalyTotal - prev >= anomalyMinDelta;
+                && previous > 0
+                && anomalyTotal >= previous * anomalySpikeFactor
+                && anomalyTotal - previous >= anomalyMinDelta;
 
         if (spike) {
-            correlation.put("anomalyBaseline", prev);
+            correlation.put("anomalyBaseline", previous);
             correlation.put("anomalyBaselineAction", "hold_on_spike");
             correlation.put("anomalyObserved", anomalyTotal);
-            maybeAddDeduped(
-                    finding("WARN", "log_anomaly", "异常日志量相对基线显著上升",
-                            String.format("近 1 日约 %d 条（基线约 %d，增幅 %.1f%%）",
-                                    anomalyTotal,
-                                    prev,
-                                    prev > 0 ? (anomalyTotal - prev) * 100.0 / prev : 0)),
+            maybeAddDeduped(finding(
+                    "WARN",
+                    "log_anomaly",
+                    "abnormal logs significantly above baseline",
+                    String.format(Locale.ROOT,
+                            "last day anomaly count=%d, baseline=%d, delta=%.1f%%",
+                            anomalyTotal,
+                            previous,
+                            previous > 0 ? (anomalyTotal - previous) * 100.0 / previous : 0)),
                     findings,
                     nowMs,
                     true);
@@ -556,7 +573,7 @@ public class OpsPatrolService {
         }
 
         double alpha = Math.min(1.0, Math.max(0.05, anomalyBaselineEmaAlpha));
-        long updated = Math.round(prev * (1.0 - alpha) + anomalyTotal * alpha);
+        long updated = Math.round(previous * (1.0 - alpha) + anomalyTotal * alpha);
         lastAnomalyTotal = updated;
         correlation.put("anomalyBaseline", updated);
         correlation.put("anomalyBaselineAction", "ema_update");
@@ -564,23 +581,20 @@ public class OpsPatrolService {
     }
 
     private static Map<String, Object> finding(String level, String code, String title, String detail) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("level", level);
-        m.put("code", code);
-        m.put("title", title);
-        m.put("detail", detail);
-        return m;
+        Map<String, Object> finding = new LinkedHashMap<>();
+        finding.put("level", level);
+        finding.put("code", code);
+        finding.put("title", title);
+        finding.put("detail", detail);
+        return finding;
     }
 
-    private static double asDouble(Object o) {
-        return o instanceof Number ? ((Number) o).doubleValue() : 0.0;
+    private static double asDouble(Object value) {
+        return value instanceof Number ? ((Number) value).doubleValue() : 0.0;
     }
 
-    private static long asLong(Object o) {
-        if (o instanceof Number) {
-            return ((Number) o).longValue();
-        }
-        return 0L;
+    private static long asLong(Object value) {
+        return value instanceof Number ? ((Number) value).longValue() : 0L;
     }
 
     private int countZombieProcesses() {
@@ -591,21 +605,21 @@ public class OpsPatrolService {
             ProcessBuilder pb = new ProcessBuilder(
                     "sh", "-c", "ps -eo stat= 2>/dev/null | grep -c '^Z' || true");
             pb.redirectErrorStream(true);
-            Process p = pb.start();
+            Process process = pb.start();
             String line;
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                line = br.readLine();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                line = reader.readLine();
             }
-            if (!p.waitFor(5, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
                 return 0;
             }
             if (line != null && !line.isBlank()) {
                 return Integer.parseInt(line.trim());
             }
         } catch (Exception e) {
-            log.debug("僵尸进程计数跳过: {}", e.getMessage());
+            log.debug("skip zombie process count: {}", e.getMessage());
         }
         return 0;
     }

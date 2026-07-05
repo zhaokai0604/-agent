@@ -40,7 +40,7 @@ class AgentPathPolicyServiceTest {
 
         service = new AgentPathPolicyService(agentOpsProperties, opsPathPolicy, new ObjectMapper());
         ReflectionTestUtils.setField(service, "overrideFilePath",
-                tempDir.resolve("agent-path-policy-overrides.json").toString().replace('\\', '/'));
+                tempDir.resolve("agent-path-policy-overrides.json"));
     }
 
     @Test

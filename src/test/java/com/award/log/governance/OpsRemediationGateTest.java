@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
@@ -91,5 +92,59 @@ class OpsRemediationGateTest {
 
         assertEquals(OpsRemediationGate.WriteDecision.FORBIDDEN, d.decision());
         assertTrue(d.forbidden());
+    }
+
+    @Test
+    void tempCleanupAutoLaneExecutesWhenTrustAllows() {
+        when(governanceService.evaluateStep(anyMap())).thenReturn(
+                new OpsGovernanceService.GovernanceEvaluation(
+                        GovernanceAdmissionVerdict.ALLOW_AUTO,
+                        AssetTier.NON_CORE,
+                        "/tmp",
+                        "ok"));
+        when(opsTrustPolicy.tierForTool(anyString(), anyMap(), anyString())).thenReturn(OpsTrustTier.AUTO);
+        when(riskScoreEngine.score(anyString(), anyMap(), anyString()))
+                .thenReturn(new AgenticRiskScoreEngine.ScoreResult(1.0, Map.of(), "low"));
+        when(opsTrustPolicy.tierExplanation(any(), anyDouble())).thenReturn("auto lane");
+
+        OpsRemediationGate.RemediationDecision d =
+                gate.decideTempCleanup("/tmp", 7, false, "clean temp");
+        assertEquals(OpsRemediationGate.WriteDecision.EXECUTE, d.decision());
+    }
+
+    @Test
+    void trustBlockOverridesAllowAuto() {
+        when(governanceService.evaluateStep(anyMap())).thenReturn(
+                new OpsGovernanceService.GovernanceEvaluation(
+                        GovernanceAdmissionVerdict.ALLOW_AUTO,
+                        AssetTier.NON_CORE,
+                        "/tmp",
+                        "ok"));
+        when(opsTrustPolicy.tierForTool(anyString(), anyMap(), anyString())).thenReturn(OpsTrustTier.BLOCK);
+        when(riskScoreEngine.score(anyString(), anyMap(), anyString()))
+                .thenReturn(new AgenticRiskScoreEngine.ScoreResult(9.0, Map.of(), "high"));
+        when(opsTrustPolicy.tierExplanation(any(), anyDouble())).thenReturn("blocked");
+
+        OpsRemediationGate.RemediationDecision d =
+                gate.decideLogCleanup("/var/log", 14, false, "clean logs");
+        assertEquals(OpsRemediationGate.WriteDecision.FORBIDDEN, d.decision());
+    }
+
+    @Test
+    void confirmTierWithoutForcePreviewsLogCleanup() {
+        when(governanceService.evaluateStep(anyMap())).thenReturn(
+                new OpsGovernanceService.GovernanceEvaluation(
+                        GovernanceAdmissionVerdict.ALLOW_AUTO,
+                        AssetTier.NON_CORE,
+                        "/var/log",
+                        "ok"));
+        when(opsTrustPolicy.tierForTool(anyString(), anyMap(), anyString())).thenReturn(OpsTrustTier.APPROVE);
+        when(riskScoreEngine.score(anyString(), anyMap(), anyString()))
+                .thenReturn(new AgenticRiskScoreEngine.ScoreResult(5.0, Map.of(), "medium"));
+        when(opsTrustPolicy.tierExplanation(any(), anyDouble())).thenReturn("need confirm");
+
+        OpsRemediationGate.RemediationDecision d =
+                gate.decideLogCleanup("/var/log", 14, false, "clean logs");
+        assertEquals(OpsRemediationGate.WriteDecision.PREVIEW, d.decision());
     }
 }

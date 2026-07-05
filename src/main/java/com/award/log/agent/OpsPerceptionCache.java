@@ -1,5 +1,6 @@
 package com.award.log.agent;
 
+import com.award.log.util.TimeSource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -11,6 +12,12 @@ import java.util.Map;
 @Component
 public class OpsPerceptionCache {
 
+    private final TimeSource timeSource;
+
+    public OpsPerceptionCache(TimeSource timeSource) {
+        this.timeSource = timeSource;
+    }
+
     @Value("${agent.perception.cache-ttl-ms:60000}")
     private long ttlMs;
 
@@ -21,7 +28,7 @@ public class OpsPerceptionCache {
         if (cachedView == null) {
             return null;
         }
-        if (System.currentTimeMillis() - cachedAtMs >= ttlMs) {
+        if (timeSource.currentTimeMillis() - cachedAtMs >= ttlMs) {
             return null;
         }
         return cachedView;
@@ -29,7 +36,7 @@ public class OpsPerceptionCache {
 
     public void put(Map<String, Object> view) {
         cachedView = view;
-        cachedAtMs = System.currentTimeMillis();
+        cachedAtMs = timeSource.currentTimeMillis();
     }
 
     public void invalidate() {

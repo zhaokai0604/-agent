@@ -53,10 +53,16 @@
           <div class="panel panel-treemap">
             <div class="panel-head">
               <span>磁盘热点</span>
-              <span class="panel-meta">巡检 correlation</span>
+              <span class="panel-meta">按占用大小 · 悬停看完整路径</span>
             </div>
             <div ref="treemapRef" class="chart-box chart-box-sm" />
-            <div v-if="!diskHotspots.length" class="chart-empty">暂无热点目录（等待巡检扫描）</div>
+            <ul v-if="diskHotspots.length" class="hotspot-table">
+              <li v-for="(h, i) in diskHotspots" :key="i" class="hotspot-row">
+                <span class="hotspot-name" :title="h.path">{{ hotspotLabel(h) }}</span>
+                <span class="hotspot-size">{{ formatHotspotSize(h.approxMiB) }}</span>
+              </li>
+            </ul>
+            <div v-else class="chart-empty">暂无热点目录（等待巡检扫描）</div>
           </div>
           <div class="panel panel-patrol">
             <div class="panel-head">
@@ -100,7 +106,7 @@
               </div>
             </li>
           </ul>
-          <div v-else class="side-empty">暂无 MCP 执行记录</div>
+          <div v-else class="side-empty">暂无工具执行记录</div>
         </div>
       </aside>
     </div>
@@ -121,6 +127,12 @@ import { Warning } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { useLiveWallFeed } from '../composables/useLiveWallFeed.js'
 import { mcpToolDisplayName } from '../utils/mcpToolsMeta.js'
+import {
+  sparseBarLayout,
+  formatChartDayLabel,
+  pathBasename,
+  formatMiBLabel
+} from '../utils/chartOptions.js'
 
 const {
   METRIC_DEFS,
@@ -275,18 +287,33 @@ function buildTrendOption () {
   }
 }
 
+function formatHotspotSize(v) {
+  return formatMiBLabel(v)
+}
+
+function hotspotLabel(h) {
+  const path = String(h?.path || '')
+  const base = pathBasename(path)
+  const parent = path.replace(/\\/g, '/').split('/').filter(Boolean)
+  const parentName = parent.length > 1 ? parent[parent.length - 2] : ''
+  if (parentName && base !== path) {
+    return `${parentName}/${base}`
+  }
+  return base || path || '—'
+}
+
 function buildTreemapOption () {
   const list = diskHotspots.value
   const children = list.map((h) => {
     const mib = Number(h.approxMiB) || 0
     const path = String(h.path || '/')
-    const name = path.length > 28 ? '…' + path.slice(-26) : path
+    const label = hotspotLabel(h)
     return {
-      name,
+      name: label,
       value: Math.max(1, mib),
       path,
       itemStyle: {
-        color: mib >= 1024 ? '#f87171' : mib >= 256 ? '#fbbf24' : '#0d9488'
+        color: mib >= 1024 ? '#f87171' : mib >= 256 ? '#fbbf24' : '#14b8a6'
       }
     }
   })
@@ -296,11 +323,11 @@ function buildTreemapOption () {
     tooltip: {
       formatter (p) {
         const d = p.data
-        return `${d.path || p.name}<br/>约 ${Number(d.value).toFixed(1)} MiB`
+        return `<div style="max-width:280px;word-break:break-all">${d.path || p.name}</div>约 ${formatHotspotSize(d.value)}`
       },
-      backgroundColor: 'rgba(255,255,255,0.96)',
+      backgroundColor: 'rgba(255,255,255,0.98)',
       borderColor: '#e2e8f0',
-      textStyle: { color: '#334155' }
+      textStyle: { color: '#334155', fontSize: 12 }
     },
     series: [
       {
@@ -308,7 +335,16 @@ function buildTreemapOption () {
         roam: false,
         nodeClick: false,
         breadcrumb: { show: false },
-        label: { show: true, formatter: '{b}', color: '#1e293b', fontSize: 11 },
+        label: {
+          show: true,
+          formatter (p) {
+            const mib = Number(p.value) || 0
+            return `${p.name}\n${formatHotspotSize(mib)}`
+          },
+          color: '#fff',
+          fontSize: 11,
+          lineHeight: 14
+        },
         upperLabel: { show: false },
         itemStyle: { borderColor: '#ffffff', borderWidth: 2, gapWidth: 2 },
         data: children
@@ -319,16 +355,14 @@ function buildTreemapOption () {
 
 function buildPatrolOption () {
   const list = patrolTrend.value
-  const labels = list.map((r) => {
-    const d = String(r.day || '')
-    return d.length >= 10 ? d.slice(5) : d
-  })
+  const labels = list.map((r) => formatChartDayLabel(r.day))
   const alertCounts = list.map((r) => Number(r.alertCount ?? 0))
   const runCounts = list.map((r) => Number(r.runCount ?? 0))
+  const barLayout = sparseBarLayout(list.length)
   return {
     animation: false,
     backgroundColor: 'transparent',
-    grid: { left: 40, right: 12, top: 32, bottom: 28 },
+    grid: { left: 40, right: 12, top: 36, bottom: 28 },
     legend: {
       data: ['告警', '巡检'],
       textStyle: { color: '#475569', fontSize: 11 },
@@ -336,6 +370,7 @@ function buildPatrolOption () {
     },
     tooltip: {
       trigger: 'axis',
+      axisPointer: { type: 'shadow' },
       backgroundColor: 'rgba(255,255,255,0.96)',
       borderColor: '#e2e8f0',
       textStyle: { color: '#334155' }
@@ -344,7 +379,8 @@ function buildPatrolOption () {
       type: 'category',
       data: labels,
       axisLine: { lineStyle: { color: '#cbd5e1' } },
-      axisLabel: { color: '#64748b', fontSize: 10 }
+      axisLabel: { color: '#64748b', fontSize: 10 },
+      axisTick: { alignWithLabel: true }
     },
     yAxis: {
       type: 'value',
@@ -356,7 +392,7 @@ function buildPatrolOption () {
       {
         name: '告警',
         type: 'bar',
-        barMaxWidth: 22,
+        ...barLayout,
         data: alertCounts,
         itemStyle: { color: '#f59e0b', borderRadius: [3, 3, 0, 0] }
       },
@@ -367,8 +403,8 @@ function buildPatrolOption () {
         symbol: 'circle',
         symbolSize: 5,
         data: runCounts,
-        lineStyle: { color: '#38bdf8', width: 2 },
-        itemStyle: { color: '#38bdf8' }
+        lineStyle: { color: '#0d9488', width: 2 },
+        itemStyle: { color: '#0d9488' }
       }
     ]
   }
@@ -715,7 +751,47 @@ onUnmounted(() => {
 }
 
 .chart-box-sm {
-  min-height: 160px;
+  min-height: 120px;
+  height: 120px;
+}
+
+.hotspot-table {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.hotspot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.hotspot-row:nth-child(odd) {
+  background: rgba(241, 245, 249, 0.8);
+}
+
+.hotspot-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wall-text);
+  font-family: var(--ops-font-mono);
+}
+
+.hotspot-size {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: #0f766e;
+  font-variant-numeric: tabular-nums;
 }
 
 .chart-empty,

@@ -120,6 +120,23 @@
         LIMIT #{pageSize} OFFSET #{offset}
     </select>
 
+    <select id="selectPageByUserId" resultMap="LogAlarmResultMap">
+        SELECT la.*
+        FROM log_alarm la
+        JOIN log_analysis_task lat ON lat.task_id = la.task_id
+        <where>
+            AND lat.user_id = #{userId}
+            <if test="level != null and level != ''">
+                AND la.level = #{level}
+            </if>
+            <if test="taskId != null and taskId != ''">
+                AND la.task_id = #{taskId}
+            </if>
+        </where>
+        ORDER BY la.create_time DESC
+        LIMIT #{pageSize} OFFSET #{offset}
+    </select>
+
     <select id="count" resultType="java.lang.Long">
         SELECT COUNT(*) FROM log_alarm
         <where>
@@ -128,6 +145,21 @@
             </if>
             <if test="taskId != null and taskId != ''">
                 AND task_id = #{taskId}
+            </if>
+        </where>
+    </select>
+
+    <select id="countByUserId" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM log_alarm la
+        JOIN log_analysis_task lat ON lat.task_id = la.task_id
+        <where>
+            AND lat.user_id = #{userId}
+            <if test="level != null and level != ''">
+                AND la.level = #{level}
+            </if>
+            <if test="taskId != null and taskId != ''">
+                AND la.task_id = #{taskId}
             </if>
         </where>
     </select>
@@ -148,6 +180,24 @@
         ORDER BY date
     </select>
 
+    <select id="selectAlarmTrendByUserId" resultType="java.util.Map">
+        SELECT
+            DATE(la.create_time) AS date,
+            COUNT(*) AS count
+        FROM log_alarm la
+        JOIN log_analysis_task lat ON lat.task_id = la.task_id
+        WHERE lat.user_id = #{userId}
+          AND la.create_time >= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        <if test="level != null and level != ''">
+            AND la.level = #{level}
+        </if>
+        <if test="taskId != null and taskId != ''">
+            AND la.task_id = #{taskId}
+        </if>
+        GROUP BY DATE(la.create_time)
+        ORDER BY date
+    </select>
+
     <select id="selectAlarmLevelDistribution" resultType="java.util.Map">
         SELECT
             level,
@@ -161,6 +211,24 @@
             AND task_id = #{taskId}
         </if>
         GROUP BY level
+        ORDER BY count DESC
+    </select>
+
+    <select id="selectAlarmLevelDistributionByUserId" resultType="java.util.Map">
+        SELECT
+            la.level AS level,
+            COUNT(*) AS count
+        FROM log_alarm la
+        JOIN log_analysis_task lat ON lat.task_id = la.task_id
+        WHERE lat.user_id = #{userId}
+          AND la.create_time >= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        <if test="level != null and level != ''">
+            AND la.level = #{level}
+        </if>
+        <if test="taskId != null and taskId != ''">
+            AND la.task_id = #{taskId}
+        </if>
+        GROUP BY la.level
         ORDER BY count DESC
     </select>
 
@@ -182,6 +250,26 @@
         LIMIT 10
     </select>
 
+    <select id="selectAlarmRootCauseStatisticsByUserId" resultType="java.util.Map">
+        SELECT
+            LEFT(la.root_cause, 20) AS root_cause,
+            COUNT(*) AS count
+        FROM log_alarm la
+        JOIN log_analysis_task lat ON lat.task_id = la.task_id
+        WHERE lat.user_id = #{userId}
+          AND la.create_time >= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+          AND la.root_cause IS NOT NULL
+        <if test="level != null and level != ''">
+            AND la.level = #{level}
+        </if>
+        <if test="taskId != null and taskId != ''">
+            AND la.task_id = #{taskId}
+        </if>
+        GROUP BY LEFT(la.root_cause, 20)
+        ORDER BY count DESC
+        LIMIT 10
+    </select>
+
     <select id="selectAlarmStatistics" resultType="java.util.Map">
         SELECT
             COUNT(*) AS total_alarms,
@@ -194,6 +282,23 @@
         </if>
         <if test="taskId != null and taskId != ''">
             AND task_id = #{taskId}
+        </if>
+    </select>
+
+    <select id="selectAlarmStatisticsByUserId" resultType="java.util.Map">
+        SELECT
+            COUNT(*) AS total_alarms,
+            SUM(CASE WHEN la.push_status IN ('SUCCESS', 'RECORDED') THEN 1 ELSE 0 END) AS success_alarms,
+            SUM(CASE WHEN la.push_status = 'FAILED' THEN 1 ELSE 0 END) AS failed_alarms
+        FROM log_alarm la
+        JOIN log_analysis_task lat ON lat.task_id = la.task_id
+        WHERE lat.user_id = #{userId}
+          AND la.create_time >= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        <if test="level != null and level != ''">
+            AND la.level = #{level}
+        </if>
+        <if test="taskId != null and taskId != ''">
+            AND la.task_id = #{taskId}
         </if>
     </select>
 

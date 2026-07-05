@@ -1,5 +1,6 @@
 package com.award.log.service.impl;
 
+import com.award.log.config.SystemConfigFileSupport;
 import com.award.log.model.TaskAlarmConfig;
 import com.award.log.service.AlarmConfigService;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -8,66 +9,101 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 
 @Slf4j
 @Service
 public class AlarmConfigServiceImpl implements AlarmConfigService {
-    private static final String CONFIG_FILE = System.getProperty("user.dir").replace('\\', '/') + "/alarm-config.json";
     private static final String DEFAULT_KEY = "default";
     private static final String TASKS_KEY = "tasks";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private volatile Map<String, Object> cachedRoot;
+    private volatile long cachedRootMtime = -1L;
 
     @Override
     public TaskAlarmConfig getDefaultConfig() {
-        synchronized (this) {
-            Map<String, Object> root = loadRoot();
-            Map<String, Object> defaultMap = asMap(root.get(DEFAULT_KEY));
-            return mergeWithDefault(null, defaultMap);
-        }
+        Map<String, Object> root = loadRootCached();
+        Map<String, Object> defaultMap = asMap(root.get(DEFAULT_KEY));
+        return mergeWithDefault(null, defaultMap);
     }
 
     @Override
     public TaskAlarmConfig getTaskConfig(String taskId) {
-        synchronized (this) {
-            Map<String, Object> root = loadRoot();
-            Map<String, Object> tasks = asMap(root.get(TASKS_KEY));
-            Map<String, Object> taskMap = asMap(tasks.get(taskId));
-            return mapToConfig(taskId, taskMap);
-        }
+        Map<String, Object> root = loadRootCached();
+        Map<String, Object> tasks = asMap(root.get(TASKS_KEY));
+        Map<String, Object> taskMap = asMap(tasks.get(taskId));
+        return mapToConfig(taskId, taskMap);
     }
 
     @Override
     public TaskAlarmConfig getEffectiveConfig(String taskId) {
+        Map<String, Object> root = loadRootCached();
+        Map<String, Object> defaultMap = asMap(root.get(DEFAULT_KEY));
+        Map<String, Object> tasks = asMap(root.get(TASKS_KEY));
+        Map<String, Object> taskMap = asMap(tasks.get(taskId));
+        return mergeWithDefault(taskId, mergeMaps(defaultMap, taskMap));
+    }
+
+    @Override
+    public TaskAlarmConfig saveDefaultConfig(Map<String, Object> rawConfig) {
         synchronized (this) {
-            Map<String, Object> root = loadRoot();
-            Map<String, Object> defaultMap = asMap(root.get(DEFAULT_KEY));
-            Map<String, Object> tasks = asMap(root.get(TASKS_KEY));
-            Map<String, Object> taskMap = asMap(tasks.get(taskId));
-            return mergeWithDefault(taskId, mergeMaps(defaultMap, taskMap));
+            Map<String, Object> root = loadRootUncached();
+            root.put(DEFAULT_KEY, normalizeRaw(rawConfig));
+            saveRoot(root);
+            invalidateRootCache();
+            return getDefaultConfig();
         }
     }
 
     @Override
     public TaskAlarmConfig saveTaskConfig(String taskId, Map<String, Object> rawConfig) {
+        if (taskId == null || taskId.isBlank()) {
+            throw new IllegalArgumentException("taskId cannot be empty");
+        }
         synchronized (this) {
-            Map<String, Object> root = loadRoot();
+            Map<String, Object> root = loadRootUncached();
             Map<String, Object> tasks = asMap(root.get(TASKS_KEY));
             if (tasks.isEmpty()) {
                 tasks = new LinkedHashMap<>();
             }
-            Map<String, Object> normalized = normalizeRaw(rawConfig);
-            tasks.put(taskId, normalized);
+            tasks.put(taskId, normalizeRaw(rawConfig));
             root.put(TASKS_KEY, tasks);
             saveRoot(root);
+            invalidateRootCache();
             return getEffectiveConfig(taskId);
         }
     }
 
-    private Map<String, Object> loadRoot() {
-        File file = new File(CONFIG_FILE);
+    private Map<String, Object> loadRootCached() {
+        File file = configFile().toFile();
+        long mtime = file.exists() ? file.lastModified() : 0L;
+        Map<String, Object> hit = cachedRoot;
+        if (hit != null && cachedRootMtime == mtime) {
+            return hit;
+        }
+        synchronized (this) {
+            if (cachedRoot != null && cachedRootMtime == mtime) {
+                return cachedRoot;
+            }
+            Map<String, Object> root = loadRootUncached();
+            cachedRoot = root;
+            cachedRootMtime = mtime;
+            return root;
+        }
+    }
+
+    private void invalidateRootCache() {
+        cachedRoot = null;
+        cachedRootMtime = -1L;
+    }
+
+    private Map<String, Object> loadRootUncached() {
+        File file = configFile().toFile();
         if (!file.exists()) {
             Map<String, Object> root = new LinkedHashMap<>();
             root.put(DEFAULT_KEY, buildDefaultMap());
@@ -85,7 +121,7 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
             }
             return root;
         } catch (Exception e) {
-            log.error("读取告警配置失败，使用默认配置", e);
+            log.error("Failed to read alarm config, falling back to defaults", e);
             Map<String, Object> root = new LinkedHashMap<>();
             root.put(DEFAULT_KEY, buildDefaultMap());
             root.put(TASKS_KEY, new LinkedHashMap<>());
@@ -94,11 +130,12 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
     }
 
     private void saveRoot(Map<String, Object> root) {
-        try {
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(new File(CONFIG_FILE), root);
-        } catch (Exception e) {
-            log.error("保存告警配置失败", e);
-        }
+        SystemConfigFileSupport.writeJsonFile(configFile(), root);
+        invalidateRootCache();
+    }
+
+    private Path configFile() {
+        return SystemConfigFileSupport.alarmConfigFile();
     }
 
     private Map<String, Object> buildDefaultMap() {
@@ -111,11 +148,12 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
     }
 
     private Map<String, Object> normalizeRaw(Map<String, Object> raw) {
+        Map<String, Object> source = raw == null ? Map.of() : raw;
         Map<String, Object> n = new LinkedHashMap<>();
-        n.put("alarmLevel", normalizeLevel(asString(raw.get("alarmLevel"), "ERROR")));
-        n.put("errorThreshold", asInt(raw.get("errorThreshold"), 5));
-        n.put("enabled", asBoolean(raw.get("enabled"), true));
-        n.put("cooldownMs", asLong(raw.get("cooldownMs"), 300000L));
+        n.put("alarmLevel", normalizeLevel(asString(source.get("alarmLevel"), "ERROR")));
+        n.put("errorThreshold", asInt(source.get("errorThreshold"), 5));
+        n.put("enabled", asBoolean(source.get("enabled"), true));
+        n.put("cooldownMs", asLong(source.get("cooldownMs"), 300000L));
         n.put("updatedAt", LocalDateTime.now().toString());
         return n;
     }
@@ -208,6 +246,9 @@ public class AlarmConfigServiceImpl implements AlarmConfigService {
     private Boolean asBoolean(Object value, Boolean defaultValue) {
         if (value == null) {
             return defaultValue;
+        }
+        if (value instanceof Boolean b) {
+            return b;
         }
         return Boolean.parseBoolean(String.valueOf(value));
     }

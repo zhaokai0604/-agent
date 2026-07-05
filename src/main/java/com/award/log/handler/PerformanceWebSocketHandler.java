@@ -33,6 +33,8 @@ import com.award.log.service.StatisticsService;
 @Component
 public class PerformanceWebSocketHandler extends TextWebSocketHandler {
 
+    private static final long SNAPSHOT_CACHE_TTL_MS = 1_000L;
+
     private final WebSocketMessageBuffer messageBuffer;
 
     // 存储所有活跃的WebSocket会话
@@ -45,6 +47,9 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
     private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
     private volatile ScheduledFuture<?> periodicPushTask;
 
+    private volatile String cachedPerformanceJson;
+    private volatile long cachedPerformanceAtMs;
+
     @Resource
     private PerformanceAnalysisService performanceAnalysisService;
 
@@ -54,19 +59,17 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        // 连接建立时添加会话到列表
         sessions.add(session);
         log.info("WebSocket连接建立: {}", session.getId());
 
-        // 如果是第一个连接，启动定时推送任务
         if (sessions.size() == 1) {
             startPeriodicDataPush();
         }
+        pushImmediateSnapshot(session);
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        // 连接关闭时从列表中移除会话
         sessions.remove(session);
         log.info("WebSocket连接关闭: {}, 状态: {}", session.getId(), status);
 
@@ -77,14 +80,11 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        // 处理客户端发送的消息
         String payload = message.getPayload();
-        log.info("收到客户端消息: {}", payload);
+        log.debug("收到客户端消息: {}", payload);
 
-        // 可以根据客户端消息类型执行不同的操作
-        // 例如，客户端请求特定类型的性能数据
         if ("refresh".equals(payload)) {
-            pushPerformanceData();
+            pushImmediateSnapshot(session);
         } else if ("sync".equalsIgnoreCase(payload.trim())) {
             replayBufferedMessages(session);
         }
@@ -106,14 +106,27 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
+     * 建连后立即推送首帧，避免客户端等待下一个 5s 周期。
+     */
+    private void pushImmediateSnapshot(WebSocketSession session) {
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+        try {
+            session.sendMessage(new TextMessage(resolvePerformanceJson()));
+        } catch (IOException e) {
+            log.warn("建连首帧推送失败 session={}: {}", session.getId(), e.getMessage());
+        }
+    }
+
+    /**
      * 启动定时推送性能数据的任务
      */
     private void startPeriodicDataPush() {
         if (periodicPushTask != null && !periodicPushTask.isCancelled() && !periodicPushTask.isDone()) {
             return;
         }
-        // 每5秒推送一次性能数据
-        periodicPushTask = executorService.scheduleAtFixedRate(this::pushPerformanceData, 0, 5, TimeUnit.SECONDS);
+        periodicPushTask = executorService.scheduleAtFixedRate(this::pushPerformanceData, 0, 15, TimeUnit.SECONDS);
     }
 
     private void stopPeriodicDataPush() {
@@ -134,28 +147,9 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
      */
     private void pushPerformanceData() {
         try {
-            Map<String, Object> messageData = new HashMap<>();
-            messageData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-
-            Map<String, Object> perf = Collections.emptyMap();
-            try {
-                if (statisticsService != null) {
-                    perf = statisticsService.getSystemPerformance(null);
-                }
-            } catch (Exception ex) {
-                log.debug("推送前采集性能快照失败: {}", ex.getMessage());
-            }
-            messageData.put("cpuUsage", toDouble(perf.get("cpuUsage")));
-            messageData.put("memoryUsage", toDouble(perf.get("memoryUsage")));
-            messageData.put("diskUsage", toDouble(perf.get("diskUsage")));
-            messageData.put("networkUsage", toDouble(perf.get("networkUsage")));
-            messageData.put("channel", "performance");
-
-            String jsonMessage = com.alibaba.fastjson.JSON.toJSONString(messageData);
-            messageBuffer.record(messageData);
+            String jsonMessage = resolvePerformanceJson(true);
             TextMessage textMessage = new TextMessage(jsonMessage);
 
-            // 推送给所有活跃的客户端
             for (WebSocketSession session : sessions) {
                 if (session.isOpen()) {
                     session.sendMessage(textMessage);
@@ -166,6 +160,55 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
         } catch (Exception e) {
             log.error("推送性能数据失败", e);
         }
+    }
+
+    private String resolvePerformanceJson() {
+        return resolvePerformanceJson(false);
+    }
+
+    private String resolvePerformanceJson(boolean forceRefresh) {
+        long now = System.currentTimeMillis();
+        if (!forceRefresh) {
+            String cached = cachedPerformanceJson;
+            if (cached != null && now - cachedPerformanceAtMs < SNAPSHOT_CACHE_TTL_MS) {
+                return cached;
+            }
+        }
+        synchronized (this) {
+            if (!forceRefresh) {
+                String cached = cachedPerformanceJson;
+                if (cached != null && now - cachedPerformanceAtMs < SNAPSHOT_CACHE_TTL_MS) {
+                    return cached;
+                }
+            }
+            Map<String, Object> messageData = buildPerformancePayload();
+            if (messageBuffer != null) {
+                messageBuffer.record(messageData);
+            }
+            cachedPerformanceJson = com.alibaba.fastjson.JSON.toJSONString(messageData);
+            cachedPerformanceAtMs = System.currentTimeMillis();
+            return cachedPerformanceJson;
+        }
+    }
+
+    private Map<String, Object> buildPerformancePayload() {
+        Map<String, Object> messageData = new HashMap<>();
+        messageData.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+
+        Map<String, Object> perf = Collections.emptyMap();
+        try {
+            if (statisticsService != null) {
+                perf = statisticsService.getSystemPerformance(null);
+            }
+        } catch (Exception ex) {
+            log.debug("推送前采集性能快照失败: {}", ex.getMessage());
+        }
+        messageData.put("cpuUsage", toDouble(perf.get("cpuUsage")));
+        messageData.put("memoryUsage", toDouble(perf.get("memoryUsage")));
+        messageData.put("diskUsage", toDouble(perf.get("diskUsage")));
+        messageData.put("networkUsage", toDouble(perf.get("networkUsage")));
+        messageData.put("channel", "performance");
+        return messageData;
     }
 
     /**

@@ -119,7 +119,7 @@ const configRows = computed(() => {
     { key: 'confirm', label: '须确认区间', value: `[${c.riskScoreAutoMax}, ${c.riskScoreConfirmMax}]` },
     { key: 'tools', label: 'HTTP 白名单工具数', value: String(c.httpAllowedToolCount ?? '—') },
     { key: 'deny', label: '只读面禁写工具数', value: String(c.readOnlyDenyToolCount ?? '—') },
-    { key: 'dry', label: '全局演练 dry-run', value: c.globalDryRun ? '已开启' : '关闭' },
+    { key: 'dry', label: '全局演练模式', value: c.globalDryRun ? '已开启' : '关闭' },
     { key: 'min', label: '最小权限执行', value: c.minPrivilegeEnabled ? `是（${c.runAsUser || '—'}）` : '否' }
   ]
 })

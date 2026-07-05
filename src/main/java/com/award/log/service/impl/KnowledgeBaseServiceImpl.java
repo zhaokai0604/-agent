@@ -1,6 +1,7 @@
 package com.award.log.service.impl;
 
 import com.award.log.config.KnowledgeProperties;
+import com.award.log.knowledge.KnowledgeSeedData;
 import com.award.log.service.KnowledgeBaseService;
 import com.award.log.util.KnowledgeDocumentChunker;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -66,6 +67,10 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     private volatile long documentCountCachedAtMs = 0;
     private static final long DOCUMENT_COUNT_TTL_MS = 120_000;
 
+    private volatile List<Map<String, Object>> cachedScrollRows;
+    private volatile long cachedScrollAtMs = 0;
+    private static final long SCROLL_CACHE_TTL_MS = 30_000;
+
     public KnowledgeBaseServiceImpl(KnowledgeProperties knowledgeProperties) {
         this.knowledgeProperties = knowledgeProperties;
     }
@@ -73,6 +78,48 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     @PostConstruct
     void normalizeQdrantEndpoint() {
         qdrantUrl = normalizeQdrantUrl(qdrantUrl);
+    }
+
+    @PostConstruct
+    void scheduleKnowledgeSeed() {
+        if (!knowledgeProperties.isEnabled() || !knowledgeProperties.isSeedOnStartup()) {
+            return;
+        }
+        Thread seedThread = new Thread(() -> {
+            try {
+                Thread.sleep(4000);
+                seedIfEmpty();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                log.debug("[知识库] 启动 seed 跳过: {}", e.getMessage());
+            }
+        }, "kb-seed");
+        seedThread.setDaemon(true);
+        seedThread.start();
+    }
+
+    private void seedIfEmpty() {
+        if (getJson("/collections") == null) {
+            return;
+        }
+        ensureCollection();
+        refreshDocumentCountCache();
+        if (cachedDocumentCount > 0) {
+            return;
+        }
+        int ok = 0;
+        for (KnowledgeSeedData.Entry entry : KnowledgeSeedData.all()) {
+            try {
+                upload(entry.title(), entry.content(), entry.category(), "seed");
+                ok++;
+            } catch (Exception e) {
+                log.warn("[知识库] seed「{}」失败: {}", entry.title(), e.getMessage());
+            }
+        }
+        if (ok > 0) {
+            log.info("[知识库] 冷启动 seed 写入 {} 篇内置 Runbook", ok);
+        }
     }
 
     @Override
@@ -180,8 +227,57 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                 result.add(row);
             }
         }
+        if (result.isEmpty()) {
+            result = keywordSearch(query.trim(), limit);
+        }
         log.info("[知识库] 检索 query={} hits={}", abbreviate(query, 80), result.size());
         return result;
+    }
+
+    /** 向量检索无命中时，按关键词重叠降级检索 */
+    private List<Map<String, Object>> keywordSearch(String query, int limit) {
+        List<String> tokens = tokenize(query);
+        if (tokens.isEmpty()) {
+            return List.of();
+        }
+        try {
+            ensureCollection();
+        } catch (Exception e) {
+            return List.of();
+        }
+        List<Map<String, Object>> scored = new ArrayList<>();
+        for (Map<String, Object> chunk : scrollAllChunksCached()) {
+            String hay = (String.valueOf(chunk.getOrDefault("title", "")) + ' '
+                    + String.valueOf(chunk.getOrDefault("content", ""))).toLowerCase(Locale.ROOT);
+            int hits = 0;
+            for (String t : tokens) {
+                if (hay.contains(t)) {
+                    hits++;
+                }
+            }
+            if (hits <= 0) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>(chunk);
+            row.put("score", hits / (double) tokens.size());
+            scored.add(row);
+        }
+        scored.sort((a, b) -> Double.compare(
+                (Double) b.getOrDefault("score", 0.0),
+                (Double) a.getOrDefault("score", 0.0)));
+        return scored.size() <= limit ? scored : scored.subList(0, limit);
+    }
+
+    private static List<String> tokenize(String text) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(text.toLowerCase(Locale.ROOT).split("\\s+"))
+                .map(String::trim)
+                .filter(s -> s.length() >= 2)
+                .distinct()
+                .limit(12)
+                .toList();
     }
 
     @Override
@@ -223,6 +319,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         status.put("embeddingModel", embeddingModel != null ? "available" : "unavailable");
         status.put("vectorDimensions", knowledgeProperties.getVectorDimensions());
         status.put("embeddingMode", resolveEmbeddingMode());
+        status.put("semanticSearchReady", "spring-ai".equals(resolveEmbeddingMode()));
 
         boolean qdrantReachable = false;
         boolean collectionExists = false;
@@ -265,12 +362,13 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         if (cachedDocumentCount >= 0 && now - documentCountCachedAtMs < DOCUMENT_COUNT_TTL_MS) {
             return cachedDocumentCount;
         }
-        return cachedDocumentCount >= 0 ? cachedDocumentCount : 0L;
+        refreshDocumentCountCache();
+        return Math.max(0L, cachedDocumentCount);
     }
 
     private void refreshDocumentCountCache() {
         try {
-            cachedDocumentCount = scrollAllChunks().stream()
+            cachedDocumentCount = scrollAllChunksCached().stream()
                     .map(r -> String.valueOf(r.getOrDefault("documentId", "")))
                     .filter(s -> !s.isBlank())
                     .distinct()
@@ -284,6 +382,24 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     private void invalidateDocumentCountCache() {
         cachedDocumentCount = -1;
         documentCountCachedAtMs = 0;
+        invalidateScrollCache();
+    }
+
+    private void invalidateScrollCache() {
+        cachedScrollRows = null;
+        cachedScrollAtMs = 0;
+    }
+
+    private List<Map<String, Object>> scrollAllChunksCached() {
+        long now = System.currentTimeMillis();
+        List<Map<String, Object>> hit = cachedScrollRows;
+        if (hit != null && now - cachedScrollAtMs < SCROLL_CACHE_TTL_MS) {
+            return hit;
+        }
+        List<Map<String, Object>> rows = scrollAllChunks();
+        cachedScrollRows = rows;
+        cachedScrollAtMs = now;
+        return rows;
     }
 
     @Override
@@ -296,7 +412,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
             log.warn("[知识库] 集合初始化失败，返回空列表: {}", e.getMessage());
             return Map.of("total", 0, "page", p, "pageSize", size, "list", List.of());
         }
-        List<Map<String, Object>> allChunks = scrollAllChunks();
+        List<Map<String, Object>> allChunks = scrollAllChunksCached();
         Map<String, Map<String, Object>> grouped = new LinkedHashMap<>();
         for (Map<String, Object> chunk : allChunks) {
             String docId = String.valueOf(chunk.getOrDefault("documentId", ""));

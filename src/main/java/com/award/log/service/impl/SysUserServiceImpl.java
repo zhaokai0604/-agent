@@ -72,10 +72,8 @@ public class SysUserServiceImpl implements SysUserService {
         // 加密密码
         user.setPassword(passwordEncoder.encode(user.getPassword()));
 
-        // 设置默认角色为普通用户
-        if (user.getRole() == null) {
-            user.setRole(0);
-        }
+        // 自注册一律为普通用户，忽略客户端传入的 role
+        user.setRole(0);
 
         // 插入用户
         int result = sysUserMapper.insert(user);
@@ -90,15 +88,21 @@ public class SysUserServiceImpl implements SysUserService {
 
     @Override
     public boolean updateUser(SysUser user) {
+        if (user == null || user.getUserId() == null) {
+            return false;
+        }
+        SysUser existing = sysUserMapper.selectById(user.getUserId());
+        if (existing == null) {
+            return false;
+        }
+        // 禁止通过通用更新接口篡改角色（须走 updateUserRole）
+        user.setRole(existing.getRole());
+
         // 如果更新密码，需要加密
         if (user.getPassword() != null && !user.getPassword().isEmpty()) {
             user.setPassword(passwordEncoder.encode(user.getPassword()));
         } else {
-            // 如果不更新密码，需要从数据库中获取原密码
-        SysUser oldUser = sysUserMapper.selectById(user.getUserId());
-        if (oldUser != null) {
-            user.setPassword(oldUser.getPassword());
-        }
+            user.setPassword(existing.getPassword());
         }
 
         int result = sysUserMapper.updateById(user);

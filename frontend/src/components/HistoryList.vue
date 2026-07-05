@@ -1,13 +1,12 @@
 <template>
   <div class="ops-page history-container">
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span class="title">诊断报告</span>
-          <el-button :icon="Refresh" circle @click="fetchHistory" />
-        </div>
+    <OpsPageHeader title="诊断报告" subtitle="历史日志分析任务、状态与结果摘要">
+      <template #actions>
+        <el-button :icon="Refresh" :loading="loading" @click="fetchHistory">刷新</el-button>
       </template>
-      
+    </OpsPageHeader>
+
+    <el-card shadow="never" class="ops-surface-card">
       <!-- 筛选条件 -->
       <div class="filter-container">
         <el-form :inline="true" :model="filterForm" class="filter-form">
@@ -60,7 +59,7 @@
              <template #default="scope">
                 <div v-if="scope.row.summary">
                     <span>总计: {{ scope.row.summary.totalLogs }} 条 | </span>
-                    <span style="color: #F56C6C">异常: {{ scope.row.summary.anomalyCount }} 条</span>
+                    <span class="text-danger">异常: {{ scope.row.summary.anomalyCount }} 条</span>
                 </div>
                 <div v-else>-</div>
              </template>
@@ -209,6 +208,7 @@ import { ref, onMounted, computed } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getHistory, deleteTask, getReport } from '../api'
 import { ElMessage } from 'element-plus'
+import OpsPageHeader from './OpsPageHeader.vue'
 import {
   dispatchOpsAgentPrefill,
   shouldOfferAgentDeepDive,

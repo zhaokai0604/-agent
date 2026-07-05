@@ -1,29 +1,56 @@
 package com.award.log.agent;
 
 import com.award.log.agent.awm.OpsWorkflow;
+import com.award.log.agent.awm.WorkflowExecutionService;
 import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowRetriever;
 import com.award.log.config.SystemConfigRuntimeState;
 import com.award.log.governance.OpsRemediationGate;
-import com.award.log.mcp.tools.*;
+import com.award.log.mcp.WriteToolResultSupport;
+import com.award.log.mcp.tools.CleanTempTool;
+import com.award.log.mcp.tools.CronJobTool;
+import com.award.log.mcp.tools.DiskAnalyzeTool;
+import com.award.log.mcp.tools.DiskTool;
+import com.award.log.mcp.tools.DockerTool;
+import com.award.log.mcp.tools.FirewallTool;
+import com.award.log.mcp.tools.LogAnalysisTool;
+import com.award.log.mcp.tools.LogCleanupTool;
+import com.award.log.mcp.tools.NetworkTool;
+import com.award.log.mcp.tools.OsInsightTool;
+import com.award.log.mcp.tools.PortHealthTool;
+import com.award.log.mcp.tools.ProcessTool;
+import com.award.log.mcp.tools.ServiceRestartTool;
+import com.award.log.mcp.tools.SystemLoadTool;
+import com.award.log.mcp.tools.SystemdTool;
 import com.award.log.security.McpToolSurface;
+import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.RiskLevel;
-import com.award.log.util.OsRuntime;
+import com.award.log.security.signal.SecuritySignalService;
+import com.award.log.util.RuntimePlatform;
+import com.award.log.util.TimeSource;
+import com.award.log.util.TraceIdGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.regex.Pattern;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * 统一自动运维编排：串联全部 MCP 工具，完成感知 → 诊断 →（策略内）修复 → 验证。
- * <p>
- * 与 {@link AssistantOrchestrator} 的关系：本类覆盖「全栈自主巡检」；后者保留磁盘/CPU 等单场景快捷闭环。
+ * Compatibility autonomous orchestrator kept for perception and patrol automation.
  */
 @Slf4j
 @Service
@@ -48,13 +75,17 @@ public class AutonomousOpsOrchestrator {
     private final ServiceRestartCandidateResolver serviceRestartCandidateResolver;
     private final AssistantAuditRecorder auditRecorder;
     private final ObjectMapper objectMapper;
-    private final ExecutorService perceiveExecutor;
     private final OpsIntentRouter opsIntentRouter;
-
     private final OpsPerceptionCache opsPerceptionCache;
     private final RemediationEffectEvaluator remediationEffectEvaluator;
     private final WorkflowRetriever workflowRetriever;
+    private final WorkflowExecutionService workflowExecutionService;
     private final WorkflowInductionService workflowInductionService;
+    private final SecuritySignalService securitySignalService;
+    private final RuntimePlatform runtimePlatform;
+    private final TimeSource timeSource;
+    private final TraceIdGenerator traceIdGenerator;
+    private final ExecutorService perceiveExecutor;
 
     @Value("${agent.autonomous.enabled:true}")
     private boolean enabled;
@@ -78,7 +109,6 @@ public class AutonomousOpsOrchestrator {
     private String healthCheckHost;
 
     private String healthCheckPortsRaw;
-
     private String pingTarget = SystemConfigRuntimeState.DEFAULT_PING_TARGET;
 
     public AutonomousOpsOrchestrator(
@@ -105,8 +135,13 @@ public class AutonomousOpsOrchestrator {
             OpsPerceptionCache opsPerceptionCache,
             RemediationEffectEvaluator remediationEffectEvaluator,
             WorkflowRetriever workflowRetriever,
+            WorkflowExecutionService workflowExecutionService,
             WorkflowInductionService workflowInductionService,
-            SystemConfigRuntimeState systemConfigRuntimeState) {
+            SecuritySignalService securitySignalService,
+            SystemConfigRuntimeState systemConfigRuntimeState,
+            RuntimePlatform runtimePlatform,
+            TimeSource timeSource,
+            TraceIdGenerator traceIdGenerator) {
         this.systemLoadTool = systemLoadTool;
         this.diskTool = diskTool;
         this.diskAnalyzeTool = diskAnalyzeTool;
@@ -130,25 +165,31 @@ public class AutonomousOpsOrchestrator {
         this.opsPerceptionCache = opsPerceptionCache;
         this.remediationEffectEvaluator = remediationEffectEvaluator;
         this.workflowRetriever = workflowRetriever;
+        this.workflowExecutionService = workflowExecutionService;
         this.workflowInductionService = workflowInductionService;
+        this.securitySignalService = securitySignalService;
+        this.runtimePlatform = runtimePlatform;
+        this.timeSource = timeSource;
+        this.traceIdGenerator = traceIdGenerator;
         this.healthCheckPortsRaw = systemConfigRuntimeState.healthCheckPortsCsv();
         this.pingTarget = systemConfigRuntimeState.getPingTarget();
         this.perceiveExecutor = Executors.newFixedThreadPool(
                 Math.min(12, Runtime.getRuntime().availableProcessors() + 2),
-                r -> {
-                    Thread t = new Thread(r, "autonomous-ops-perceive");
-                    t.setDaemon(true);
-                    return t;
+                runnable -> {
+                    Thread thread = new Thread(runnable, "autonomous-ops-perceive");
+                    thread.setDaemon(true);
+                    return thread;
                 });
     }
 
-    public record RunResult(String markdown, String traceId, Map<String, Object> report) {}
+    public record RunResult(String markdown, String traceId, Map<String, Object> report) {
+    }
 
     public boolean supports(String userMessage) {
         if (!enabled || userMessage == null || userMessage.isBlank()) {
             return false;
         }
-        return opsIntentRouter.resolve(userMessage) == OpsIntentRouter.Playbook.FULL_AUTONOMOUS;
+        return opsIntentRouter.resolve(userMessage) == OpsIntentRouter.Playbook.PATROL_AUTOMATION;
     }
 
     public void applyHotConfig(String healthCheckPortsRaw, String pingTarget) {
@@ -160,11 +201,8 @@ public class AutonomousOpsOrchestrator {
         }
     }
 
-    /**
-     * 统一感知 API：只读采集 + 规则诊断（带 TTL 缓存）。
-     */
     public Map<String, Object> buildPerceptionView(boolean useCache, McpToolSurface surface) {
-        long now = System.currentTimeMillis();
+        long now = timeSource.currentTimeMillis();
         if (useCache) {
             Map<String, Object> cached = opsPerceptionCache.getIfFresh();
             if (cached != null) {
@@ -178,12 +216,13 @@ public class AutonomousOpsOrchestrator {
             Map<String, Object> view = new LinkedHashMap<>();
             view.put("readOnly", surface == McpToolSurface.READ_ONLY);
             view.put("snapshot", perception.toMap());
+            view.put("securitySignals", securitySignalService.summary());
             view.put("findings", findings.stream().map(Finding::toMap).toList());
             view.put("cachedAtMs", now);
             opsPerceptionCache.put(Map.copyOf(view));
             return view;
         } catch (Exception e) {
-            log.warn("感知快照采集失败: {}", e.getMessage());
+            log.warn("perception snapshot collection failed: {}", e.getMessage());
             return Map.of("error", e.getMessage(), "cachedAtMs", now);
         }
     }
@@ -197,50 +236,48 @@ public class AutonomousOpsOrchestrator {
         return runInternal(userMessage, surface, intentRisk, force);
     }
 
-    /** 供 REST / 巡检回调：无用户话术时也可触发全栈闭环 */
     public RunResult runScheduled(McpToolSurface surface, boolean forceRemediate) {
         return runInternal("[scheduled-autonomous-ops]", surface, RiskLevel.LOW, forceRemediate);
     }
 
-    private RunResult runInternal(String userMessage, McpToolSurface surface, RiskLevel intentRisk,
+    private RunResult runInternal(String userMessage,
+                                  McpToolSurface surface,
+                                  RiskLevel intentRisk,
                                   boolean forceRemediate) {
-        long t0 = System.currentTimeMillis();
-        String traceId = UUID.randomUUID().toString();
+        long startedAt = timeSource.currentTimeMillis();
+        String traceId = traceIdGenerator.nextId();
         List<Map<String, Object>> steps = auditRecorder.newSteps();
-        auditRecorder.addCot(steps, 1, "接收", userMessage);
+        auditRecorder.addCot(steps, 1, "receive", userMessage);
 
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("traceId", traceId);
         report.put("readOnlySurface", surface == McpToolSurface.READ_ONLY);
 
-        StringBuilder md = new StringBuilder();
-        md.append("> **traceId:** `").append(traceId).append("`\n\n");
-        md.append("## 自主运维闭环（全工具融合）\n\n");
-        md.append("流程：**感知** → **诊断** → **处置** → **验证**\n\n");
+        StringBuilder md = new StringBuilder("## Autonomous Ops Report\n\n");
+        md.append(OpsReportFormat.traceIdBlock(traceId));
 
         if (surface == McpToolSurface.READ_ONLY) {
             forceRemediate = false;
-            md.append("> 当前为 **只读工具面**，仅执行观测与诊断，跳过写操作。\n\n");
+            md.append("> Current session is read-only. Only collection and diagnosis will run.\n\n");
         }
 
         try {
-            auditRecorder.addCot(steps, 2, "感知", "并行调用全部只读 MCP 工具");
+            auditRecorder.addCot(steps, 2, "perceive", "collect host and MCP signals");
             PerceptionSnapshot perception = perceiveAll(steps);
             report.put("perception", perception.toMap());
 
-            md.append("### 1. 环境感知\n\n");
-            md.append(perception.toMarkdownSummary()).append("\n");
-
-            auditRecorder.addCot(steps, 3, "推理", "规则引擎聚合 findings");
             List<Finding> findings = diagnose(perception);
-            report.put("findings", findings.stream().map(Finding::toMap).collect(Collectors.toList()));
-            md.append("### 2. 问题诊断\n\n");
+            report.put("findings", findings.stream().map(Finding::toMap).toList());
+
+            md.append(buildExecutiveSummary(perception, findings)).append("\n");
+            md.append("### Perception\n\n");
+            md.append(perception.toMarkdownSummary()).append("\n");
+            md.append("### Diagnosis\n\n");
             if (findings.isEmpty()) {
-                md.append("- **未发现需处置项**，主机指标在正常阈值内。\n\n");
+                md.append("- No actionable issues found.\n\n");
             } else {
-                for (Finding f : findings) {
-                    md.append("- **").append(f.severity()).append("** · ")
-                            .append(f.title()).append(" — ").append(f.detail()).append("\n");
+                for (Finding finding : findings) {
+                    md.append(OpsReportFormat.formatFindingLine(finding.severity(), finding.title(), finding.detail()));
                 }
                 md.append("\n");
             }
@@ -248,180 +285,190 @@ public class AutonomousOpsOrchestrator {
             appendAwmGuidance(md, steps, findings, userMessage);
 
             boolean anyRemediated = false;
-            Map<String, Object> metricsBeforeRemediation = null;
+            Map<String, Object> metricsBefore = null;
             RemediationSummary remediationSummary = null;
             if (!findings.isEmpty() && surface != McpToolSurface.READ_ONLY) {
-                metricsBeforeRemediation = remediationEffectEvaluator.captureMetrics();
-                auditRecorder.addCot(steps, 4, "安全校验", "治理准入 + OpsTrustPolicy 风险分档");
-                auditRecorder.addCot(steps, 5, "执行", "按策略执行预览或自动修复");
-                remediationSummary = remediate(findings, forceRemediate, steps, perception);
+                metricsBefore = remediationEffectEvaluator.captureMetrics();
+                remediationSummary = remediate(traceId, userMessage, surface, findings, forceRemediate, steps, perception);
                 report.put("remediation", remediationSummary.toMap());
                 anyRemediated = remediationSummary.executedCount() > 0;
                 if (anyRemediated) {
                     opsPerceptionCache.invalidate();
                 }
-                md.append("### 3. 自动处置\n\n");
-                md.append(remediationSummary.toMarkdown()).append("\n");
+                md.append("### Remediation\n\n").append(remediationSummary.toMarkdown()).append("\n");
             } else if (!findings.isEmpty()) {
-                md.append("### 3. 自动处置\n\n");
-                md.append("- 已跳过（只读面或策略限制）。可说 **「执行修复」** 或切换完整工具面后重试。\n\n");
+                md.append("### Remediation\n\n").append(OpsReportFormat.readOnlySkippedFooter());
             } else {
-                md.append("### 3. 自动处置\n\n");
-                md.append("- 无需处置。\n\n");
+                md.append("### Remediation\n\n- No remediation needed.\n\n");
             }
 
-            auditRecorder.addCot(steps, 6, "验证", "复采磁盘与负载");
+            auditRecorder.addCot(steps, 3, "verify", "re-sample load and disk");
             String verifyLoad = safeCall(() -> systemLoadTool.checkSystemLoad(), "SystemLoadTool", steps);
             String verifyDisk = safeCall(() -> diskTool.checkDiskUsage(), "DiskTool", steps);
             report.put("verify", Map.of("load", truncate(verifyLoad, 500), "disk", truncate(verifyDisk, 500)));
-            md.append("### 4. 验证\n\n");
+            md.append("### Verification\n\n");
             md.append(summarizeDisk(verifyDisk)).append("\n");
             md.append(summarizeLoad(verifyLoad)).append("\n\n");
 
-            if (anyRemediated && metricsBeforeRemediation != null && remediationSummary != null) {
+            if (anyRemediated && metricsBefore != null && remediationSummary != null) {
                 Map<String, Object> effect = remediationEffectEvaluator.evaluate(
-                        metricsBeforeRemediation,
+                        metricsBefore,
                         remediationEffectEvaluator.captureMetrics(),
                         remediationSummary.executedCount());
                 report.put("remediationEffect", effect);
-                auditRecorder.addStep(steps, "effect",
-                        String.format("自愈评分 %s/100（%s）", effect.get("healingScore"), effect.get("verdict")));
-                md.append("### 自愈效果评估\n\n");
-                md.append(String.format("- 评分：**%s/100**（%s）\n", effect.get("healingScore"), effect.get("verdict")));
-                md.append(String.format("- 磁盘使用率变化：%.2f%%\n", effect.get("diskUsageDeltaPct")));
-                md.append(String.format("- CPU 使用率变化：%.2f%%\n\n", effect.get("cpuUsageDeltaPct")));
+                md.append("### Effect\n\n");
+                md.append(String.format(Locale.ROOT, "- Healing score: **%s/100** (%s)\n",
+                        effect.get("healingScore"), effect.get("verdict")));
+                md.append(String.format(Locale.ROOT, "- Disk delta: %.2f%%\n", asDouble(effect.get("diskUsageDeltaPct"))));
+                md.append(String.format(Locale.ROOT, "- CPU delta: %.2f%%\n\n", asDouble(effect.get("cpuUsageDeltaPct"))));
             }
 
-            if (!anyRemediated && !findings.isEmpty() && surface != McpToolSurface.READ_ONLY) {
-                md.append("---\n\n");
-                md.append("部分项为 **预览/待确认**。回复 **「执行修复」** 可在策略允许范围内继续自动处置。\n");
+            boolean hasActionable = findings.stream().anyMatch(f -> OpsReportFormat.isActionableSeverity(f.severity()));
+            if (!anyRemediated && hasActionable && surface != McpToolSurface.READ_ONLY) {
+                md.append(OpsReportFormat.previewPendingFooter()).append("\n");
             } else if (anyRemediated) {
-                md.append("---\n\n");
-                md.append("已在策略允许范围内完成自动处置；完整步骤见 traceId 审计。\n");
+                md.append(OpsReportFormat.executedFooter()).append("\n");
             }
 
             String status = anyRemediated ? "REMEDIATED" : (findings.isEmpty() ? "HEALTHY" : "DIAGNOSED");
             auditRecorder.record(traceId, userMessage, intentRisk.name(), status,
                     "AutonomousOpsOrchestrator", true,
-                    md.substring(0, Math.min(500, md.length())), steps, System.currentTimeMillis() - t0);
-            AwmContext awmCtx = resolveAwmContext(findings);
+                    truncate(md.toString(), 500), steps, timeSource.currentTimeMillis() - startedAt);
+            AwmContext context = resolveAwmContext(findings);
             workflowInductionService.afterSuccessfulRun(
-                    traceId,
-                    userMessage,
-                    status,
-                    true,
-                    steps,
-                    awmCtx.domain(),
-                    awmCtx.kinds());
+                    traceId, userMessage, status, true, steps, context.domain(), context.kinds());
             return new RunResult(md.toString(), traceId, report);
-
         } catch (Exception e) {
-            log.error("自主运维编排失败 traceId={}", traceId, e);
+            log.error("autonomous ops failed traceId={}", traceId, e);
             auditRecorder.addStep(steps, "error", e.getMessage());
-            md.append("\n\n**编排失败:** ").append(e.getMessage());
+            md.append("\n**Failure:** ").append(e.getMessage());
             auditRecorder.record(traceId, userMessage, intentRisk.name(), "ERROR",
-                    "AutonomousOpsOrchestrator", false, e.getMessage(), steps, System.currentTimeMillis() - t0);
+                    "AutonomousOpsOrchestrator", false, e.getMessage(),
+                    steps, timeSource.currentTimeMillis() - startedAt);
             report.put("error", e.getMessage());
             return new RunResult(md.toString(), traceId, report);
         }
     }
 
     private PerceptionSnapshot perceiveAll(List<Map<String, Object>> steps) throws InterruptedException {
-        Map<String, String> raw = new ConcurrentHashMap<>();
+        Map<String, String> raw = new LinkedHashMap<>();
         List<Callable<Void>> tasks = List.of(
-                () -> { raw.put("load", safeCall(() -> systemLoadTool.checkSystemLoad(), "SystemLoadTool", steps)); return null; },
-                () -> { raw.put("disk", safeCall(() -> diskTool.checkDiskUsage(), "DiskTool", steps)); return null; },
-                () -> { raw.put("diskAnalyze", safeCall(() -> diskAnalyzeTool.analyzeDiskPressure(defaultLogRoot(), true, 10),
-                        "DiskAnalyzeTool", steps)); return null; },
-                () -> { raw.put("process", safeCall(() -> processTool.listProcesses(5.0, 5.0), "ProcessTool", steps)); return null; },
-                () -> { raw.put("systemdFailed", safeCall(() -> systemdTool.listFailedSystemdUnits(), "SystemdTool", steps)); return null; },
-                () -> { raw.put("network", safeCall(() -> networkTool.diagnoseNetwork(pingTarget, "ping", 3),
-                        "NetworkTool", steps)); return null; },
-                () -> { raw.put("firewall", safeCall(() -> firewallTool.checkFirewallStatus(), "FirewallTool", steps)); return null; },
-                () -> { raw.put("cron", safeCall(() -> cronJobTool.listCronJobs("user"), "CronJobTool", steps)); return null; },
-                () -> { raw.put("docker", safeCall(() -> dockerTool.listDockerContainers(false), "DockerTool", steps)); return null; },
-                () -> { raw.put("journal", safeCall(() -> osInsightTool.queryJournalLogs(30, 80, false),
-                        "OsInsightTool", steps)); return null; },
-                () -> { raw.put("logAnalysis", safeCall(() -> logAnalysisTool.analyzeLogs(defaultLogRoot(), 80),
-                        "LogAnalysisTool", steps)); return null; }
+                () -> putRaw(raw, "load", () -> systemLoadTool.checkSystemLoad(), "SystemLoadTool", steps),
+                () -> putRaw(raw, "disk", () -> diskTool.checkDiskUsage(), "DiskTool", steps),
+                () -> putRaw(raw, "diskAnalyze", () -> diskAnalyzeTool.analyzeDiskPressure(defaultLogRoot(), true, 10), "DiskAnalyzeTool", steps),
+                () -> putRaw(raw, "process", () -> processTool.listProcesses(5.0, 5.0), "ProcessTool", steps),
+                () -> putRaw(raw, "systemdFailed", () -> systemdTool.listFailedSystemdUnits(), "SystemdTool", steps),
+                () -> putRaw(raw, "network", () -> networkTool.diagnoseNetwork(pingTarget, "ping", 3), "NetworkTool", steps),
+                () -> putRaw(raw, "firewall", () -> firewallTool.checkFirewallStatus(), "FirewallTool", steps),
+                () -> putRaw(raw, "cron", () -> cronJobTool.listCronJobs("user"), "CronJobTool", steps),
+                () -> putRaw(raw, "docker", () -> dockerTool.listDockerContainers(false), "DockerTool", steps),
+                () -> putRaw(raw, "journal", () -> osInsightTool.queryJournalLogs(30, 80, false), "OsInsightTool", steps),
+                () -> putRaw(raw, "logAnalysis", () -> logAnalysisTool.analyzeLogs(defaultLogRoot(), 80), "LogAnalysisTool", steps)
         );
 
-        List<Callable<Void>> portTasks = parseHealthPorts().stream()
-                .map(port -> (Callable<Void>) () -> {
-                    String key = "port_" + port;
-                    raw.put(key, safeCall(() -> portHealthTool.checkPortConnectivity(healthCheckHost, port, 3000),
-                            "PortHealthTool:" + port, steps));
-                    return null;
-                })
-                .toList();
-
         List<Callable<Void>> all = new ArrayList<>(tasks);
-        all.addAll(portTasks);
+        for (Integer port : parseHealthPorts()) {
+            all.add(() -> putRaw(raw, "port_" + port,
+                    () -> portHealthTool.checkPortConnectivity(healthCheckHost, port, 3000),
+                    "PortHealthTool:" + port, steps));
+        }
+
         List<Future<Void>> futures = perceiveExecutor.invokeAll(all, 90, TimeUnit.SECONDS);
-        for (Future<Void> f : futures) {
+        for (Future<Void> future : futures) {
             try {
-                f.get(1, TimeUnit.SECONDS);
+                future.get(1, TimeUnit.SECONDS);
             } catch (Exception e) {
-                log.debug("感知任务结束: {}", e.getMessage());
+                log.debug("perception task finished with warning: {}", e.getMessage());
             }
         }
-        return PerceptionSnapshot.fromRaw(raw, objectMapper);
+        return PerceptionSnapshot.fromRaw(raw, objectMapper, runtimePlatform.isWindows());
     }
 
-    private List<Finding> diagnose(PerceptionSnapshot p) {
+    private Void putRaw(Map<String, String> raw,
+                        String key,
+                        Callable<String> call,
+                        String label,
+                        List<Map<String, Object>> steps) {
+        raw.put(key, safeCall(call, label, steps));
+        return null;
+    }
+
+    private List<Finding> diagnose(PerceptionSnapshot perception) {
         List<Finding> out = new ArrayList<>();
-        if (p.maxDiskUsePercent() >= diskPressurePercent) {
-            out.add(new Finding("HIGH", "磁盘压力",
-                    String.format(Locale.ROOT, "最高分区使用率约 %.0f%%（阈值 %.0f%%）",
-                            p.maxDiskUsePercent(), diskPressurePercent),
+        if (perception.maxDiskUsePercent() >= diskPressurePercent) {
+            out.add(new Finding("HIGH", "disk pressure",
+                    String.format(Locale.ROOT, "highest filesystem usage is about %.0f%%", perception.maxDiskUsePercent()),
                     "DISK_PRESSURE"));
         }
-        if (p.cpuUsagePercent() >= cpuWarnPercent) {
-            out.add(new Finding("HIGH", "CPU 负载偏高",
-                    String.format(Locale.ROOT, "CPU 约 %.1f%%", p.cpuUsagePercent()), "CPU_HIGH"));
+        if (perception.cpuUsagePercent() >= cpuWarnPercent) {
+            out.add(new Finding("HIGH", "CPU high",
+                    String.format(Locale.ROOT, "CPU is about %.1f%%", perception.cpuUsagePercent()),
+                    "CPU_HIGH"));
         }
-        if (p.memUsagePercent() >= memWarnPercent) {
-            out.add(new Finding("MEDIUM", "内存压力",
-                    String.format(Locale.ROOT, "内存约 %.1f%%", p.memUsagePercent()), "MEM_HIGH"));
+        if (perception.memUsagePercent() >= memWarnPercent) {
+            out.add(new Finding("MEDIUM", "memory high",
+                    String.format(Locale.ROOT, "memory is about %.1f%%", perception.memUsagePercent()),
+                    "MEM_HIGH"));
         }
-        if (p.hasFailedUnits()) {
-            out.add(new Finding("HIGH", "异常服务单元",
-                    "systemctl --failed 或 Windows 非 Running 服务存在", "FAILED_SERVICE"));
+        if (perception.hasFailedUnits()) {
+            String detail = OpsReportFormat.serviceIssueDetailPrefix();
+            if (!perception.failedUnitNames().isEmpty()) {
+                detail += ": " + OpsReportFormat.formatNameSample(perception.failedUnitNames(), 5);
+            }
+            out.add(new Finding("HIGH", OpsReportFormat.serviceIssueLabel(), detail, "FAILED_SERVICE"));
         }
-        for (Integer port : p.unreachablePorts()) {
-            out.add(new Finding("MEDIUM", "端口不可达",
-                    healthCheckHost + ":" + port + " TCP 连接失败", "PORT_DOWN"));
+        for (Integer port : perception.unreachablePorts()) {
+            out.add(new Finding(
+                    OpsReportFormat.portFindingSeverity(),
+                    OpsReportFormat.portFindingTitle(),
+                    OpsReportFormat.portFindingDetail(healthCheckHost, port),
+                    "PORT_DOWN"));
         }
-        if (p.networkPacketLossPercent() >= 50) {
-            out.add(new Finding("MEDIUM", "网络丢包",
-                    String.format(Locale.ROOT, "ping %s 丢包约 %.0f%%", pingTarget, p.networkPacketLossPercent()),
+        if (perception.networkPacketLossPercent() >= 50) {
+            out.add(new Finding("MEDIUM", "network loss",
+                    String.format(Locale.ROOT, "ping to %s lost about %.0f%% packets", pingTarget, perception.networkPacketLossPercent()),
                     "NETWORK_LOSS"));
         }
-        if (p.logAnomalyHint()) {
-            out.add(new Finding("MEDIUM", "日志异常线索",
-                    "近期 journal / LogAnalysis 含 error 或异常聚类", "LOG_ANOMALY"));
+        if (perception.logAnomalyHint()) {
+            out.add(new Finding("MEDIUM", "log anomaly", "journal or log analysis contains error-like signals", "LOG_ANOMALY"));
         }
-        if (p.dockerIssueHint()) {
-            out.add(new Finding("LOW", "容器状态需关注",
-                    "Docker 列表含非 running 状态", "DOCKER_STATE"));
+        if (perception.dockerIssueHint()) {
+            out.add(new Finding("LOW", "container state", "docker list contains non-running containers", "DOCKER_STATE"));
         }
-        if (p.zombieProcessHint()) {
-            out.add(new Finding("MEDIUM", "僵尸进程",
-                    "进程列表含 Z 状态条目，建议排查父进程回收", "ZOMBIE_PROCESS"));
+        if (perception.zombieProcessHint()) {
+            out.add(new Finding("MEDIUM", "zombie process", "process list contains zombie entries", "ZOMBIE_PROCESS"));
+        }
+        if (securitySignalService.hasThreatSignals(3_600_000L)) {
+            out.add(new Finding("HIGH", "security threat",
+                    securitySignalService.buildThreatSummaryText(securitySignalService.summary(3_600_000L)),
+                    "SECURITY_THREAT"));
         }
         return out;
     }
 
-    private RemediationSummary remediate(List<Finding> findings, boolean forceRemediate,
-                                       List<Map<String, Object>> steps,
-                                       PerceptionSnapshot perception) throws Exception {
+    private RemediationSummary remediate(String traceId,
+                                         String userMessage,
+                                         McpToolSurface surface,
+                                         List<Finding> findings,
+                                         boolean forceRemediate,
+                                         List<Map<String, Object>> steps,
+                                         PerceptionSnapshot perception) throws Exception {
         List<String> actions = new ArrayList<>();
         int executed = 0;
         int previewed = 0;
         int skipped = 0;
 
+        AwmExecutionSummary awmSummary = executeBestAwmWorkflow(
+                traceId, userMessage, surface, findings, forceRemediate, steps, perception);
+        actions.addAll(awmSummary.actions());
+        executed += awmSummary.executedCount();
+        previewed += awmSummary.previewCount();
+        skipped += awmSummary.skippedCount();
+
+        Set<String> coveredKinds = new LinkedHashSet<>(awmSummary.coveredKinds());
         Set<String> kinds = findings.stream().map(Finding::kind).collect(Collectors.toSet());
-        boolean needDiskRelief = kinds.contains("DISK_PRESSURE") || kinds.contains("LOG_ANOMALY");
+        boolean needDiskRelief = (kinds.contains("DISK_PRESSURE") || kinds.contains("LOG_ANOMALY"))
+                && !coveredKinds.contains("DISK_PRESSURE");
 
         if (needDiskRelief) {
             RemediationOutcome temp = remediateTempClean(forceRemediate, steps);
@@ -437,99 +484,205 @@ public class AutonomousOpsOrchestrator {
             skipped += log.skipped() ? 1 : 0;
         }
 
-        if (kinds.contains("CPU_HIGH")) {
-            String svc = serviceRestartCandidateResolver.pickDefaultFromAllowlist();
-            if (svc != null) {
-                RemediationOutcome restart = remediateServiceRestart(svc, forceRemediate, steps);
+        if (kinds.contains("CPU_HIGH") && !coveredKinds.contains("CPU_HIGH")) {
+            String service = serviceRestartCandidateResolver.pickDefaultFromAllowlist();
+            if (service != null) {
+                RemediationOutcome restart = remediateServiceRestart(service, forceRemediate, steps);
                 actions.add(restart.message());
                 executed += restart.executed() ? 1 : 0;
                 previewed += restart.previewed() ? 1 : 0;
                 skipped += restart.skipped() ? 1 : 0;
             } else {
-                actions.add("- CPU 偏高：无治理允许的白名单服务可重启，建议人工排查高占用进程。");
+                actions.add("- CPU issue detected but no allowlisted restart candidate exists.");
                 skipped++;
             }
         }
 
-        if (kinds.contains("FAILED_SERVICE")) {
-            String svc = serviceRestartCandidateResolver.pickFromFailedUnits(perception.failedUnitNames());
-            if (svc != null) {
-                RemediationOutcome restart = remediateServiceRestart(svc, forceRemediate, steps);
+        if (kinds.contains("FAILED_SERVICE") && !coveredKinds.contains("FAILED_SERVICE")) {
+            String service = serviceRestartCandidateResolver.pickFromFailedUnits(perception.failedUnitNames());
+            if (service != null) {
+                RemediationOutcome restart = remediateServiceRestart(service, forceRemediate, steps);
                 actions.add(restart.message());
                 executed += restart.executed() ? 1 : 0;
                 previewed += restart.previewed() ? 1 : 0;
                 skipped += restart.skipped() ? 1 : 0;
             } else {
-                actions.add("- 失败 unit：未命中可重启白名单或治理禁止，请结合 SystemdTool 输出人工确认。");
+                actions.add("- Failed service detected but no allowlisted service matched.");
                 skipped++;
             }
         }
 
         if (actions.isEmpty()) {
-            actions.add("- 无匹配的自动修复动作。");
+            actions.add("- No matching remediation action.");
         }
         return new RemediationSummary(actions, executed, previewed, skipped);
     }
 
+    private AwmExecutionSummary executeBestAwmWorkflow(String traceId,
+                                                       String userMessage,
+                                                       McpToolSurface surface,
+                                                       List<Finding> findings,
+                                                       boolean forceRemediate,
+                                                       List<Map<String, Object>> steps,
+                                                       PerceptionSnapshot perception) {
+        if (findings == null || findings.isEmpty()) {
+            return AwmExecutionSummary.empty();
+        }
+        AwmContext context = resolveAwmContext(findings);
+        OpsWorkflow workflow = workflowRetriever.bestMatch(context.domain(), context.kinds(), userMessage);
+        if (workflow == null) {
+            return AwmExecutionSummary.empty();
+        }
+        auditRecorder.addStep(steps, "workflow", "matched workflow=" + workflow.workflowId());
+        WorkflowExecutionService.WorkflowRunResult run = workflowExecutionService.execute(
+                workflow,
+                new WorkflowExecutionService.ExecutionRequest(
+                        traceId,
+                        userMessage,
+                        surface,
+                        forceRemediate,
+                        steps,
+                        buildAwmVariables(context.domain(), userMessage, forceRemediate, perception)));
+
+        if (run.handled()) {
+            workflowRetriever.recordHit(workflow);
+            Set<String> coveredKinds = (run.anyExecuted() || run.anyPreviewed())
+                    ? new LinkedHashSet<>(context.kinds())
+                    : Set.of();
+            return new AwmExecutionSummary(
+                    List.of("**AWM**\n" + run.toMarkdown()),
+                    coveredKinds,
+                    run.anyExecuted() ? 1 : 0,
+                    run.anyPreviewed() ? 1 : 0,
+                    0);
+        }
+        return new AwmExecutionSummary(
+                List.of("**AWM preview**\n" + run.toMarkdown()),
+                Set.of(),
+                0,
+                0,
+                1);
+    }
+
+    private Map<String, Object> buildAwmVariables(String domain,
+                                                  String userMessage,
+                                                  boolean forceRemediate,
+                                                  PerceptionSnapshot perception) {
+        Map<String, Object> variables = new LinkedHashMap<>();
+        variables.put("dryRun", true);
+        if ("disk".equals(domain)) {
+            variables.put("log-path", defaultLogRoot());
+            variables.put("temp-path", defaultTempRoot());
+            variables.put("log-days", logCleanDays);
+            variables.put("temp-days", forceRemediate ? 0 : tempCleanDays);
+            return variables;
+        }
+        String serviceName = serviceRestartCandidateResolver.pickFromFailedUnits(perception.failedUnitNames());
+        if (serviceName == null || serviceName.isBlank()) {
+            serviceName = serviceRestartCandidateResolver.pickFromUserMessage(userMessage);
+        }
+        if (serviceName == null || serviceName.isBlank()) {
+            serviceName = serviceRestartCandidateResolver.pickDefaultFromAllowlist();
+        }
+        if (serviceName != null && !serviceName.isBlank()) {
+            variables.put("service-name", serviceName);
+        }
+        return variables;
+    }
+
     private RemediationOutcome remediateTempClean(boolean force, List<Map<String, Object>> steps) throws Exception {
-        String path = OsRuntime.isWindows() ? "C:\\Windows\\Temp" : "/tmp";
-        String instruction = "AutonomousOps CleanTempTool path=" + path;
-        OpsRemediationGate.RemediationDecision decision =
-                opsRemediationGate.decideTempCleanup(path, tempCleanDays, force, instruction);
-        String preview = cleanTempTool.cleanTempFiles(path, tempCleanDays, true, false);
-        int found = countFromTool(preview, "filesFound");
-        if (found == 0) {
-            return RemediationOutcome.skipped("- 临时目录：无可清理文件。");
+        int days = force ? 0 : tempCleanDays;
+        String scanJson = cleanTempTool.scanAllTempJunk(days);
+        JsonNode scanRoot = objectMapper.readTree(scanJson);
+        if (!scanRoot.path("success").asBoolean(false)) {
+            return RemediationOutcome.skipped("- Temp scan failed: " + scanRoot.path("error").asText("unknown error"));
         }
-        if (decision.forbidden()) {
-            return RemediationOutcome.skipped("- 临时目录：" + decision.reason());
+        JsonNode scanData = unwrapToolData(scanRoot);
+        int total = scanData != null ? scanData.path("totalFilesFound").asInt(0) : 0;
+        if (total == 0) {
+            return RemediationOutcome.skipped("- Temp scan found no removable files.");
         }
-        if (decision.mayPreview()) {
-            return RemediationOutcome.previewed("- 临时目录：预览 **" + found + "** 个文件，待确认。（" + decision.reason() + "）");
+        if (!force) {
+            return RemediationOutcome.previewed("- Temp cleanup preview found **" + total + "** files pending confirmation.");
         }
-        String exec = cleanTempTool.cleanTempFiles(path, tempCleanDays, false, true);
-        int deleted = countFromTool(exec, "filesDeleted");
-        auditRecorder.addStep(steps, "execute", "CleanTemp deleted=" + deleted);
-        return RemediationOutcome.executed("- 临时目录：已删除 **" + deleted + "** 个文件。");
+        int deletedTotal = 0;
+        if (scanData != null && scanData.has("locations")) {
+            for (JsonNode location : scanData.get("locations")) {
+                int found = location.path("filesFound").asInt(0);
+                if (found <= 0) {
+                    continue;
+                }
+                String path = location.path("path").asText("");
+                OpsRemediationGate.RemediationDecision decision =
+                        opsRemediationGate.decideTempCleanup(path, days, true, "AutonomousOps CleanTempTool path=" + path);
+                if (decision.forbidden() || decision.mayPreview()) {
+                    continue;
+                }
+                String exec = cleanTempTool.cleanTempFiles(path, days, false, true);
+                deletedTotal += countFromTool(exec, "filesDeleted");
+            }
+        }
+        auditRecorder.addStep(steps, "execute", "CleanTemp deleted=" + deletedTotal);
+        if (deletedTotal <= 0) {
+            return RemediationOutcome.skipped("- Temp cleanup found candidates but nothing was deleted.");
+        }
+        return RemediationOutcome.executed("- Temp cleanup deleted **" + deletedTotal + "** files.");
+    }
+
+    private JsonNode unwrapToolData(JsonNode toolRoot) throws Exception {
+        JsonNode dataNode = toolRoot.get("data");
+        if (dataNode == null) {
+            return null;
+        }
+        if (dataNode.isTextual()) {
+            return objectMapper.readTree(dataNode.asText());
+        }
+        return dataNode;
     }
 
     private RemediationOutcome remediateLogClean(boolean force, List<Map<String, Object>> steps) throws Exception {
         String path = defaultLogRoot();
-        String instruction = "AutonomousOps LogCleanupTool path=" + path;
         OpsRemediationGate.RemediationDecision decision =
-                opsRemediationGate.decideLogCleanup(path, logCleanDays, force, instruction);
+                opsRemediationGate.decideLogCleanup(path, logCleanDays, force, "AutonomousOps LogCleanupTool path=" + path);
         String preview = logCleanupTool.cleanupOldLogs(path, logCleanDays, true, false);
         int found = countFromTool(preview, "deletableCount", "filesFound");
         if (found == 0) {
-            return RemediationOutcome.skipped("- 日志目录：无符合策略的陈旧文件。");
+            return RemediationOutcome.skipped("- Log cleanup found no old files.");
         }
         if (decision.forbidden()) {
-            return RemediationOutcome.skipped("- 日志目录：" + decision.reason());
+            return RemediationOutcome.skipped("- Log cleanup blocked: " + decision.reason());
         }
         if (decision.mayPreview()) {
-            return RemediationOutcome.previewed("- 日志目录：预览 **" + found + "** 个可删文件，待确认。（" + decision.reason() + "）");
+            return RemediationOutcome.previewed("- Log cleanup preview found **" + found + "** files.");
         }
         String exec = logCleanupTool.cleanupOldLogs(path, logCleanDays, false, true);
         int deleted = countFromTool(exec, "filesDeleted");
         auditRecorder.addStep(steps, "execute", "LogCleanup deleted=" + deleted);
-        return RemediationOutcome.executed("- 日志目录：已删除 **" + deleted + "** 个文件。");
+        if (!WriteToolResultSupport.isConfirmedRealWrite(exec)) {
+            return RemediationOutcome.skipped("- Log cleanup execution failed: " + WriteToolResultSupport.errorMessage(exec));
+        }
+        return RemediationOutcome.executed("- Log cleanup deleted **" + deleted + "** files.");
     }
 
-    private RemediationOutcome remediateServiceRestart(String serviceName, boolean force,
+    private RemediationOutcome remediateServiceRestart(String serviceName,
+                                                       boolean force,
                                                        List<Map<String, Object>> steps) throws Exception {
-        String instruction = "AutonomousOps ServiceRestartTool " + serviceName;
         OpsRemediationGate.RemediationDecision decision =
-                opsRemediationGate.decideServiceRestart(serviceName, force, instruction);
+                opsRemediationGate.decideServiceRestart(serviceName, force, "AutonomousOps ServiceRestartTool " + serviceName);
         if (decision.forbidden()) {
-            return RemediationOutcome.skipped("- 服务 **" + serviceName + "**：" + decision.reason());
+            return RemediationOutcome.skipped("- Service **" + serviceName + "** blocked: " + decision.reason());
         }
         if (decision.mayPreview()) {
             serviceRestartTool.restartService(serviceName, true, false);
-            return RemediationOutcome.previewed("- 服务 **" + serviceName + "**：已预览，待确认后重启。（" + decision.reason() + "）");
+            return RemediationOutcome.previewed("- Service **" + serviceName + "** preview completed.");
         }
-        serviceRestartTool.restartService(serviceName, false, true);
+        String exec = serviceRestartTool.restartService(serviceName, false, true);
         auditRecorder.addStep(steps, "execute", "ServiceRestart " + serviceName);
-        return RemediationOutcome.executed("- 服务 **" + serviceName + "**：已执行重启。");
+        if (!WriteToolResultSupport.isConfirmedRealWrite(exec)) {
+            return RemediationOutcome.skipped("- Service **" + serviceName + "** restart failed: "
+                    + WriteToolResultSupport.errorMessage(exec));
+        }
+        return RemediationOutcome.executed("- Service **" + serviceName + "** restarted.");
     }
 
     private List<Integer> parseHealthPorts() {
@@ -537,11 +690,11 @@ public class AutonomousOpsOrchestrator {
             return List.of(8080);
         }
         List<Integer> ports = new ArrayList<>();
-        for (String p : healthCheckPortsRaw.split(",")) {
+        for (String part : healthCheckPortsRaw.split(",")) {
             try {
-                int v = Integer.parseInt(p.trim());
-                if (v > 0 && v <= 65535) {
-                    ports.add(v);
+                int value = Integer.parseInt(part.trim());
+                if (value > 0 && value <= 65535) {
+                    ports.add(value);
                 }
             } catch (NumberFormatException ignored) {
             }
@@ -559,30 +712,24 @@ public class AutonomousOpsOrchestrator {
 
     private String buildRemediationPlan(List<Finding> findings) {
         StringBuilder sb = new StringBuilder();
-        int i = 1;
-        for (Finding f : findings) {
-            sb.append(i++).append(". **").append(f.title()).append("** — ").append(f.detail()).append("\n");
-            String action = planActionFor(f);
+        int index = 1;
+        for (Finding finding : findings) {
+            sb.append(index++).append(". **").append(finding.title()).append("** - ").append(finding.detail()).append("\n");
+            String action = planActionFor(finding);
             if (action != null) {
-                sb.append("   - 建议动作：").append(action).append("\n");
+                sb.append("   - Suggested action: ").append(action).append("\n");
             }
         }
-        sb.append("\n> 以上为基于当前采集的处置建议。回复 **「确认执行」** 将在策略允许范围内自动落地；否则仅预览。\n");
+        sb.append("\n> Reply **").append(OpsReportFormat.CONFIRM_EXECUTE_HINT)
+                .append("** to continue with allowed write actions.\n");
         return sb.toString();
     }
 
-    private static String planActionFor(Finding f) {
-        if (f == null || f.kind() == null) {
+    private static String planActionFor(Finding finding) {
+        if (finding == null || finding.kind() == null) {
             return null;
         }
-        return switch (f.kind()) {
-            case "DISK_PRESSURE" -> "扫描热点目录 → 预览清理临时/陈旧日志 → 验证磁盘使用率";
-            case "CPU_HIGH" -> "定位高 CPU 进程 → 评估是否重启白名单内服务";
-            case "LOG_ANOMALY" -> "分析异常日志 → 预览日志目录清理";
-            case "MEM_HIGH" -> "列出内存占用进程 → 建议限流或扩容";
-            case "FAILED_SERVICE" -> "检查失败单元 → 预览重启（白名单内）";
-            default -> "调用对应 MCP 工具验证后按策略处置";
-        };
+        return OpsReportFormat.planActionForKind(finding.kind());
     }
 
     private String safeCall(Callable<String> call, String label, List<Map<String, Object>> steps) {
@@ -591,14 +738,18 @@ public class AutonomousOpsOrchestrator {
             auditRecorder.addStep(steps, "perceive", label + ": " + truncate(result, 400));
             return result;
         } catch (Exception e) {
-            log.warn("{} 感知失败: {}", label, e.getMessage());
+            log.warn("{} collection failed: {}", label, e.getMessage());
             auditRecorder.addStep(steps, "perceive-error", label + ": " + e.getMessage());
             return "{\"success\":false,\"error\":\"" + e.getMessage().replace("\"", "'") + "\"}";
         }
     }
 
-    private static String defaultLogRoot() {
-        return OsRuntime.isWindows() ? "C:\\Windows\\Logs" : "/var/log";
+    private String defaultLogRoot() {
+        return runtimePlatform.defaultLogRoot();
+    }
+
+    private String defaultTempRoot() {
+        return runtimePlatform.defaultTempRoot();
     }
 
     private int countFromTool(String toolJson, String... keys) {
@@ -606,9 +757,9 @@ public class AutonomousOpsOrchestrator {
         if (data == null) {
             return 0;
         }
-        for (String k : keys) {
-            if (data.has(k)) {
-                return data.get(k).asInt(0);
+        for (String key : keys) {
+            if (data.has(key)) {
+                return data.get(key).asInt(0);
             }
         }
         return 0;
@@ -636,9 +787,9 @@ public class AutonomousOpsOrchestrator {
     private String summarizeDisk(String diskToolJson) {
         double max = extractMaxDiskUsePercent(diskToolJson);
         if (max > 0) {
-            return "- 验证：分区最高使用率约 **" + String.format(Locale.ROOT, "%.0f", max) + "%**";
+            return "- Disk verification: highest usage about `" + String.format(Locale.ROOT, "%.0f", max) + "%`";
         }
-        return "- 验证：已复采磁盘（见工具输出）";
+        return "- Disk verification completed.";
     }
 
     private String summarizeLoad(String loadJson) {
@@ -647,11 +798,11 @@ public class AutonomousOpsOrchestrator {
             double cpu = data.path("cpuUsagePercent").asDouble(-1);
             double mem = data.path("memUsagePercent").asDouble(-1);
             if (cpu >= 0) {
-                return "- 验证：CPU **" + String.format(Locale.ROOT, "%.1f", cpu)
-                        + "%**，内存 **" + String.format(Locale.ROOT, "%.1f", mem) + "%**";
+                return "- Load verification: CPU `" + String.format(Locale.ROOT, "%.1f", cpu)
+                        + "%`, memory `" + String.format(Locale.ROOT, "%.1f", mem) + "%`";
             }
         }
-        return "- 验证：已复采系统负载";
+        return "- Load verification completed.";
     }
 
     private double extractMaxDiskUsePercent(String diskToolJson) {
@@ -663,13 +814,10 @@ public class AutonomousOpsOrchestrator {
             }
             if (data.isArray()) {
                 double max = 0;
-                for (JsonNode n : data) {
-                    String use = n.path("usage").asText("");
+                for (JsonNode node : data) {
+                    String use = diskPercentText(node);
                     if (use.endsWith("%")) {
-                        try {
-                            max = Math.max(max, Double.parseDouble(use.replace("%", "").trim()));
-                        } catch (NumberFormatException ignored) {
-                        }
+                        max = Math.max(max, Double.parseDouble(use.replace("%", "").trim()));
                     }
                 }
                 return max;
@@ -679,14 +827,43 @@ public class AutonomousOpsOrchestrator {
         return 0;
     }
 
-    private static String truncate(String s, int max) {
-        if (s == null) {
+    private static String diskPercentText(JsonNode node) {
+        if (node == null) {
             return "";
         }
-        return s.length() <= max ? s : s.substring(0, max) + "...";
+        String usePercent = node.path("usePercent").asText("");
+        if (!usePercent.isBlank()) {
+            return usePercent;
+        }
+        return node.path("usage").asText("");
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= max ? value : value.substring(0, max) + "...";
+    }
+
+    private static double asDouble(Object value) {
+        return value instanceof Number n ? n.doubleValue() : 0.0;
+    }
+
+    private static double asDouble(JsonNode value) {
+        return value != null && value.isNumber() ? value.doubleValue() : 0.0;
     }
 
     private record AwmContext(String domain, List<String> kinds) {
+    }
+
+    private record AwmExecutionSummary(List<String> actions,
+                                       Set<String> coveredKinds,
+                                       int executedCount,
+                                       int previewCount,
+                                       int skippedCount) {
+        static AwmExecutionSummary empty() {
+            return new AwmExecutionSummary(List.of(), Set.of(), 0, 0, 0);
+        }
     }
 
     private AwmContext resolveAwmContext(List<Finding> findings) {
@@ -706,22 +883,43 @@ public class AutonomousOpsOrchestrator {
         return new AwmContext("disk", List.of("DISK_PRESSURE"));
     }
 
-    private void appendAwmGuidance(StringBuilder md, List<Map<String, Object>> steps,
-                                   List<Finding> findings, String userMessage) {
+    private static String buildExecutiveSummary(PerceptionSnapshot perception, List<Finding> findings) {
+        List<Finding> actionable = findings.stream()
+                .filter(finding -> OpsReportFormat.isActionableSeverity(finding.severity()))
+                .toList();
+        List<String> titles = actionable.stream().map(Finding::title).toList();
+        long infoCount = findings.stream().filter(finding -> "INFO".equalsIgnoreCase(finding.severity())).count();
+        return OpsReportFormat.conclusionSection(
+                perception.cpuUsagePercent(),
+                perception.memUsagePercent(),
+                perception.maxDiskUsePercent(),
+                actionable.size(),
+                (int) infoCount,
+                titles);
+    }
+
+    private void appendAwmGuidance(StringBuilder md,
+                                   List<Map<String, Object>> steps,
+                                   List<Finding> findings,
+                                   String userMessage) {
         if (findings == null || findings.isEmpty()) {
             return;
         }
-        AwmContext ctx = resolveAwmContext(findings);
-        List<OpsWorkflow> workflows = workflowRetriever.retrieve(ctx.domain(), ctx.kinds(), userMessage, 2);
+        boolean hasActionable = findings.stream().anyMatch(f -> OpsReportFormat.isActionableSeverity(f.severity()));
+        if (!hasActionable) {
+            return;
+        }
+        AwmContext context = resolveAwmContext(findings);
+        List<OpsWorkflow> workflows = workflowRetriever.retrieve(context.domain(), context.kinds(), userMessage, 2);
         if (workflows.isEmpty()) {
             return;
         }
-        md.append("### 处置套路（AWM）\n\n");
-        for (OpsWorkflow wf : workflows) {
-            auditRecorder.addStep(steps, "workflow", "命中 AWM workflow=" + wf.workflowId());
-            md.append(wf.toMarkdownBrief()).append("\n\n");
+        md.append(OpsReportFormat.awmSectionHeader());
+        for (OpsWorkflow workflow : workflows) {
+            auditRecorder.addStep(steps, "workflow", "matched workflow=" + workflow.workflowId());
+            md.append(workflow.toMarkdownBrief()).append("\n\n");
         }
-        md.append("> 环境不一致时应偏离上述套路；写操作仍受治理准入与 OpsTrustPolicy 约束。\n\n");
+        md.append(OpsReportFormat.awmSectionFooter());
     }
 
     private record Finding(String severity, String title, String detail, String kind) {
@@ -731,23 +929,26 @@ public class AutonomousOpsOrchestrator {
     }
 
     private record RemediationOutcome(boolean executed, boolean previewed, boolean skipped, String message) {
-        static RemediationOutcome executed(String msg) {
-            return new RemediationOutcome(true, false, false, msg);
+        static RemediationOutcome executed(String message) {
+            return new RemediationOutcome(true, false, false, message);
         }
 
-        static RemediationOutcome previewed(String msg) {
-            return new RemediationOutcome(false, true, false, msg);
+        static RemediationOutcome previewed(String message) {
+            return new RemediationOutcome(false, true, false, message);
         }
 
-        static RemediationOutcome skipped(String msg) {
-            return new RemediationOutcome(false, false, true, msg);
+        static RemediationOutcome skipped(String message) {
+            return new RemediationOutcome(false, false, true, message);
         }
     }
 
     private record RemediationSummary(List<String> actions, int executedCount, int previewCount, int skippedCount) {
         Map<String, Object> toMap() {
-            return Map.of("actions", actions, "executedCount", executedCount,
-                    "previewCount", previewCount, "skippedCount", skippedCount);
+            return Map.of(
+                    "actions", actions,
+                    "executedCount", executedCount,
+                    "previewCount", previewCount,
+                    "skippedCount", skippedCount);
         }
 
         String toMarkdown() {
@@ -768,25 +969,31 @@ public class AutonomousOpsOrchestrator {
         private final boolean zombieProcessHint;
         private final Map<String, String> raw;
 
-        private PerceptionSnapshot(double maxDiskUsePercent, double cpuUsagePercent, double memUsagePercent,
-                                   boolean hasFailedUnits, List<String> failedUnitNames,
+        private PerceptionSnapshot(double maxDiskUsePercent,
+                                   double cpuUsagePercent,
+                                   double memUsagePercent,
+                                   boolean hasFailedUnits,
+                                   List<String> failedUnitNames,
                                    List<Integer> unreachablePorts,
-                                   double networkPacketLossPercent, boolean logAnomalyHint,
-                                   boolean dockerIssueHint, boolean zombieProcessHint, Map<String, String> raw) {
+                                   double networkPacketLossPercent,
+                                   boolean logAnomalyHint,
+                                   boolean dockerIssueHint,
+                                   boolean zombieProcessHint,
+                                   Map<String, String> raw) {
             this.maxDiskUsePercent = maxDiskUsePercent;
             this.cpuUsagePercent = cpuUsagePercent;
             this.memUsagePercent = memUsagePercent;
             this.hasFailedUnits = hasFailedUnits;
             this.failedUnitNames = failedUnitNames != null ? List.copyOf(failedUnitNames) : List.of();
-            this.unreachablePorts = unreachablePorts;
+            this.unreachablePorts = unreachablePorts != null ? List.copyOf(unreachablePorts) : List.of();
             this.networkPacketLossPercent = networkPacketLossPercent;
             this.logAnomalyHint = logAnomalyHint;
             this.dockerIssueHint = dockerIssueHint;
             this.zombieProcessHint = zombieProcessHint;
-            this.raw = raw;
+            this.raw = raw != null ? Map.copyOf(raw) : Map.of();
         }
 
-        static PerceptionSnapshot fromRaw(Map<String, String> raw, ObjectMapper mapper) {
+        static PerceptionSnapshot fromRaw(Map<String, String> raw, ObjectMapper mapper, boolean isWindows) {
             double maxDisk = 0;
             double cpu = 0;
             double mem = 0;
@@ -803,13 +1010,10 @@ public class AutonomousOpsOrchestrator {
                     JsonNode root = mapper.readTree(raw.get("disk"));
                     JsonNode data = unwrapData(root, mapper);
                     if (data.isArray()) {
-                        for (JsonNode n : data) {
-                            String use = n.path("usage").asText("");
+                        for (JsonNode node : data) {
+                            String use = diskPercentText(node);
                             if (use.endsWith("%")) {
-                                try {
-                                    maxDisk = Math.max(maxDisk, Double.parseDouble(use.replace("%", "").trim()));
-                                } catch (NumberFormatException ignored) {
-                                }
+                                maxDisk = Math.max(maxDisk, Double.parseDouble(use.replace("%", "").trim()));
                             }
                         }
                     }
@@ -822,49 +1026,43 @@ public class AutonomousOpsOrchestrator {
                 if (raw.containsKey("systemdFailed")) {
                     String systemdJson = raw.get("systemdFailed");
                     failedUnitNames = ServiceRestartCandidateResolver.parseFailedUnitsFromToolJson(systemdJson, mapper);
-                    String out = systemdJson.toLowerCase(Locale.ROOT);
-                    failedUnits = !failedUnitNames.isEmpty() || out.contains("failed") || out.contains("stopped")
-                            || (out.contains("success") && out.contains("\"output\"") && !out.contains("0 failed"));
+                    failedUnits = !failedUnitNames.isEmpty();
+                    if (!failedUnits && !isWindows) {
+                        String text = systemdJson.toLowerCase(Locale.ROOT);
+                        failedUnits = text.contains("failed") && !text.contains("0 loaded");
+                    }
                 }
                 if (raw.containsKey("network")) {
                     JsonNode data = unwrapData(mapper.readTree(raw.get("network")), mapper);
-                    if (data.isObject()) {
-                        packetLoss = data.path("packetLossPercent").asDouble(0);
-                    } else if (data.isTextual()) {
-                        JsonNode inner = mapper.readTree(data.asText());
-                        packetLoss = inner.path("packetLossPercent").asDouble(0);
-                    }
+                    packetLoss = data.path("packetLossPercent").asDouble(0);
                 }
                 String journal = raw.getOrDefault("journal", "");
-                String logA = raw.getOrDefault("logAnalysis", "");
-                logHint = containsErrorHint(journal) || containsErrorHint(logA);
+                String logAnalysis = raw.getOrDefault("logAnalysis", "");
+                logHint = containsErrorHint(journal) || containsErrorHint(logAnalysis);
                 String docker = raw.getOrDefault("docker", "").toLowerCase(Locale.ROOT);
                 dockerHint = docker.contains("exited") || docker.contains("dead") || docker.contains("restarting");
                 String processBlob = raw.getOrDefault("process", "").toLowerCase(Locale.ROOT);
-                zombieHint = processBlob.contains(" z ") || processBlob.contains("\"z\"")
-                        || processBlob.contains("zombie") || processBlob.contains("状态 z");
-                for (Map.Entry<String, String> e : raw.entrySet()) {
-                    if (!e.getKey().startsWith("port_")) {
+                zombieHint = processBlob.contains(" z ") || processBlob.contains("\"z\"") || processBlob.contains("zombie");
+                for (Map.Entry<String, String> entry : raw.entrySet()) {
+                    if (!entry.getKey().startsWith("port_")) {
                         continue;
                     }
-                    try {
-                        JsonNode data = unwrapData(mapper.readTree(e.getValue()), mapper);
-                        boolean reachable = data.path("reachable").asBoolean(true);
-                        if (!reachable) {
-                            badPorts.add(Integer.parseInt(e.getKey().substring(5)));
-                        }
-                    } catch (Exception ignored) {
+                    JsonNode data = unwrapData(mapper.readTree(entry.getValue()), mapper);
+                    boolean reachable = data.path("reachable").asBoolean(true);
+                    if (!reachable) {
+                        badPorts.add(Integer.parseInt(entry.getKey().substring(5)));
                     }
                 }
             } catch (Exception e) {
-                log.debug("解析感知快照失败: {}", e.getMessage());
+                log.debug("parse perception snapshot failed: {}", e.getMessage());
             }
 
-            return new PerceptionSnapshot(maxDisk, cpu, mem, failedUnits, failedUnitNames, badPorts, packetLoss, logHint, dockerHint,
-                    zombieHint, raw);
+            return new PerceptionSnapshot(
+                    maxDisk, cpu, mem, failedUnits, failedUnitNames, badPorts,
+                    packetLoss, logHint, dockerHint, zombieHint, raw);
         }
 
-        private static JsonNode unwrapData(JsonNode root, ObjectMapper mapper) throws com.fasterxml.jackson.core.JsonProcessingException {
+        private static JsonNode unwrapData(JsonNode root, ObjectMapper mapper) throws Exception {
             JsonNode data = root.path("data");
             if (data.isTextual()) {
                 return mapper.readTree(data.asText());
@@ -876,8 +1074,8 @@ public class AutonomousOpsOrchestrator {
             if (blob == null) {
                 return false;
             }
-            String l = blob.toLowerCase(Locale.ROOT);
-            return l.contains("error") || l.contains("fatal") || l.contains("exception") || l.contains("failed");
+            String text = blob.toLowerCase(Locale.ROOT);
+            return text.contains("error") || text.contains("fatal") || text.contains("exception") || text.contains("failed");
         }
 
         double maxDiskUsePercent() {
@@ -921,37 +1119,34 @@ public class AutonomousOpsOrchestrator {
         }
 
         Map<String, Object> toMap() {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("maxDiskUsePercent", maxDiskUsePercent);
-            m.put("cpuUsagePercent", cpuUsagePercent);
-            m.put("memUsagePercent", memUsagePercent);
-            m.put("hasFailedUnits", hasFailedUnits);
-            m.put("failedUnitNames", failedUnitNames);
-            m.put("unreachablePorts", unreachablePorts);
-            m.put("networkPacketLossPercent", networkPacketLossPercent);
-            m.put("logAnomalyHint", logAnomalyHint);
-            m.put("dockerIssueHint", dockerIssueHint);
-            m.put("zombieProcessHint", zombieProcessHint);
-            m.put("toolsInvoked", raw.keySet());
-            return m;
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("maxDiskUsePercent", maxDiskUsePercent);
+            out.put("cpuUsagePercent", cpuUsagePercent);
+            out.put("memUsagePercent", memUsagePercent);
+            out.put("hasFailedUnits", hasFailedUnits);
+            out.put("failedUnitNames", failedUnitNames);
+            out.put("unreachablePorts", unreachablePorts);
+            out.put("networkPacketLossPercent", networkPacketLossPercent);
+            out.put("logAnomalyHint", logAnomalyHint);
+            out.put("dockerIssueHint", dockerIssueHint);
+            out.put("zombieProcessHint", zombieProcessHint);
+            out.put("toolsInvoked", raw.keySet());
+            return out;
         }
 
         String toMarkdownSummary() {
             StringBuilder sb = new StringBuilder();
-            sb.append("| 维度 | 摘要 |\n| --- | --- |\n");
-            sb.append("| 负载 | CPU ").append(String.format(Locale.ROOT, "%.1f", cpuUsagePercent))
-                    .append("% / 内存 ").append(String.format(Locale.ROOT, "%.1f", memUsagePercent)).append("% |\n");
-            sb.append("| 磁盘 | 最高使用率约 ").append(String.format(Locale.ROOT, "%.0f", maxDiskUsePercent)).append("% |\n");
-            sb.append("| 服务 | ").append(hasFailedUnits
-                    ? "存在失败/停止单元" + (failedUnitNames.isEmpty() ? "" : "：" + String.join(", ", failedUnitNames))
-                    : "未发现 failed 单元").append(" |\n");
-            sb.append("| 网络 | ping 丢包约 ").append(String.format(Locale.ROOT, "%.0f", networkPacketLossPercent)).append("% |\n");
-            sb.append("| 端口 | ").append(unreachablePorts.isEmpty() ? "监测端口均可达"
-                    : "不可达: " + unreachablePorts).append(" |\n");
-            sb.append("| 日志 | ").append(logAnomalyHint ? "含 error/异常线索" : "未见明显 error 聚集").append(" |\n");
-            sb.append("| Docker | ").append(dockerIssueHint ? "存在非健康容器" : "正常或未安装").append(" |\n");
-            sb.append("| 僵尸进程 | ").append(zombieProcessHint ? "检测到 Z 状态" : "未检测到").append(" |\n");
-            sb.append("| 工具 | 并行调用 **").append(raw.size()).append("** 项 MCP 采集 |\n");
+            sb.append(OpsReportFormat.tableHeaderLine("Dimension", "Summary"));
+            sb.append("| Load | CPU `").append(String.format(Locale.ROOT, "%.1f", cpuUsagePercent))
+                    .append("%` / Memory `").append(String.format(Locale.ROOT, "%.1f", memUsagePercent)).append("%` |\n");
+            sb.append("| Disk | Highest usage `").append(String.format(Locale.ROOT, "%.0f", maxDiskUsePercent)).append("%` |\n");
+            sb.append("| Service | ").append(OpsReportFormat.servicePerceptionSummary(hasFailedUnits, failedUnitNames)).append(" |\n");
+            sb.append("| Network | Packet loss ").append(String.format(Locale.ROOT, "%.0f", networkPacketLossPercent)).append("% |\n");
+            sb.append("| Ports | ").append(OpsReportFormat.portProbeSummary(unreachablePorts)).append(" |\n");
+            sb.append("| Logs | ").append(logAnomalyHint ? "error-like signals found" : "no strong error signal").append(" |\n");
+            sb.append("| Docker | ").append(dockerIssueHint ? "non-running containers exist" : "healthy or not installed").append(" |\n");
+            sb.append("| Zombie | ").append(zombieProcessHint ? "detected" : "not detected").append(" |\n");
+            sb.append("| Tools | `").append(raw.size()).append("` MCP calls |\n");
             return sb.toString();
         }
     }

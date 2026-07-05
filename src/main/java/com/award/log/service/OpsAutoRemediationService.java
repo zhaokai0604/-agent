@@ -7,8 +7,11 @@ import com.award.log.mcp.tools.CleanTempTool;
 import com.award.log.mcp.tools.LogCleanupTool;
 import com.award.log.mcp.tools.ServiceRestartTool;
 import com.award.log.security.AgenticRiskScoreEngine;
+import com.award.log.security.HttpAuditSubject;
 import com.award.log.security.McpInvocationSecurityGate;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.security.RiskLevel;
+import com.award.log.trace.TraceService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -60,6 +63,8 @@ public class OpsAutoRemediationService {
     private final AgenticRiskScoreEngine agenticRiskScoreEngine;
     private final McpInvocationSecurityGate mcpInvocationSecurityGate;
     private final OpsGovernanceService opsGovernanceService;
+    private final OpsAuditTraceService opsAuditTraceService;
+    private final HttpAuditSubject httpAuditSubject;
 
     @Autowired(required = false)
     private PerformanceWebSocketHandler performanceWebSocketHandler;
@@ -133,6 +138,8 @@ public class OpsAutoRemediationService {
     private volatile String pendingSummary;
     private volatile Map<String, Object> pendingCorrelationDigest;
     private volatile int pendingFindingsCount;
+    private volatile String pendingClaimedBy;
+    private volatile long pendingClaimedAtMs;
 
     /** 最近一轮巡检：各 finding 的修复车道（AUTO / CONFIRM / MIXED / MANUAL / NONE） */
     private volatile List<Map<String, Object>> lastRemediationCoverage = List.of();
@@ -147,7 +154,9 @@ public class OpsAutoRemediationService {
             ObjectMapper objectMapper,
             AgenticRiskScoreEngine agenticRiskScoreEngine,
             McpInvocationSecurityGate mcpInvocationSecurityGate,
-            OpsGovernanceService opsGovernanceService) {
+            OpsGovernanceService opsGovernanceService,
+            OpsAuditTraceService opsAuditTraceService,
+            HttpAuditSubject httpAuditSubject) {
         this.cleanTempTool = cleanTempTool;
         this.logCleanupTool = logCleanupTool;
         this.serviceRestartTool = serviceRestartTool;
@@ -156,6 +165,8 @@ public class OpsAutoRemediationService {
         this.agenticRiskScoreEngine = agenticRiskScoreEngine;
         this.mcpInvocationSecurityGate = mcpInvocationSecurityGate;
         this.opsGovernanceService = opsGovernanceService;
+        this.opsAuditTraceService = opsAuditTraceService;
+        this.httpAuditSubject = httpAuditSubject;
     }
 
     public void applyHotConfig(boolean enabled,
@@ -186,15 +197,33 @@ public class OpsAutoRemediationService {
      * 当前是否有待用户确认的方案（与 MCP 控制台「确认执行」口令一致）。
      */
     public Map<String, Object> getPendingProposalView() {
+        return getPendingProposalView(currentRequester());
+    }
+
+    public Map<String, Object> getPendingProposalView(String requester) {
         synchronized (pendingLock) {
-            return buildPendingViewLocked();
+            return buildPendingViewLocked(normalizeRequester(requester));
         }
     }
 
     /** 调用方已持有 {@link #pendingLock} 时使用，避免嵌套同步死锁。 */
-    private Map<String, Object> buildPendingViewLocked() {
-        if (pendingProposalId == null || System.currentTimeMillis() > pendingExpiresAtMs) {
+    private Map<String, Object> buildPendingViewLocked(String requester) {
+        if (pendingProposalId == null) {
             return Map.of("hasPending", false);
+        }
+        if (System.currentTimeMillis() > pendingExpiresAtMs) {
+            clearPendingLocked();
+            return Map.of("hasPending", false);
+        }
+        if (pendingClaimedBy != null && !pendingClaimedBy.equals(requester)) {
+            return Map.of(
+                    "hasPending", false,
+                    "claimedByOther", true,
+                    "expiresAtMs", pendingExpiresAtMs);
+        }
+        if (pendingClaimedBy == null) {
+            pendingClaimedBy = requester;
+            pendingClaimedAtMs = System.currentTimeMillis();
         }
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("hasPending", true);
@@ -205,7 +234,22 @@ public class OpsAutoRemediationService {
         m.put("correlationDigest", pendingCorrelationDigest != null ? pendingCorrelationDigest : Map.of());
         m.put("findingsCount", pendingFindingsCount);
         m.put("riskPatrolAutoMax", riskPatrolAutoMax);
+        m.put("claimOwner", pendingClaimedBy);
         m.put("confirmHint", "调用确认接口时 confirmCode 须为「" + CONFIRM_CODE + "」");
+        return m;
+    }
+
+    private Map<String, Object> buildPendingBroadcastLocked() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("hasPending", true);
+        m.put("proposalId", pendingProposalId);
+        m.put("expiresAtMs", pendingExpiresAtMs);
+        m.put("summary", pendingSummary != null ? pendingSummary : "");
+        m.put("steps", pendingSteps != null ? List.copyOf(pendingSteps) : List.of());
+        m.put("correlationDigest", pendingCorrelationDigest != null ? pendingCorrelationDigest : Map.of());
+        m.put("findingsCount", pendingFindingsCount);
+        m.put("riskPatrolAutoMax", riskPatrolAutoMax);
+        m.put("claimOwner", pendingClaimedBy);
         return m;
     }
 
@@ -216,16 +260,21 @@ public class OpsAutoRemediationService {
      * 工作台助手「继续处理」等价确认：内部使用标准确认码，避免用户重复输入口令。
      */
     public Map<String, Object> confirmPendingFromAssistant(String proposalId) {
-        return confirmPending(proposalId, CONFIRM_CODE);
+        return confirmPending(proposalId, CONFIRM_CODE, currentRequester());
     }
 
     public Map<String, Object> confirmPending(String proposalId, String confirmCode) {
+        return confirmPending(proposalId, confirmCode, currentRequester());
+    }
+
+    public Map<String, Object> confirmPending(String proposalId, String confirmCode, String requester) {
         if (proposalId == null || proposalId.isBlank()) {
             return Map.of("success", false, "error", "proposalId 不能为空");
         }
         if (!CONFIRM_CODE.equals(confirmCode)) {
             return Map.of("success", false, "error", "确认码不正确，请输入「" + CONFIRM_CODE + "」");
         }
+        String normalizedRequester = normalizeRequester(requester);
         List<Map<String, Object>> stepsCopy;
         Map<String, Object> digestCopy;
         int findingsCountSnap;
@@ -236,6 +285,13 @@ public class OpsAutoRemediationService {
             if (System.currentTimeMillis() > pendingExpiresAtMs) {
                 clearPendingLocked();
                 return Map.of("success", false, "error", "方案已过期，请等待下一轮巡检");
+            }
+            if (pendingClaimedBy == null) {
+                pendingClaimedBy = normalizedRequester;
+                pendingClaimedAtMs = System.currentTimeMillis();
+            }
+            if (!normalizedRequester.equals(pendingClaimedBy)) {
+                return Map.of("success", false, "error", "该巡检待办已被其他操作者接管");
             }
             stepsCopy = pendingSteps != null ? List.copyOf(pendingSteps) : List.of();
             digestCopy = pendingCorrelationDigest != null
@@ -355,12 +411,14 @@ public class OpsAutoRemediationService {
             pendingSummary = (summaryPrefix != null && !summaryPrefix.isBlank() ? summaryPrefix : "") + core;
             pendingCorrelationDigest = correlationDigest(correlation);
             pendingFindingsCount = findings == null ? 0 : findings.size();
+            pendingClaimedBy = null;
+            pendingClaimedAtMs = 0L;
         }
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("channel", "patrol_remediation_pending");
         envelope.put("timestamp", ts);
         synchronized (pendingLock) {
-            envelope.putAll(buildPendingViewLocked());
+            envelope.putAll(buildPendingBroadcastLocked());
         }
         broadcastJson(envelope);
         log.info("[自动修复] 已生成待确认方案 proposalId={} 步骤数={}", newId, planSteps.size());
@@ -374,6 +432,8 @@ public class OpsAutoRemediationService {
         pendingSummary = null;
         pendingCorrelationDigest = null;
         pendingFindingsCount = 0;
+        pendingClaimedBy = null;
+        pendingClaimedAtMs = 0L;
     }
 
     private record RiskSplit(List<Map<String, Object>> low, List<Map<String, Object>> high) {
@@ -625,6 +685,8 @@ public class OpsAutoRemediationService {
             Map<String, Object> correlation,
             int findingsCount,
             String source) {
+        long startTime = System.currentTimeMillis();
+        String traceId = UUID.randomUUID().toString();
         List<Map<String, Object>> actions = new ArrayList<>();
         for (Map<String, Object> step : steps) {
             if (opsGovernanceService.isEnabled()) {
@@ -678,23 +740,89 @@ public class OpsAutoRemediationService {
             }
         }
         double disk = correlation == null ? -1.0 : asDouble(correlation.get("diskUsagePct"));
-        finalizeSummary(ts, disk, findingsCount, actions, source);
+        persistExecutionAudit(traceId, steps, correlation, findingsCount, source, actions, startTime);
+        finalizeSummary(ts, disk, findingsCount, actions, source, traceId);
         broadcastRemediationDone(ts, lastSummary);
         Map<String, Object> res = new LinkedHashMap<>();
         res.put("timestamp", ts);
+        res.put("traceId", traceId);
         res.put("actions", actions);
         return res;
     }
 
     private void finalizeSummary(String ts, double disk, int findingsCount,
-                                 Object actions, String source) {
+                                 Object actions, String source, String traceId) {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("timestamp", ts);
         summary.put("diskUsagePct", disk);
         summary.put("findingsCount", findingsCount);
         summary.put("actions", actions);
         summary.put("source", source);
+        summary.put("traceId", traceId);
         lastSummary = summary;
+    }
+
+    private void persistExecutionAudit(
+            String traceId,
+            List<Map<String, Object>> planSteps,
+            Map<String, Object> correlation,
+            int findingsCount,
+            String source,
+            List<Map<String, Object>> actions,
+            long startTime) {
+        List<Map<String, Object>> traceSteps = new ArrayList<>();
+        traceSteps.add(TraceService.cotStep(1, "接收", "接收巡检修复执行请求，source=" + source));
+        traceSteps.add(TraceService.cotStep(2, "感知", "关联快照: " + truncate(String.valueOf(correlation), 1200)));
+        traceSteps.add(TraceService.cotStep(3, "推理",
+                "计划步骤数=" + (planSteps == null ? 0 : planSteps.size()) + "，findingsCount=" + findingsCount));
+        traceSteps.add(TraceService.cotStep(4, "执行", summarizeActions(actions)));
+        traceSteps.add(TraceService.step("plan", truncate(String.valueOf(planSteps), 2000)));
+        traceSteps.add(TraceService.step("actions", truncate(String.valueOf(actions), 2000)));
+
+        boolean allOk = actions.stream().allMatch(action -> Boolean.TRUE.equals(action.get("success")));
+        String securityOutcome = allOk ? "PASS" : "EXECUTION_PARTIAL";
+        opsAuditTraceService.save(
+                traceId,
+                "PATROL",
+                "[PATROL_REMEDIATION] " + source,
+                riskLevelForSteps(planSteps, source).name(),
+                securityOutcome,
+                "PatrolRemediation",
+                allOk,
+                summarizeActions(actions),
+                traceSteps,
+                System.currentTimeMillis() - startTime,
+                currentRequester(),
+                opsPathPolicy.getPolicyVersion());
+    }
+
+    private RiskLevel riskLevelForSteps(List<Map<String, Object>> planSteps, String source) {
+        double maxRisk = 0.0;
+        if (planSteps != null) {
+            for (Map<String, Object> step : planSteps) {
+                Object riskScore = step.get("riskScore");
+                if (riskScore instanceof Number number) {
+                    maxRisk = Math.max(maxRisk, number.doubleValue());
+                }
+            }
+        }
+        if (maxRisk >= agenticRiskScoreEngine.getConfirmMax()) {
+            return RiskLevel.HIGH;
+        }
+        if (maxRisk >= riskPatrolAutoMax || "USER_CONFIRMED".equals(source)) {
+            return RiskLevel.MEDIUM;
+        }
+        return RiskLevel.LOW;
+    }
+
+    private static String summarizeActions(List<Map<String, Object>> actions) {
+        int successCount = 0;
+        for (Map<String, Object> action : actions) {
+            if (Boolean.TRUE.equals(action.get("success"))) {
+                successCount++;
+            }
+        }
+        return "actions=" + actions.size() + ", success=" + successCount + ", detail=" + truncate(String.valueOf(actions), 1200);
     }
 
     private void broadcastRemediationDone(String ts, Map<String, Object> summary) {
@@ -867,6 +995,17 @@ public class OpsAutoRemediationService {
         m.put("success", ok);
         m.put("detail", detail);
         return m;
+    }
+
+    private String currentRequester() {
+        return normalizeRequester(httpAuditSubject.currentOperatorId());
+    }
+
+    private static String normalizeRequester(String requester) {
+        if (requester == null || requester.isBlank()) {
+            return "anonymous";
+        }
+        return requester.trim();
     }
 
     private boolean cooldownExpired(String key, long nowMs) {

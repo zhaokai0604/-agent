@@ -1,5 +1,7 @@
 package com.award.log.agent.awm;
 
+import com.award.log.util.RuntimePlatform;
+import com.award.log.util.TraceIdGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -9,12 +11,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * AWM 诱导：MVP 采用 rule-based 从成功轨迹提取工具序列（论文 §B 与 LM 诱导可后续扩展）。
+ * AWM induction service. Current MVP is rule-based with optional LLM fallback.
  */
 @Slf4j
 @Service
@@ -27,13 +29,12 @@ public class WorkflowInductionService {
     private final TrajectoryEvaluator trajectoryEvaluator;
     private final OpsExperienceLoader experienceLoader;
     private final LlmWorkflowInductor llmWorkflowInductor;
+    private final RuntimePlatform runtimePlatform;
+    private final TraceIdGenerator traceIdGenerator;
 
     @org.springframework.beans.factory.annotation.Value("${agent.awm.llm-induction-enabled:false}")
     private boolean llmInductionEnabled;
 
-    /**
-     * 编排器运行结束后在线尝试：匹配已有 workflow 则累计 utility；否则 rule-based 新建。
-     */
     public void afterSuccessfulRun(
             String traceId,
             String userMessage,
@@ -70,36 +71,71 @@ public class WorkflowInductionService {
         OpsWorkflow matched = findByToolSequence(domainTag, toolSeq);
         if (matched != null) {
             workflowMemoryService.recordUtility(matched.workflowId());
-            log.debug("AWM online: 命中已有 workflow {} utility+1", matched.workflowId());
+            log.debug("AWM online: matched existing workflow {} utility+1", matched.workflowId());
             return;
         }
 
         if (workflowMemoryService.isDomainFull(domainTag)) {
-            log.debug("AWM online: domain {} 已达上限，跳过诱导", domainTag);
+            log.debug("AWM online: domain {} reached cap, skip induction", domainTag);
             return;
         }
 
         OpsWorkflow induced = induceWorkflow(exp, domainTag, findingKinds, toolSeq);
         workflowMemoryService.upsert(induced, false);
-        log.info("AWM online: 新诱导 workflow {} 来源={} 工具链 {}",
+        log.info("AWM online: induced workflow {} source={} toolSeq={}",
                 induced.workflowId(), induced.sourceType(), toolSeq);
     }
 
-    /**
-     * 从已落库 trace 异步/批处理诱导（offline 入口）。
-     */
-    public int induceFromRecentTraces(int limit) {
-        if (!workflowMemoryService.isEnabled()) {
-            return 0;
+    public record InductionResult(
+            int scanned,
+            int created,
+            int skippedNotEligible,
+            int skippedDuplicate,
+            int skippedShortTools
+    ) {
+        public String hintZh() {
+            if (created > 0) {
+                return "已从审计轨迹归纳 " + created + " 条新 workflow";
+            }
+            if (scanned == 0) {
+                return "审计库为空：请先跑一键巡检、磁盘编排或 Agent 多工具对话";
+            }
+            if (skippedShortTools > 0 && skippedNotEligible == 0 && skippedDuplicate == 0) {
+                return "轨迹里工具步骤不足 2 个，无法归纳（需多工具成功链路）";
+            }
+            if (skippedDuplicate > 0) {
+                return "近期轨迹与已有套路重复，无新增（可先跑新的编排再诱导）";
+            }
+            if (skippedNotEligible > 0) {
+                return "近期轨迹未达归纳条件（需 executionOk 且 outcome 为 EXECUTED/DIAGNOSED 等）";
+            }
+            return "暂无可归纳的新轨迹";
         }
+    }
+
+    public InductionResult induceFromRecentTraces(int limit) {
+        if (!workflowMemoryService.isEnabled()) {
+            return new InductionResult(0, 0, 0, 0, 0);
+        }
+        int scanned = 0;
         int created = 0;
+        int skippedNotEligible = 0;
+        int skippedDuplicate = 0;
+        int skippedShortTools = 0;
         for (OpsExperience exp : experienceLoader.loadRecentSuccessful(limit)) {
+            scanned++;
             if (!trajectoryEvaluator.shouldInduce(exp)) {
+                skippedNotEligible++;
                 continue;
             }
             String domain = inferDomain(exp);
             List<String> toolSeq = extractToolSequenceFromSteps(exp.steps());
-            if (toolSeq.size() < 2 || workflowMemoryService.existsWithToolSequence(domain, toolSeq)) {
+            if (toolSeq.size() < 2) {
+                skippedShortTools++;
+                continue;
+            }
+            if (workflowMemoryService.existsWithToolSequence(domain, toolSeq)) {
+                skippedDuplicate++;
                 continue;
             }
             if (workflowMemoryService.isDomainFull(domain)) {
@@ -109,7 +145,13 @@ public class WorkflowInductionService {
             workflowMemoryService.upsert(wf, false);
             created++;
         }
-        return created;
+        return new InductionResult(scanned, created, skippedNotEligible, skippedDuplicate, skippedShortTools);
+    }
+
+    /** @deprecated use {@link #induceFromRecentTraces(int)} and {@link InductionResult} */
+    @Deprecated
+    public int induceFromRecentTracesLegacy(int limit) {
+        return induceFromRecentTraces(limit).created();
     }
 
     private OpsWorkflow findByToolSequence(String domainTag, List<String> toolSeq) {
@@ -126,6 +168,16 @@ public class WorkflowInductionService {
         if (steps == null) {
             return seq;
         }
+        for (Map<String, Object> step : steps) {
+            String explicitTool = structuredToolName(step);
+            if (!explicitTool.isBlank()) {
+                appendUnique(seq, explicitTool);
+            }
+        }
+        if (!seq.isEmpty()) {
+            return seq;
+        }
+
         boolean diskPlaybook = steps.stream().anyMatch(s -> {
             String d = detail(s);
             return d.contains("LogCleanup") || d.contains("CleanTemp") || d.contains("DiskAnalyze");
@@ -134,7 +186,6 @@ public class WorkflowInductionService {
             String d = detail(s);
             return d.contains("SystemLoad") || d.contains("Process") || d.contains("CpuPressure");
         });
-
         boolean servicePlaybook = steps.stream().anyMatch(s -> {
             String d = detail(s);
             return d.contains("Systemd") || d.contains("systemd") || d.contains("ServiceRestart");
@@ -186,10 +237,19 @@ public class WorkflowInductionService {
         if (llmInductionEnabled && llmWorkflowInductor.isAvailable()) {
             var llm = llmWorkflowInductor.induce(exp, domainTag, findingKinds);
             if (llm.isPresent()) {
-                log.info("AWM LLM 归纳成功 trace={} workflow={}", exp.traceId(), llm.get().workflowId());
+                log.info("AWM LLM induction success trace={} workflow={}", exp.traceId(), llm.get().workflowId());
                 return llm.get();
             }
-            log.debug("AWM LLM 归纳未产出，回退 rule-based trace={}", exp.traceId());
+            log.debug("AWM LLM induction fallback to rules trace={}", exp.traceId());
+        }
+        List<OpsWorkflowStep> structuredSteps = extractStructuredWorkflowSteps(exp.steps());
+        if (structuredSteps.size() >= 2) {
+            return buildStructuredWorkflow(
+                    exp.traceId(),
+                    domainTag,
+                    findingKinds,
+                    structuredSteps,
+                    exp.userInput());
         }
         return buildFromToolSequence(
                 exp.traceId(),
@@ -209,13 +269,13 @@ public class WorkflowInductionService {
         List<OpsWorkflowStep> steps = new ArrayList<>();
         for (String tool : toolSeq) {
             steps.add(OpsWorkflowStep.of(
-                    "环境状态见当次感知",
+                    "replay successful perception and remediation steps",
                     defaultReason(tool),
                     tool,
                     defaultArgs(tool)));
         }
-        String id = "online-" + domainTag + "-" + UUID.randomUUID().toString().substring(0, 8);
-        String title = "在线诱导：" + domainTag + " 处置链";
+        String id = "online-" + domainTag + "-" + shortId();
+        String title = "在线归纳 " + domainTag + " 处理链路";
         String desc = userMessage != null && userMessage.length() > 80
                 ? userMessage.substring(0, 80) + "..."
                 : (userMessage != null ? userMessage : "由成功轨迹自动归纳");
@@ -253,6 +313,13 @@ public class WorkflowInductionService {
         if (input.contains("服务") || input.contains("systemd")) {
             return "service";
         }
+        List<String> seq = extractToolSequenceFromSteps(exp.steps());
+        if (seq.stream().anyMatch(t -> "SystemLoadTool".equals(t) || "ProcessTool".equals(t))) {
+            return "cpu";
+        }
+        if (seq.stream().anyMatch(t -> "SystemdTool".equals(t) || "ServiceRestartTool".equals(t))) {
+            return "service";
+        }
         return "disk";
     }
 
@@ -266,33 +333,22 @@ public class WorkflowInductionService {
     }
 
     private static String normalizeToolName(String fragment) {
-        if (fragment == null) {
-            return "";
-        }
-        return switch (fragment) {
-            case "CleanTemp" -> "CleanTempTool";
-            case "LogCleanup" -> "LogCleanupTool";
-            case "ServiceRestart" -> "ServiceRestartTool";
-            case "Process" -> "ProcessTool";
-            case "SystemLoad" -> "SystemLoadTool";
-            case "Systemd" -> "SystemdTool";
-            case "DiskAnalyze" -> "DiskAnalyzeTool";
-            case "DiskTool" -> "DiskTool";
-            default -> fragment.endsWith("Tool") ? fragment : fragment + "Tool";
-        };
+        return AwmToolProfile.normalize(fragment);
     }
 
-    private static String defaultReason(String toolName) {
+    private String defaultReason(String toolName) {
         return switch (toolName) {
-            case "DiskTool" -> "采集或验证分区占用";
-            case "SystemLoadTool" -> "采集 CPU/内存/负载指标";
-            case "ProcessTool" -> "列出高 CPU/内存进程（只读）";
-            case "SystemdTool" -> "列出 failed systemd 单元";
-            case "DiskAnalyzeTool" -> "定位热点目录（只读）";
-            case "CleanTempTool" -> "清理临时目录（先 dryRun）";
-            case "LogCleanupTool" -> "裁剪陈旧日志（先 dryRun）";
-            case "ServiceRestartTool" -> "重启失败服务（白名单内）";
-            default -> "执行工具 " + toolName;
+            case "DiskTool" -> "collect or verify disk usage";
+            case "SystemLoadTool" -> "collect CPU, memory, and load metrics";
+            case "ProcessTool" -> "list high resource processes";
+            case "SystemdTool" -> runtimePlatform.isWindows()
+                    ? "list Windows services that should be running"
+                    : "list failed systemd units";
+            case "DiskAnalyzeTool" -> "inspect hotspot directories";
+            case "CleanTempTool" -> "clean temp files with dry-run first";
+            case "LogCleanupTool" -> "clean stale logs with dry-run first";
+            case "ServiceRestartTool" -> "restart failed allowlisted service";
+            default -> "execute tool " + toolName;
         };
     }
 
@@ -314,5 +370,144 @@ public class WorkflowInductionService {
     private static String detail(Map<String, Object> step) {
         Object d = step.get("detail");
         return d == null ? "" : String.valueOf(d);
+    }
+
+    private static String structuredToolName(Map<String, Object> step) {
+        if (step == null) {
+            return "";
+        }
+        Object direct = step.get("toolName");
+        if (direct != null) {
+            return normalizeToolName(String.valueOf(direct));
+        }
+        Object nestedDetail = step.get("detail");
+        if (nestedDetail instanceof Map<?, ?> map) {
+            Object nestedTool = map.get("toolName");
+            if (nestedTool != null) {
+                return normalizeToolName(String.valueOf(nestedTool));
+            }
+        }
+        return "";
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<OpsWorkflowStep> extractStructuredWorkflowSteps(List<Map<String, Object>> steps) {
+        List<OpsWorkflowStep> out = new ArrayList<>();
+        if (steps == null) {
+            return out;
+        }
+        for (Map<String, Object> step : steps) {
+            String toolName = structuredToolName(step);
+            if (toolName.isBlank() || !AwmToolProfile.isSupported(toolName)) {
+                continue;
+            }
+            Map<String, Object> rawParams = null;
+            if (step.get("parameters") instanceof Map<?, ?> params) {
+                rawParams = (Map<String, Object>) params;
+            } else if (step.get("detail") instanceof Map<?, ?> detailMap
+                    && detailMap.get("parameters") instanceof Map<?, ?> nestedParams) {
+                rawParams = (Map<String, Object>) nestedParams;
+            }
+            out.add(OpsWorkflowStep.of(
+                    defaultEnvDesc(step, toolName),
+                    defaultReason(toolName),
+                    toolName,
+                    abstractArgs(toolName, rawParams)
+            ));
+        }
+        return dedupeSequential(out);
+    }
+
+    private OpsWorkflow buildStructuredWorkflow(
+            String traceId,
+            String domainTag,
+            List<String> findingKinds,
+            List<OpsWorkflowStep> steps,
+            String userMessage
+    ) {
+        String id = "online-" + domainTag + "-" + shortId();
+        String title = "在线归纳 " + domainTag + " 处理链路";
+        String desc = userMessage != null && userMessage.length() > 80
+                ? userMessage.substring(0, 80) + "..."
+                : (userMessage != null ? userMessage : "由成功轨迹自动归纳");
+        return new OpsWorkflow(
+                id,
+                domainTag,
+                findingKinds == null || findingKinds.isEmpty()
+                        ? defaultFindingKinds(domainTag)
+                        : findingKinds,
+                title,
+                desc,
+                steps,
+                "online",
+                traceId,
+                0,
+                true
+        );
+    }
+
+    private static List<OpsWorkflowStep> dedupeSequential(List<OpsWorkflowStep> in) {
+        List<OpsWorkflowStep> out = new ArrayList<>();
+        for (OpsWorkflowStep step : in) {
+            if (out.isEmpty() || !out.get(out.size() - 1).toolName().equals(step.toolName())) {
+                out.add(step);
+            }
+        }
+        return out;
+    }
+
+    private static String defaultEnvDesc(Map<String, Object> step, String toolName) {
+        String detail = detail(step);
+        if (detail != null && !detail.isBlank()) {
+            return detail.length() > 64 ? detail.substring(0, 64) + "..." : detail;
+        }
+        return "reuse successful step from trajectory: " + toolName;
+    }
+
+    private static Map<String, String> abstractArgs(String toolName, Map<String, Object> rawParams) {
+        if (rawParams == null || rawParams.isEmpty()) {
+            return defaultArgs(toolName);
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        switch (toolName) {
+            case "CleanTempTool" -> {
+                out.put("path", "{temp-path}");
+                out.put("days", "{temp-days}");
+                out.put("dryRun", "{dryRun}");
+                if (Boolean.TRUE.equals(rawParams.get("removeDirectory"))) {
+                    out.put("removeDirectory", "true");
+                }
+            }
+            case "LogCleanupTool" -> {
+                out.put("path", "{log-path}");
+                out.put("days", "{log-days}");
+                out.put("dryRun", "{dryRun}");
+            }
+            case "ServiceRestartTool" -> {
+                out.put("serviceName", "{service-name}");
+                out.put("dryRun", "{dryRun}");
+            }
+            case "DiskAnalyzeTool" -> {
+                out.put("path", "{log-path}");
+                out.put("topN", String.valueOf(rawParams.getOrDefault("topN", 12)));
+            }
+            case "ProcessTool" -> {
+                out.put("minCpu", String.valueOf(rawParams.getOrDefault("minCpu", 5.0)));
+                out.put("minMem", String.valueOf(rawParams.getOrDefault("minMem", 5.0)));
+            }
+            default -> {
+                return defaultArgs(toolName);
+            }
+        }
+        return out;
+    }
+
+    private String shortId() {
+        String id = traceIdGenerator.nextId();
+        if (id == null || id.isBlank()) {
+            return "generated";
+        }
+        String normalized = id.replace("-", "");
+        return normalized.length() <= 8 ? normalized : normalized.substring(0, 8);
     }
 }

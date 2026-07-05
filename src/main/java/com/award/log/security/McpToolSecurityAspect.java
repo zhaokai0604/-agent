@@ -38,20 +38,33 @@ public class McpToolSecurityAspect {
 
         McpInvocationSecurityGate.GateDecision decision =
                 mcpInvocationSecurityGate.evaluateChatToolInvocation(
-                        toolBeanName, parameters, instruction, userUtterance);
+                        toolBeanName, Map.of(), instruction, userUtterance);
 
-        if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.BLOCK
-                || decision.getType() == McpInvocationSecurityGate.GateDecision.Type.NEED_CONFIRM) {
+        if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.BLOCK) {
             log.warn("Tool 调用被统一安全门拦截: {} code={} type={} msg={}",
                     toolBeanName, decision.getCode(), decision.getType(), decision.getMessage());
             throw new OpsSecurityRejectedException(
                     decision.getMessage() != null ? decision.getMessage() : "安全拦截（工具层）");
         }
 
+        if (decision.getType() == McpInvocationSecurityGate.GateDecision.Type.NEED_CONFIRM) {
+            if (ctx == null || !ctx.isChatAgentPath()) {
+                log.warn("Tool 调用需二次确认且非对话路径: {} score={}", toolBeanName, decision.getAgenticRiskScore());
+                throw new OpsSecurityRejectedException(
+                        decision.getMessage() != null ? decision.getMessage() : "该操作需二次确认，请使用工具控制台或在对话中说「确认执行」");
+            }
+            log.debug("对话路径允许工具预览/已确认写操作: {} userConfirmedWrite={}",
+                    toolBeanName, ctx.isUserConfirmedWrite());
+        }
+
         if (decision.getAgenticRiskScore() != null) {
             log.debug("Chat @Tool 通过安检: {} score={}", toolBeanName, decision.getAgenticRiskScore());
         }
-        return pjp.proceed();
+        Object result = pjp.proceed();
+        if (result instanceof String json) {
+            ChatToolExecutionTracker.record(toolBeanName, json);
+        }
+        return result;
     }
 
     private static String buildInstruction(ProceedingJoinPoint pjp, String toolBeanName) {

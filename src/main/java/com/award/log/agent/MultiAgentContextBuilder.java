@@ -6,6 +6,7 @@ import com.award.log.agent.awm.WorkflowMemoryService;
 import com.award.log.agent.awm.WorkflowRetriever;
 import com.award.log.model.LogAlarm;
 import com.award.log.security.ReadOnlySurfaceDenylist;
+import com.award.log.security.signal.SecuritySignalService;
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.KnowledgeBaseService;
 import com.award.log.service.OpsOpenIncidentService;
@@ -32,6 +33,7 @@ public class MultiAgentContextBuilder {
     private final StatisticsService statisticsService;
     private final AiLogAlarmService aiLogAlarmService;
     private final DrainTemplateNoveltyTracker noveltyTracker;
+    private final SecuritySignalService securitySignalService;
 
     @Autowired(required = false)
     private KnowledgeBaseService knowledgeBaseService;
@@ -57,10 +59,12 @@ public class MultiAgentContextBuilder {
     public MultiAgentContextBuilder(
             StatisticsService statisticsService,
             AiLogAlarmService aiLogAlarmService,
-            DrainTemplateNoveltyTracker noveltyTracker) {
+            DrainTemplateNoveltyTracker noveltyTracker,
+            SecuritySignalService securitySignalService) {
         this.statisticsService = statisticsService;
         this.aiLogAlarmService = aiLogAlarmService;
         this.noveltyTracker = noveltyTracker;
+        this.securitySignalService = securitySignalService;
     }
 
     public Map<String, Object> build() {
@@ -68,34 +72,47 @@ public class MultiAgentContextBuilder {
     }
 
     public Map<String, Object> buildForUser(String userMessage) {
+        return buildForUser(userMessage, null);
+    }
+
+    public Map<String, Object> buildForUser(String userMessage, Map<String, Object> prefetched) {
         Map<String, Object> root = new LinkedHashMap<>();
-        root.put("perceptionAgent", buildPerception());
+        root.put("perceptionAgent", buildPerception(prefetched));
         root.put("cleanupAgentPolicy", buildCleanupPolicy());
-        root.put("diagnosisAgent", buildDiagnosis(userQuery));
+        root.put("diagnosisAgent", buildDiagnosis(userMessage, prefetched));
         root.put("orchestratorAgent", buildOrchestratorHints());
         root.put("workflowMemory", buildWorkflowMemory(userMessage));
         root.put("failureInsightMemory", buildFailureInsight(userMessage));
-        root.put("correlationDigest", buildCorrelationDigest());
+        root.put("correlationDigest", buildCorrelationDigest(prefetched));
         if (opsOpenIncidentService != null) {
             root.put("openIncident", opsOpenIncidentService.buildOpenIncidentContext());
         }
         return root;
     }
 
-    private Map<String, Object> buildPerception() {
+    private Map<String, Object> buildPerception(Map<String, Object> prefetched) {
         Map<String, Object> m = new LinkedHashMap<>();
-        try {
-            m.put("performance", statisticsService.getSystemPerformance(null));
-        } catch (Exception e) {
-            log.debug("感知 Agent：性能采集失败 {}", e.getMessage());
-            m.put("performance", Map.of("unavailable", true));
+        if (prefetched != null && prefetched.get("performance") instanceof Map<?, ?> perf) {
+            m.put("performance", perf);
+        } else {
+            try {
+                m.put("performance", statisticsService.getSystemPerformance(null));
+            } catch (Exception e) {
+                log.debug("感知 Agent：性能采集失败 {}", e.getMessage());
+                m.put("performance", Map.of("unavailable", true));
+            }
         }
-        try {
-            m.put("taskStats", statisticsService.getTaskStatusStatistics());
-        } catch (Exception e) {
-            m.put("taskStats", Map.of("unavailable", true));
+        if (prefetched != null && prefetched.get("taskStats") instanceof Map<?, ?> taskStats) {
+            m.put("taskStats", taskStats);
+        } else {
+            try {
+                m.put("taskStats", statisticsService.getTaskStatusStatistics());
+            } catch (Exception e) {
+                m.put("taskStats", Map.of("unavailable", true));
+            }
         }
         m.put("drainTemplateSignal", noveltyTracker.snapshotForContext());
+        m.put("securitySignals", securitySignalService.summary());
         if (opsPatrolService != null) {
             m.put("lastPatrolFindings", opsPatrolService.getLastFindingsSnapshot());
         }
@@ -118,7 +135,7 @@ public class MultiAgentContextBuilder {
         m.put("rules", List.of(
                 "所有写路径必须在白名单内",
                 "Destructive 操作需控制台二次确认",
-                "当上下文 sessionSecurityPolicy.toolSurface=READ_ONLY 时，模型不得规划写类 MCP 工具",
+                "当上下文 sessionSecurityPolicy.toolSurface=READ_ONLY 时，模型不得规划写类运维工具",
                 "当 toolSurface=FULL 时，可在 cleanupAgentPolicy 与路径白名单内调用写类 MCP，并在答复中写明范围与回滚",
                 "只读面禁止工具集可由服务端 agent.security.read-only-extra-denied-tool-beans 追加（与 Bean 短名一致）",
                 "高危 utterance 风险分时，优先只读观测与人工升级路径"
@@ -126,24 +143,51 @@ public class MultiAgentContextBuilder {
         return m;
     }
 
-    private Map<String, Object> buildDiagnosis(String userQuery) {
+    private Map<String, Object> buildDiagnosis(String userQuery, Map<String, Object> prefetched) {
         Map<String, Object> m = new LinkedHashMap<>();
-        try {
-            Map<String, Object> alarms = aiLogAlarmService.getAlarmStatistics(1, null, null);
-            m.put("alarmStats24h", alarms != null ? alarms : Map.of());
-            Map<String, Object> recent = aiLogAlarmService.getAlarmHistory(1, 8, null, null);
-            m.put("recentAlarmTitles", extractAlarmTitles(recent));
-        } catch (Exception e) {
-            log.debug("诊断 Agent：告警摘要失败 {}", e.getMessage());
-            m.put("alarmStats24h", Map.of("unavailable", true));
+        if (prefetched != null && prefetched.get("alarmStats") instanceof Map<?, ?> alarms) {
+            m.put("alarmStats24h", alarms);
+        } else {
+            try {
+                Map<String, Object> alarms = aiLogAlarmService.getAlarmStatistics(1, null, null);
+                m.put("alarmStats24h", alarms != null ? alarms : Map.of());
+            } catch (Exception e) {
+                log.debug("诊断 Agent：告警摘要失败 {}", e.getMessage());
+                m.put("alarmStats24h", Map.of("unavailable", true));
+            }
         }
-        try {
-            Map<String, Object> anomaly = statisticsService.getAnomalyLogStatistics(1);
-            m.put("anomalyLogDay1", anomaly != null ? anomaly : Map.of());
-        } catch (Exception e) {
-            m.put("anomalyLogDay1", Map.of("unavailable", true));
+        Object prefetchedRecentAlarms = prefetched != null ? prefetched.get("recentAlarms") : null;
+        if (prefetchedRecentAlarms instanceof List<?> recentList) {
+            m.put("recentAlarmTitles", extractAlarmTitles(Map.of("list", recentList)));
+        } else if (prefetchedRecentAlarms instanceof Map<?, ?> recentMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> typedRecentMap = (Map<String, Object>) recentMap;
+            m.put("recentAlarmTitles", extractAlarmTitles(typedRecentMap));
+        } else {
+            try {
+                Map<String, Object> recent = aiLogAlarmService.getAlarmHistory(1, 8, null, null);
+                m.put("recentAlarmTitles", extractAlarmTitles(recent));
+            } catch (Exception e) {
+                m.put("recentAlarmTitles", List.of());
+            }
         }
-        m.put("similarHistoricalCases", searchSimilarCases(userQuery));
+        if (prefetched != null && prefetched.get("anomalyLogDay1") instanceof Map<?, ?> anomaly) {
+            m.put("anomalyLogDay1", anomaly);
+        } else {
+            try {
+                Map<String, Object> anomaly = statisticsService.getAnomalyLogStatistics(1);
+                m.put("anomalyLogDay1", anomaly != null ? anomaly : Map.of());
+            } catch (Exception e) {
+                m.put("anomalyLogDay1", Map.of("unavailable", true));
+            }
+        }
+        if (prefetched != null && prefetched.get("knowledgeRagHits") instanceof List<?> hits) {
+            m.put("similarHistoricalCases", hits);
+        } else {
+            m.put("similarHistoricalCases", searchSimilarCases(userQuery));
+        }
+        m.put("securitySignals", securitySignalService.summary());
+        m.put("recentHighPrioritySecuritySignals", securitySignalService.recentHighPriorityAsMaps(5, 3_600_000L));
         return m;
     }
 
@@ -221,7 +265,7 @@ public class MultiAgentContextBuilder {
         ));
         m.put("toolRiskGuidance", Map.of(
                 "LOW", "可读可分析；低风险写操作仍须白名单",
-                "MEDIUM", "默认仅预览 / Dry-Run；执行需确认",
+                "MEDIUM", "默认仅预览；执行需确认",
                 "HIGH", "禁止执行写与提权；只读诊断与上报"
         ));
         return m;
@@ -314,33 +358,51 @@ public class MultiAgentContextBuilder {
         return o instanceof Number n ? n.doubleValue() : 0.0;
     }
 
-    private Map<String, Object> buildCorrelationDigest() {
+    private Map<String, Object> buildCorrelationDigest(Map<String, Object> prefetched) {
         Map<String, Object> d = new LinkedHashMap<>();
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> perf = (Map<String, Object>) statisticsService.getSystemPerformance(null);
+        if (prefetched != null && prefetched.get("performance") instanceof Map<?, ?> perf) {
             d.put("cpuUsagePct", perf.get("cpuUsage"));
             d.put("memoryUsagePct", perf.get("memoryUsage"));
             d.put("diskUsagePct", perf.get("diskUsage"));
             d.put("networkUsagePct", perf.get("networkUsage"));
-        } catch (Exception e) {
-            d.put("performance", "unavailable");
-        }
-        try {
-            Map<String, Object> alarms = aiLogAlarmService.getAlarmStatistics(1, null, null);
-            if (alarms != null) {
-                d.put("alarmTotal24h", alarms.get("totalAlarms"));
-                d.put("alarmSuccessRate", alarms.get("successRate"));
+        } else {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> perf = (Map<String, Object>) statisticsService.getSystemPerformance(null);
+                d.put("cpuUsagePct", perf.get("cpuUsage"));
+                d.put("memoryUsagePct", perf.get("memoryUsage"));
+                d.put("diskUsagePct", perf.get("diskUsage"));
+                d.put("networkUsagePct", perf.get("networkUsage"));
+            } catch (Exception e) {
+                d.put("performance", "unavailable");
             }
-        } catch (Exception ignored) {
-            d.put("alarms", "unavailable");
         }
-        try {
-            d.put("anomalyLogDay1", statisticsService.getAnomalyLogStatistics(1));
-        } catch (Exception ignored) {
-            d.put("anomalyLogDay1", "unavailable");
+        if (prefetched != null && prefetched.get("alarmStats") instanceof Map<?, ?> alarms) {
+            d.put("alarmTotal24h", alarms.get("totalAlarms"));
+            d.put("alarmSuccessRate", alarms.get("successRate"));
+        } else {
+            try {
+                Map<String, Object> alarms = aiLogAlarmService.getAlarmStatistics(1, null, null);
+                if (alarms != null) {
+                    d.put("alarmTotal24h", alarms.get("totalAlarms"));
+                    d.put("alarmSuccessRate", alarms.get("successRate"));
+                }
+            } catch (Exception ignored) {
+                d.put("alarms", "unavailable");
+            }
+        }
+        if (prefetched != null && prefetched.get("anomalyLogDay1") instanceof Map<?, ?> anomaly) {
+            d.put("anomalyLogDay1", anomaly);
+        } else {
+            try {
+                d.put("anomalyLogDay1", statisticsService.getAnomalyLogStatistics(1));
+            } catch (Exception ignored) {
+                d.put("anomalyLogDay1", "unavailable");
+            }
         }
         d.put("drainTemplateSignal", noveltyTracker.snapshotForContext());
+        d.put("securitySignals", securitySignalService.summary());
+        d.put("recentHighPrioritySecuritySignals", securitySignalService.recentHighPriorityAsMaps(5, 3_600_000L));
         if (opsPatrolService != null) {
             d.put("lastPatrolFindings", opsPatrolService.getLastFindingsSnapshot());
         }

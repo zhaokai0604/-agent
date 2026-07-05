@@ -1,18 +1,14 @@
 <template>
-  <div class="profile-page" v-loading="loading">
-    <section class="profile-hero">
-      <div>
-        <p class="hero-kicker">个人中心</p>
-        <h1>{{ profileForm.username || '当前用户' }}</h1>
-        <p class="hero-sub">
-          统一管理你自己的资料、密码与 API Key，并查看最近访问足迹和个人统计。
-        </p>
-      </div>
-      <div class="hero-side">
+  <div class="ops-page profile-page" v-loading="loading">
+    <OpsPageHeader
+      :title="profileForm.username || '个人中心'"
+      subtitle="管理资料、密码与 API Key，查看访问足迹与个人统计"
+    >
+      <template #actions>
         <el-tag size="large" :type="profileForm.role === 1 ? 'warning' : 'info'">{{ roleText }}</el-tag>
-        <span>创建时间：{{ formatDateTime(profileForm.createTime) }}</span>
-      </div>
-    </section>
+        <span class="profile-created">创建 {{ formatDateTime(profileForm.createTime) }}</span>
+      </template>
+    </OpsPageHeader>
 
     <div class="stats-grid">
       <article class="stat-card">
@@ -209,6 +205,7 @@ import {
   updateUserInfo
 } from '../api'
 import { formatDateTime } from '../utils/formatDate.js'
+import OpsPageHeader from './OpsPageHeader.vue'
 
 const emit = defineEmits(['profile-updated'])
 
@@ -450,44 +447,9 @@ loadAll()
   gap: 18px;
 }
 
-.profile-hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 24px;
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at top left, rgba(251, 191, 36, 0.18), transparent 28%),
-    linear-gradient(135deg, #1f2937 0%, #0f172a 55%, #0f766e 100%);
-  color: #f8fafc;
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.18);
-}
-
-.hero-kicker {
-  margin: 0 0 10px;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  opacity: 0.72;
-}
-
-.profile-hero h1 {
-  margin: 0;
-  font-size: 32px;
-}
-
-.hero-sub {
-  margin: 10px 0 0;
-  max-width: 56ch;
-  line-height: 1.7;
-  color: rgba(248, 250, 252, 0.84);
-}
-
-.hero-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
+.profile-created {
+  font-size: 12px;
+  color: var(--ops-text-subtle);
 }
 
 .stats-grid,
@@ -580,14 +542,9 @@ loadAll()
 }
 
 @media (max-width: 960px) {
-  .profile-hero,
   .panel-head,
   .trail-footer {
     flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .hero-side {
     align-items: flex-start;
   }
 

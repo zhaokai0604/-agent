@@ -6,6 +6,8 @@ import com.award.log.collector.impl.DatabaseLogCollector;
 import com.award.log.collector.impl.FileLogCollector;
 import com.award.log.collector.impl.KafkaLogProducer;
 import com.award.log.collector.impl.NetworkLogCollector;
+import com.award.log.collector.impl.NetworkLogCollectorV2;
+import com.award.log.security.signal.SecuritySignalService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,10 +28,14 @@ public class LogCollectorConfig {
 
     private final KafkaLogProducer kafkaLogProducer;
     private final DataSource dataSource;
+    private final SecuritySignalService securitySignalService;
 
-    public LogCollectorConfig(@Autowired(required = false) KafkaLogProducer kafkaLogProducer, DataSource dataSource) {
+    public LogCollectorConfig(@Autowired(required = false) KafkaLogProducer kafkaLogProducer,
+                              DataSource dataSource,
+                              SecuritySignalService securitySignalService) {
         this.kafkaLogProducer = kafkaLogProducer;
         this.dataSource = dataSource;
+        this.securitySignalService = securitySignalService;
     }
 
     @Value("${log.collector.enabled:true}")
@@ -106,8 +112,12 @@ public class LogCollectorConfig {
 
             if (networkEnabled) {
                 try {
-                    NetworkLogCollector networkCollector = new NetworkLogCollector(networkPort, networkProtocol, "network-collector");
-                    collectorManager.addCollector(networkCollector);
+                    if ("UDP".equalsIgnoreCase(networkProtocol)) {
+                        collectorManager.addCollector(new NetworkLogCollectorV2(networkPort, networkProtocol, securitySignalService));
+                    } else {
+                        NetworkLogCollector networkCollector = new NetworkLogCollector(networkPort, networkProtocol, "network-collector");
+                        collectorManager.addCollector(networkCollector);
+                    }
                     log.info("[采集器配置] 网络采集器初始化成功，协议: {}, 端口: {}", networkProtocol, networkPort);
                 } catch (Exception e) {
                     log.error("[采集器配置] 初始化网络采集器失败: {}", e.getMessage(), e);

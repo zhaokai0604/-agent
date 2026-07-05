@@ -86,6 +86,12 @@ public class McpInvocationSecurityGate {
 
     private GateDecision evaluate(String toolName, Map<String, Object> parameters, String instructionOverride,
                                   String userUtterance, McpSecurityProfile profile) {
+        if (profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
+            OpsSecurityContext.Ctx secCtx = OpsSecurityContext.get();
+            if (secCtx != null && secCtx.isUserConfirmedWrite()) {
+                profile = McpSecurityProfile.POST_CONFIRMATION;
+            }
+        }
         if (toolName == null || toolName.isBlank()) {
             return GateDecision.block("TOOL_NAME_EMPTY", "工具名称不能为空");
         }
@@ -95,9 +101,6 @@ public class McpInvocationSecurityGate {
         }
         if (!mcpToolCatalog.isRegistered(toolName)) {
             return GateDecision.block("UNKNOWN_TOOL", "未知或未授权的工具: " + toolName);
-        }
-        if (!mcpToolCatalog.isHttpAllowed(toolName)) {
-            return GateDecision.block("TOOL_NOT_HTTP_ALLOWED", "工具未开放 HTTP/Agent 调用: " + toolName);
         }
 
         if (profile == McpSecurityProfile.INITIAL_REQUEST || profile == McpSecurityProfile.CHAT_AGENT_TOOL) {
@@ -205,12 +208,17 @@ public class McpInvocationSecurityGate {
     public GateDecision evaluateChatToolInvocation(String toolBeanName, Map<String, Object> parameters,
                                                    String instruction, String userUtterance) {
         String instr = instruction == null ? "" : instruction.trim();
-        String userMsg = null;
-        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
-        if (ctx != null) {
-            userMsg = ctx.getUserMessage();
+        String userMsg = userUtterance != null && !userUtterance.isBlank()
+                ? userUtterance.trim()
+                : null;
+        if (userMsg == null) {
+            OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+            if (ctx != null) {
+                userMsg = ctx.getUserMessage();
+            }
         }
-        return evaluate(toolBeanName, Map.of(), instr, userMsg, McpSecurityProfile.CHAT_AGENT_TOOL);
+        Map<String, Object> params = parameters != null ? parameters : Map.of();
+        return evaluate(toolBeanName, params, instr, userMsg, McpSecurityProfile.CHAT_AGENT_TOOL);
     }
 
     private static String mergeRiskUtterance(String userUtterance, String instruction) {

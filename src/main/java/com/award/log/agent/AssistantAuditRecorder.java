@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -46,7 +47,15 @@ public class AssistantAuditRecorder {
                 steps,
                 durationMs,
                 httpAuditSubject.currentOperatorId(),
-                opsPathPolicy.getPolicyVersion()
+                opsPathPolicy.getPolicyVersion(),
+                Map.of(),
+                Map.of(
+                        "auditKind", "dialogue",
+                        "requestChannel", "assistant",
+                        "stage", "complete",
+                        "decision", securityOutcome,
+                        "targetType", "tool",
+                        "targetName", toolName == null ? "" : toolName)
         );
     }
 
@@ -56,6 +65,15 @@ public class AssistantAuditRecorder {
 
     public void addStep(List<Map<String, Object>> steps, String phase, String detail) {
         steps.add(TraceService.step(phase, detail));
+    }
+
+    public void addStructuredStep(List<Map<String, Object>> steps, String phase, Map<String, Object> detail) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("phase", phase);
+        if (detail != null) {
+            row.putAll(detail);
+        }
+        steps.add(row);
     }
 
     public void addCot(List<Map<String, Object>> steps, int index, String title, String narrative) {

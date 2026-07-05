@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Service
+@org.springframework.context.annotation.DependsOn("logAlarmSchemaService")
 public class AlarmLifecycleServiceImpl implements AlarmLifecycleService {
 
     private final LogAlarmMapper logAlarmMapper;

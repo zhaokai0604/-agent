@@ -5,7 +5,9 @@ import com.award.log.model.patrol.PatrolCorrelationSnapshot;
 import com.award.log.model.patrol.PatrolFinding;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -22,6 +24,9 @@ import java.util.Map;
 public class PatrolHistoryService {
 
     private final JdbcTemplate jdbcTemplate;
+
+    @Value("${ops.patrol.history-retention-days:30}")
+    private int historyRetentionDays;
 
     public PatrolHistoryService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
@@ -118,6 +123,22 @@ public class PatrolHistoryService {
         } catch (Exception e) {
             log.warn("巡检趋势统计失败: {}", e.getMessage());
             return new ArrayList<>();
+        }
+    }
+
+    /** 清理超出保留期的巡检历史，避免表无限增长 */
+    @Scheduled(cron = "${ops.patrol.history-cleanup-cron:0 15 4 * * ?}")
+    public void purgeExpiredHistory() {
+        int days = Math.max(7, historyRetentionDays);
+        try {
+            int removed = jdbcTemplate.update(
+                    "DELETE FROM ops_patrol_history WHERE patrol_time < DATE_SUB(NOW(), INTERVAL ? DAY)",
+                    days);
+            if (removed > 0) {
+                log.info("[巡检历史] 已清理 {} 条超过 {} 天的记录", removed, days);
+            }
+        } catch (Exception e) {
+            log.warn("[巡检历史] 清理失败: {}", e.getMessage());
         }
     }
 }

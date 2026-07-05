@@ -1,7 +1,9 @@
 package com.award.log.service;
 
 import com.award.log.agent.RemediationEffectEvaluator;
+import com.award.log.mcp.McpToolPayloadParser;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,15 +12,17 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 运维效果评分仪表板：聚合审计、巡检、自愈评分与资源快照，量化展示系统价值。
+ * 聚合审计、巡检、自愈与资源快照，生成真实口径的运维效果看板。
  */
 @Slf4j
 @Service
@@ -26,9 +30,6 @@ import java.util.regex.Pattern;
 public class OpsEffectDashboardService {
 
     private static final Pattern HEALING_SCORE_IN_TEXT = Pattern.compile("自愈评分\\s*(\\d+)/100");
-    private static final Pattern MIB_IN_SUMMARY = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*MiB", Pattern.CASE_INSENSITIVE);
-    private static final Pattern GIB_IN_SUMMARY = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*GiB", Pattern.CASE_INSENSITIVE);
-    private static final Pattern DELETED_COUNT = Pattern.compile("deleted[=:\\s]+(\\d+)", Pattern.CASE_INSENSITIVE);
 
     private final JdbcTemplate jdbcTemplate;
     private final OpsAuditTraceService opsAuditTraceService;
@@ -44,7 +45,7 @@ public class OpsEffectDashboardService {
         PatrolAggregate patrol = aggregatePatrol(patrolTrend);
         HealingAggregate healing = loadHealingAggregate(periodDays);
         Map<String, Object> resource = loadResourceSnapshot();
-        double releasedSpaceGb = estimateReleasedSpaceGb(periodDays, healing);
+        double releasedSpaceGb = estimateReleasedSpaceGb(periodDays);
 
         Map<String, Object> dimensions = scoreDimensions(audit, patrol, healing, resource, releasedSpaceGb);
         int overall = weightedOverall(dimensions);
@@ -70,124 +71,130 @@ public class OpsEffectDashboardService {
         return body;
     }
 
-    private Map<String, Object> buildValueStatement(AuditAggregate audit, PatrolAggregate patrol,
-                                                    double releasedSpaceGb, HealingAggregate healing) {
-        Map<String, Object> v = new LinkedHashMap<>();
-        v.put("securityBlocked", audit.blocked);
-        v.put("executionSuccess", audit.successExec);
-        v.put("patrolClosedLoops", patrol.runs);
-        v.put("releasedSpaceGb", round2(releasedSpaceGb));
-        v.put("avgHealingScore", healing.samples > 0 ? Math.round(healing.avgScore) : null);
-        return v;
+    private Map<String, Object> buildValueStatement(AuditAggregate audit,
+                                                    PatrolAggregate patrol,
+                                                    double releasedSpaceGb,
+                                                    HealingAggregate healing) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("securityBlocked", audit.blocked);
+        value.put("executionSuccess", audit.successExec);
+        value.put("patrolClosedLoops", patrol.runs);
+        value.put("releasedSpaceGb", round2(releasedSpaceGb));
+        value.put("avgHealingScore", healing.samples > 0 ? Math.round(healing.avgScore) : null);
+        return value;
     }
 
-    private Map<String, Object> buildSummary(int overall, String grade,
-                                             AuditAggregate audit, PatrolAggregate patrol,
-                                             HealingAggregate healing, double releasedSpaceGb) {
-        Map<String, Object> s = new LinkedHashMap<>();
-        s.put("headline", String.format(Locale.ROOT,
+    private Map<String, Object> buildSummary(int overall,
+                                             String grade,
+                                             AuditAggregate audit,
+                                             PatrolAggregate patrol,
+                                             HealingAggregate healing,
+                                             double releasedSpaceGb) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("headline", String.format(Locale.ROOT,
                 "近 %d 日综合运维效果 %d 分（%s）", audit.periodDays, overall, grade));
+
         List<String> bullets = new ArrayList<>();
         if (audit.blocked > 0) {
-            bullets.add(String.format("安全门累计拦截高危/越权请求 %d 次", audit.blocked));
+            bullets.add(String.format(Locale.ROOT, "安全护栏累计拦截高危或越权请求 %d 次", audit.blocked));
         }
         if (audit.successExec > 0) {
-            bullets.add(String.format("审计链路成功执行 %d 次，平均耗时 %.1f 秒",
+            bullets.add(String.format(Locale.ROOT, "审计链路成功执行 %d 次，平均耗时 %.1f 秒",
                     audit.successExec, audit.avgDurationMs / 1000.0));
         }
         if (patrol.runs > 0) {
-            bullets.add(String.format("巡检 %d 轮、发现线索 %d 条", patrol.runs, patrol.findings));
+            bullets.add(String.format(Locale.ROOT, "巡检闭环 %d 轮，发现线索 %d 条", patrol.runs, patrol.findings));
         }
         if (releasedSpaceGb > 0.01) {
-            bullets.add(String.format("清理/优化类处置约合释放空间 %.2f GB", releasedSpaceGb));
+            bullets.add(String.format(Locale.ROOT, "仅按真实执行回写统计，释放磁盘空间 %.2f GB", releasedSpaceGb));
         }
         if (healing.samples > 0) {
-            bullets.add(String.format("自愈效果样本 %d 条，均分 %.0f/100", healing.samples, healing.avgScore));
+            bullets.add(String.format(Locale.ROOT, "自愈评分样本 %d 条，平均 %.0f/100", healing.samples, healing.avgScore));
         } else {
-            bullets.add("自愈评分随自主运维/闭环处置积累，当前以资源快照为参考");
+            bullets.add("暂无真实自愈评分样本，待实际处置后自动回写更新");
         }
         if (bullets.isEmpty()) {
-            bullets.add("系统已就绪；使用工作台、MCP 与自主运维后此处将展示量化成效");
+            bullets.add("当前仍缺少真实运维样本，产生审计或巡检记录后此处会自动更新");
         }
-        s.put("bullets", bullets);
-        return s;
+        summary.put("bullets", bullets);
+        return summary;
     }
 
-    private Map<String, Object> buildKpis(AuditAggregate audit, PatrolAggregate patrol,
-                                          HealingAggregate healing, double releasedSpaceGb) {
-        Map<String, Object> k = new LinkedHashMap<>();
-        k.put("auditTotal", audit.total);
-        k.put("auditSuccessExec", audit.successExec);
-        k.put("auditBlocked", audit.blocked);
-        k.put("auditNeedConfirm", audit.needConfirm);
-        k.put("auditPass", audit.pass);
-        k.put("avgDurationMs", audit.avgDurationMs);
-        k.put("mcpChannelCount", audit.mcpCount);
-        k.put("assistantChannelCount", audit.assistantCount);
-        k.put("patrolRuns", patrol.runs);
-        k.put("patrolClosedLoops", patrol.runs);
-        k.put("patrolFindings", patrol.findings);
-        k.put("releasedSpaceGb", round2(releasedSpaceGb));
-        k.put("avgHealingScore", healing.avgScore);
-        k.put("healingSamples", healing.samples);
-        return k;
+    private Map<String, Object> buildKpis(AuditAggregate audit,
+                                          PatrolAggregate patrol,
+                                          HealingAggregate healing,
+                                          double releasedSpaceGb) {
+        Map<String, Object> kpis = new LinkedHashMap<>();
+        kpis.put("auditTotal", audit.total);
+        kpis.put("auditSuccessExec", audit.successExec);
+        kpis.put("auditBlocked", audit.blocked);
+        kpis.put("auditNeedConfirm", audit.needConfirm);
+        kpis.put("auditPass", audit.pass);
+        kpis.put("avgDurationMs", audit.avgDurationMs);
+        kpis.put("mcpChannelCount", audit.mcpCount);
+        kpis.put("assistantChannelCount", audit.assistantCount);
+        kpis.put("patrolRuns", patrol.runs);
+        kpis.put("patrolClosedLoops", patrol.runs);
+        kpis.put("patrolFindings", patrol.findings);
+        kpis.put("releasedSpaceGb", round2(releasedSpaceGb));
+        kpis.put("avgHealingScore", healing.samples > 0 ? round2(healing.avgScore) : null);
+        kpis.put("healingSamples", healing.samples);
+        return kpis;
     }
 
     private List<Map<String, Object>> buildHighlights(AuditAggregate audit,
                                                       PatrolAggregate patrol,
                                                       HealingAggregate healing) {
-        List<Map<String, Object>> out = new ArrayList<>();
+        List<Map<String, Object>> highlights = new ArrayList<>();
         if (audit.blocked > 0) {
-            out.add(highlight("security", "安全护栏生效",
-                    String.format("拦截 %d 次（含注入/高危意图/风险分超限等）", audit.blocked)));
+            highlights.add(highlight("security", "安全护栏生效",
+                    String.format(Locale.ROOT, "累计拦截 %d 次高风险或越权动作", audit.blocked)));
         }
         if (audit.needConfirm > 0) {
-            out.add(highlight("confirm", "人机协同确认",
-                    String.format("%d 次中等风险操作经二次确认后执行", audit.needConfirm)));
+            highlights.add(highlight("confirm", "人机协同确认",
+                    String.format(Locale.ROOT, "%d 次中风险写操作经二次确认后执行", audit.needConfirm)));
         }
         if (audit.successExec > 0) {
-            out.add(highlight("execution", "处置落地",
-                    String.format("%d 次工具调用执行成功并留痕", audit.successExec)));
+            highlights.add(highlight("execution", "处置落地",
+                    String.format(Locale.ROOT, "%d 次工具调用成功落地并留痕", audit.successExec)));
         }
         if (patrol.trendImproving) {
-            out.add(highlight("patrol", "巡检态势向好",
-                    "近段日告警线索呈下降趋势"));
+            highlights.add(highlight("patrol", "巡检趋势向好", "近期告警线索呈下降趋势"));
         }
         if (healing.bestScore > 0) {
-            out.add(highlight("healing", "自愈成效",
-                    String.format("最佳自愈评分 %d/100", healing.bestScore)));
+            highlights.add(highlight("healing", "自愈成效",
+                    String.format(Locale.ROOT, "最佳自愈评分 %d/100", healing.bestScore)));
         }
-        return out;
+        return highlights;
     }
 
-    private static Map<String, Object> highlight(String type, String title, String detail) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("type", type);
-        m.put("title", title);
-        m.put("detail", detail);
-        return m;
-    }
-
-    private Map<String, Object> scoreDimensions(AuditAggregate audit, PatrolAggregate patrol,
-                                                  HealingAggregate healing, Map<String, Object> resource,
-                                                  double releasedSpaceGb) {
+    private Map<String, Object> scoreDimensions(AuditAggregate audit,
+                                                PatrolAggregate patrol,
+                                                HealingAggregate healing,
+                                                Map<String, Object> resource,
+                                                double releasedSpaceGb) {
         Map<String, Object> dims = new LinkedHashMap<>();
 
-        int security = 72;
+        int security = 78;
         if (audit.total > 0) {
-            double blockRate = audit.blocked * 1.0 / audit.total;
-            security = (int) Math.min(100, 50 + audit.blocked * 2 + blockRate * 40 + audit.needConfirm);
+            if (audit.blocked == 0 && audit.needConfirm == 0) {
+                security = (int) Math.min(96, 84 + audit.successRate * 12);
+            } else {
+                double blockRate = audit.blocked * 1.0 / audit.total;
+                security = (int) Math.min(100, 58 + audit.blocked * 2 + audit.needConfirm * 2
+                        + blockRate * 25 + audit.successRate * 10);
+            }
         }
         dims.put("security", dim("security", "安全拦截", 0.22, security,
                 audit.total > 0
-                        ? String.format("拦截 %d 次 · 须确认 %d 次", audit.blocked, audit.needConfirm)
-                        : "暂无审计样本，可用顶栏「安全自检」向评委演示"));
+                        ? String.format(Locale.ROOT, "拦截 %d 次，需确认 %d 次", audit.blocked, audit.needConfirm)
+                        : "暂无审计样本"));
 
         int execution = audit.total > 0
                 ? (int) Math.min(100, 35 + audit.successRate * 65)
                 : 70;
         dims.put("execution", dim("execution", "成功执行", 0.22, execution,
-                String.format("成功执行 %d / 审计 %d 条", audit.successExec, audit.total)));
+                String.format(Locale.ROOT, "成功执行 %d / 审计 %d", audit.successExec, audit.total)));
 
         int patrolScore = 65;
         if (patrol.runs > 0) {
@@ -196,32 +203,38 @@ public class OpsEffectDashboardService {
                     + (patrol.trendImproving ? 15 : 0));
         }
         dims.put("patrol", dim("patrol", "巡检闭环", 0.18, patrolScore,
-                String.format("闭环巡检 %d 轮 · 线索 %d 条", patrol.runs, patrol.findings)));
+                String.format(Locale.ROOT, "闭环巡检 %d 轮，线索 %d 条", patrol.runs, patrol.findings)));
 
         int resourceScore = resourceOptimizationScore(resource, releasedSpaceGb, healing);
-        dims.put("resource", dim("resource", "资源优化", 0.18, resourceScore,
-                releasedSpaceGb > 0.01
-                        ? String.format("约合释放 %.2f GB · 磁盘占用 %.1f%%",
-                        releasedSpaceGb, toDouble(resource.get("diskUsagePct")))
-                        : String.format("当前磁盘占用 %.1f%%（清理/自愈后更新）",
-                        toDouble(resource.get("diskUsagePct")))));
+        String resourceDetail;
+        if (releasedSpaceGb > 0.01) {
+            resourceDetail = String.format(Locale.ROOT, "真实执行回写释放 %.2f GB，当前磁盘 %.1f%%",
+                    releasedSpaceGb, toDouble(resource.get("diskUsagePct")));
+        } else if (healing.totalDiskDeltaPct > 0.5) {
+            resourceDetail = String.format(Locale.ROOT, "相较处置前磁盘下降 %.1f%%，当前 %.1f%%",
+                    healing.totalDiskDeltaPct, toDouble(resource.get("diskUsagePct")));
+        } else {
+            resourceDetail = String.format(Locale.ROOT, "当前磁盘占用 %.1f%%（无真实释放空间回写）",
+                    toDouble(resource.get("diskUsagePct")));
+        }
+        dims.put("resource", dim("resource", "资源优化", 0.18, resourceScore, resourceDetail));
 
-        int healingScore = healing.samples > 0
-                ? (int) Math.round(healing.avgScore)
-                : Math.min(resourceHealthScore(resource), 75);
+        Integer healingScore = healing.samples > 0 ? (int) Math.round(healing.avgScore) : null;
         dims.put("healing", dim("healing", "自愈效果", 0.20, healingScore,
                 healing.samples > 0
-                        ? String.format("均分 %.0f（%d 条样本）", healing.avgScore, healing.samples)
-                        : "运行「全自动运维」后写入 effect 步骤评分"));
+                        ? String.format(Locale.ROOT, "均分 %.0f（%d 条样本）", healing.avgScore, healing.samples)
+                        : "暂无真实自愈评分样本，待实际处置后自动回写",
+                healing.samples > 0 ? gradeLabel(healingScore) : "暂无样本"));
 
         return dims;
     }
 
-    private static int resourceOptimizationScore(Map<String, Object> resource, double releasedGb,
+    private static int resourceOptimizationScore(Map<String, Object> resource,
+                                                 double releasedGb,
                                                  HealingAggregate healing) {
         int score = 60;
         if (releasedGb > 0.01) {
-            score += (int) Math.min(30, releasedGb * 8);
+            score += (int) Math.min(25, Math.sqrt(releasedGb) * 4);
         }
         if (healing.totalDiskDeltaPct > 0.5) {
             score += (int) Math.min(15, healing.totalDiskDeltaPct * 2);
@@ -235,87 +248,94 @@ public class OpsEffectDashboardService {
         return Math.max(40, Math.min(100, score));
     }
 
-    private double estimateReleasedSpaceGb(int days, HealingAggregate healing) {
-        double mib = 0;
+    private double estimateReleasedSpaceGb(int days) {
+        long releasedBytes = 0L;
         try {
-            List<String> summaries = jdbcTemplate.queryForList(
+            List<String> stepRows = jdbcTemplate.queryForList(
                     """
-                    SELECT result_summary FROM ops_audit_trace
+                    SELECT steps_json
+                    FROM ops_audit_trace
                     WHERE execution_ok = 1
                       AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-                      AND (tool_name LIKE '%Clean%' OR tool_name LIKE '%LogCleanup%'
-                           OR tool_name LIKE '%DiskOps%' OR result_summary LIKE '%MiB%'
-                           OR result_summary LIKE '%deleted%')
-                    ORDER BY id DESC LIMIT 200
+                      AND (
+                           steps_json LIKE '%CleanTempTool%'
+                           OR steps_json LIKE '%LogCleanupTool%'
+                           OR tool_name IN ('CleanTempTool', 'LogCleanupTool', 'AssistantOrchestrator', 'AutonomousOpsOrchestrator')
+                      )
+                    ORDER BY id DESC
+                    LIMIT 200
                     """,
                     String.class,
                     days);
-            for (String s : summaries) {
-                if (s == null) {
-                    continue;
-                }
-                Matcher gm = GIB_IN_SUMMARY.matcher(s);
-                while (gm.find()) {
-                    mib += Double.parseDouble(gm.group(1)) * 1024;
-                }
-                Matcher mm = MIB_IN_SUMMARY.matcher(s);
-                while (mm.find()) {
-                    mib += Double.parseDouble(mm.group(1));
-                }
-                Matcher dm = DELETED_COUNT.matcher(s);
-                while (dm.find()) {
-                    mib += Integer.parseInt(dm.group(1)) * 0.05;
-                }
+            for (String stepsJson : stepRows) {
+                releasedBytes += extractReleasedBytes(stepsJson);
             }
         } catch (Exception e) {
-            log.debug("释放空间估算跳过: {}", e.getMessage());
+            log.debug("released space estimation skipped: {}", e.getMessage());
         }
-        if (healing.totalDiskDeltaPct > 0) {
-            mib += healing.totalDiskDeltaPct * 1024;
-        }
-        return mib / 1024.0;
+        return round2(releasedBytes / (1024.0 * 1024.0 * 1024.0));
     }
 
-    private static double round2(double v) {
-        return Math.round(v * 100.0) / 100.0;
+    private static double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
-    private static Map<String, Object> dim(String id, String name, double weight, int score, String detail) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", id);
-        m.put("name", name);
-        m.put("weight", weight);
-        m.put("score", score);
-        m.put("detail", detail);
-        m.put("grade", gradeLabel(score));
-        return m;
+    private static Map<String, Object> dim(String id,
+                                           String name,
+                                           double weight,
+                                           Integer score,
+                                           String detail) {
+        return dim(id, name, weight, score, detail, score != null ? gradeLabel(score) : "N/A");
+    }
+
+    private static Map<String, Object> dim(String id,
+                                           String name,
+                                           double weight,
+                                           Integer score,
+                                           String detail,
+                                           String grade) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("id", id);
+        value.put("name", name);
+        value.put("weight", weight);
+        value.put("score", score);
+        value.put("detail", detail);
+        value.put("grade", grade);
+        value.put("measured", score != null);
+        return value;
     }
 
     private static int weightedOverall(Map<String, Object> dimensions) {
         double sum = 0;
-        double w = 0;
-        for (Object v : dimensions.values()) {
-            if (!(v instanceof Map<?, ?> d)) {
+        double weightSum = 0;
+        for (Object value : dimensions.values()) {
+            if (!(value instanceof Map<?, ?> dim)) {
                 continue;
             }
-            Object sc = d.get("score");
-            Object wt = d.get("weight");
-            if (sc instanceof Number n && wt instanceof Number wn) {
-                sum += n.intValue() * wn.doubleValue();
-                w += wn.doubleValue();
+            Object score = dim.get("score");
+            Object weight = dim.get("weight");
+            if (score instanceof Number scoreNumber && weight instanceof Number weightNumber) {
+                sum += scoreNumber.doubleValue() * weightNumber.doubleValue();
+                weightSum += weightNumber.doubleValue();
             }
         }
-        return w > 0 ? (int) Math.round(sum / w) : 0;
+        return weightSum > 0 ? (int) Math.round(sum / weightSum) : 0;
     }
 
     private static List<Map<String, Object>> radarFromDimensions(Map<String, Object> dimensions) {
         List<Map<String, Object>> radar = new ArrayList<>();
-        for (Object v : dimensions.values()) {
-            if (v instanceof Map<?, ?> d) {
-                radar.add(Map.of(
-                        "name", d.get("name"),
-                        "value", d.get("score")));
+        for (Object value : dimensions.values()) {
+            if (!(value instanceof Map<?, ?> dim)) {
+                continue;
             }
+            Object score = dim.get("score");
+            if (!(score instanceof Number)) {
+                continue;
+            }
+            radar.add(Map.of(
+                    "name", dim.get("name"),
+                    "value", score
+            ));
         }
         return radar;
     }
@@ -333,45 +353,24 @@ public class OpsEffectDashboardService {
         return "待提升";
     }
 
-    private static int resourceHealthScore(Map<String, Object> resource) {
-        double disk = toDouble(resource.get("diskUsagePct"));
-        double cpu = toDouble(resource.get("cpuUsagePct"));
-        double mem = toDouble(resource.get("memoryUsagePct"));
-        int score = 100;
-        if (disk > 90) {
-            score -= 25;
-        } else if (disk > 80) {
-            score -= 12;
-        }
-        if (cpu > 90) {
-            score -= 15;
-        } else if (cpu > 75) {
-            score -= 8;
-        }
-        if (mem > 92) {
-            score -= 12;
-        }
-        return Math.max(45, Math.min(88, score));
-    }
-
     private Map<String, Object> loadResourceSnapshot() {
-        Map<String, Object> snap = remediationEffectEvaluator.captureMetrics();
+        Map<String, Object> snapshot = remediationEffectEvaluator.captureMetrics();
         try {
-            Map<String, Object> perf = statisticsService.getSystemPerformance(null);
-            if (perf != null) {
-                snap.put("diskUsagePct", toDouble(perf.get("diskUsage")));
-                snap.put("cpuUsagePct", toDouble(perf.get("cpuUsage")));
-                snap.put("memoryUsagePct", toDouble(perf.get("memoryUsage")));
+            Map<String, Object> performance = statisticsService.getSystemPerformance(null);
+            if (performance != null) {
+                snapshot.put("diskUsagePct", toDouble(performance.get("diskUsage")));
+                snapshot.put("cpuUsagePct", toDouble(performance.get("cpuUsage")));
+                snapshot.put("memoryUsagePct", toDouble(performance.get("memoryUsage")));
             }
         } catch (Exception ignored) {
-            // keep evaluator snapshot
+            // Keep evaluator snapshot when the performance endpoint is unavailable.
         }
-        return snap;
+        return snapshot;
     }
 
     private AuditAggregate loadAuditAggregate(int days) {
-        AuditAggregate a = new AuditAggregate();
-        a.periodDays = days;
+        AuditAggregate aggregate = new AuditAggregate();
+        aggregate.periodDays = days;
         try {
             Map<String, Object> row = jdbcTemplate.queryForMap(
                     """
@@ -387,17 +386,17 @@ public class OpsEffectDashboardService {
                     WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
                     """,
                     days);
-            a.total = intVal(row.get("total"));
-            a.successExec = intVal(row.get("success_exec"));
-            a.blocked = intVal(row.get("blocked"));
-            a.needConfirm = intVal(row.get("need_confirm"));
-            a.pass = intVal(row.get("pass_cnt"));
-            a.mcpCount = intVal(row.get("mcp_cnt"));
-            a.assistantCount = intVal(row.get("assistant_cnt"));
-            a.avgDurationMs = row.get("avg_duration") instanceof Number n ? n.longValue() : 0L;
-            a.successRate = a.total > 0 ? a.successExec * 1.0 / a.total : 0;
+            aggregate.total = intVal(row.get("total"));
+            aggregate.successExec = intVal(row.get("success_exec"));
+            aggregate.blocked = intVal(row.get("blocked"));
+            aggregate.needConfirm = intVal(row.get("need_confirm"));
+            aggregate.pass = intVal(row.get("pass_cnt"));
+            aggregate.mcpCount = intVal(row.get("mcp_cnt"));
+            aggregate.assistantCount = intVal(row.get("assistant_cnt"));
+            aggregate.avgDurationMs = row.get("avg_duration") instanceof Number number ? number.longValue() : 0L;
+            aggregate.successRate = aggregate.total > 0 ? aggregate.successExec * 1.0 / aggregate.total : 0;
 
-            a.byDay = jdbcTemplate.query(
+            aggregate.byDay = jdbcTemplate.query(
                     """
                     SELECT DATE(created_at) AS day,
                            COUNT(*) AS total,
@@ -408,26 +407,27 @@ public class OpsEffectDashboardService {
                     GROUP BY DATE(created_at)
                     ORDER BY day ASC
                     """,
-                    (rs, i) -> {
-                        Map<String, Object> m = new LinkedHashMap<>();
-                        m.put("day", rs.getDate("day").toString());
-                        m.put("total", rs.getInt("total"));
-                        m.put("successExec", rs.getInt("success_exec"));
-                        m.put("blocked", rs.getInt("blocked"));
-                        return m;
+                    (rs, index) -> {
+                        Map<String, Object> rowMap = new LinkedHashMap<>();
+                        rowMap.put("day", rs.getDate("day").toString());
+                        rowMap.put("total", rs.getInt("total"));
+                        rowMap.put("successExec", rs.getInt("success_exec"));
+                        rowMap.put("blocked", rs.getInt("blocked"));
+                        return rowMap;
                     },
                     days);
         } catch (Exception e) {
-            log.warn("审计聚合失败: {}", e.getMessage());
-            a.byDay = List.of();
+            log.warn("load audit aggregate failed: {}", e.getMessage());
+            aggregate.byDay = List.of();
         }
-        return a;
+        return aggregate;
     }
 
     private HealingAggregate loadHealingAggregate(int days) {
-        HealingAggregate h = new HealingAggregate();
+        HealingAggregate aggregate = new HealingAggregate();
         List<Integer> scores = new ArrayList<>();
-        List<Map<String, Object>> recent = new ArrayList<>();
+        List<Map<String, Object>> recentRuns = new ArrayList<>();
+        Set<String> recentTraceIds = new HashSet<>();
         try {
             List<Map<String, Object>> rows = jdbcTemplate.query(
                     """
@@ -438,47 +438,57 @@ public class OpsEffectDashboardService {
                     ORDER BY id DESC
                     LIMIT 80
                     """,
-                    (rs, i) -> {
-                        Map<String, Object> m = new LinkedHashMap<>();
-                        m.put("stepsJson", rs.getString("steps_json"));
-                        m.put("resultSummary", rs.getString("result_summary"));
-                        m.put("createdAt", rs.getTimestamp("created_at") != null
+                    (rs, index) -> {
+                        Map<String, Object> row = new LinkedHashMap<>();
+                        row.put("stepsJson", rs.getString("steps_json"));
+                        row.put("resultSummary", rs.getString("result_summary"));
+                        row.put("createdAt", rs.getTimestamp("created_at") != null
                                 ? rs.getTimestamp("created_at").toInstant().toString() : null);
-                        m.put("traceId", rs.getString("trace_id"));
-                        return m;
+                        row.put("traceId", rs.getString("trace_id"));
+                        return row;
                     },
                     days);
+
             for (Map<String, Object> row : rows) {
-                extractHealingScores(String.valueOf(row.get("stepsJson")), scores, h);
+                int before = scores.size();
+                extractHealingScores(str(row.get("stepsJson")), scores, aggregate);
+                if (scores.size() == before) {
+                    extractHealingScoreFromText(str(row.get("resultSummary")), scores);
+                }
             }
+
             List<Map<String, Object>> traces = opsAuditTraceService.listRecent(30);
-            for (Map<String, Object> t : traces) {
-                if (recent.size() >= 8) {
+            for (Map<String, Object> trace : traces) {
+                if (recentRuns.size() >= 8) {
                     break;
                 }
-                String summary = String.valueOf(t.getOrDefault("resultSummary", ""));
-                Matcher m = HEALING_SCORE_IN_TEXT.matcher(summary);
-                if (m.find()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("traceId", t.get("traceId"));
-                    row.put("healingScore", Integer.parseInt(m.group(1)));
-                    row.put("createdAt", t.get("createdAt"));
-                    row.put("channel", t.get("channel"));
-                    recent.add(row);
-                    scores.add(Integer.parseInt(m.group(1)));
+                String traceId = str(trace.get("traceId"));
+                if (!recentTraceIds.add(traceId)) {
+                    continue;
                 }
+                String summary = str(trace.getOrDefault("resultSummary", ""));
+                Matcher matcher = HEALING_SCORE_IN_TEXT.matcher(summary);
+                if (!matcher.find()) {
+                    continue;
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("traceId", traceId);
+                row.put("healingScore", Integer.parseInt(matcher.group(1)));
+                row.put("createdAt", trace.get("createdAt"));
+                row.put("channel", trace.get("channel"));
+                recentRuns.add(row);
             }
         } catch (Exception e) {
-            log.warn("自愈评分聚合失败: {}", e.getMessage());
+            log.warn("load healing aggregate failed: {}", e.getMessage());
         }
-        h.samples = scores.size();
-        h.avgScore = scores.isEmpty() ? 0 : scores.stream().mapToInt(Integer::intValue).average().orElse(0);
-        h.bestScore = scores.isEmpty() ? 0 : scores.stream().mapToInt(Integer::intValue).max().orElse(0);
-        h.recentRuns = recent;
-        return h;
+        aggregate.samples = scores.size();
+        aggregate.avgScore = scores.isEmpty() ? 0 : scores.stream().mapToInt(Integer::intValue).average().orElse(0);
+        aggregate.bestScore = scores.isEmpty() ? 0 : scores.stream().mapToInt(Integer::intValue).max().orElse(0);
+        aggregate.recentRuns = recentRuns;
+        return aggregate;
     }
 
-    private void extractHealingScores(String stepsJson, List<Integer> scores, HealingAggregate agg) {
+    private void extractHealingScores(String stepsJson, List<Integer> scores, HealingAggregate aggregate) {
         if (stepsJson == null || stepsJson.isBlank()) {
             return;
         }
@@ -490,66 +500,162 @@ public class OpsEffectDashboardService {
                 }
                 Object detail = step.get("detail");
                 if (detail instanceof Map<?, ?> effect) {
-                    Object hs = effect.get("healingScore");
-                    if (hs instanceof Number n) {
-                        scores.add(n.intValue());
+                    Object score = effect.get("healingScore");
+                    if (score instanceof Number number) {
+                        scores.add(number.intValue());
                     }
                     Object delta = effect.get("diskUsageDeltaPct");
-                    if (delta instanceof Number d && d.doubleValue() > 0) {
-                        agg.totalDiskDeltaPct += d.doubleValue();
+                    if (delta instanceof Number number && number.doubleValue() > 0) {
+                        aggregate.totalDiskDeltaPct += number.doubleValue();
                     }
                 } else if (detail != null) {
-                    Matcher m = HEALING_SCORE_IN_TEXT.matcher(detail.toString());
-                    if (m.find()) {
-                        scores.add(Integer.parseInt(m.group(1)));
-                    }
+                    extractHealingScoreFromText(detail.toString(), scores);
                 }
             }
         } catch (Exception ignored) {
-            Matcher m = HEALING_SCORE_IN_TEXT.matcher(stepsJson);
-            while (m.find()) {
-                scores.add(Integer.parseInt(m.group(1)));
+            extractHealingScoreFromText(stepsJson, scores);
+        }
+    }
+
+    private void extractHealingScoreFromText(String text, List<Integer> scores) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        Matcher matcher = HEALING_SCORE_IN_TEXT.matcher(text);
+        while (matcher.find()) {
+            scores.add(Integer.parseInt(matcher.group(1)));
+        }
+    }
+
+    private long extractReleasedBytes(String stepsJson) {
+        if (stepsJson == null || stepsJson.isBlank()) {
+            return 0L;
+        }
+        try {
+            List<Map<String, Object>> steps = objectMapper.readValue(stepsJson, new TypeReference<>() {});
+            long total = 0L;
+            for (Map<String, Object> step : steps) {
+                total += extractReleasedBytes(step);
             }
+            return total;
+        } catch (Exception e) {
+            log.debug("parse released bytes skipped: {}", e.getMessage());
+            return 0L;
+        }
+    }
+
+    private long extractReleasedBytes(Map<String, Object> step) {
+        if (step == null) {
+            return 0L;
+        }
+        if (!"execute".equalsIgnoreCase(str(step.get("phase")))) {
+            return 0L;
+        }
+        if (!"EXECUTE".equalsIgnoreCase(str(step.get("mode")))) {
+            return 0L;
+        }
+        if (!Boolean.TRUE.equals(step.get("success"))) {
+            return 0L;
+        }
+        String toolName = str(step.get("toolName"));
+        if (!"CleanTempTool".equals(toolName) && !"LogCleanupTool".equals(toolName)) {
+            return 0L;
+        }
+        return extractBytesFreed(step.get("detail"));
+    }
+
+    private long extractBytesFreed(Object detail) {
+        JsonNode payload = toJsonNode(detail);
+        if (payload == null || payload.isMissingNode() || payload.isNull()) {
+            return 0L;
+        }
+        long direct = payload.path("bytesFreed").asLong(0L);
+        if (direct > 0L) {
+            return direct;
+        }
+        JsonNode nestedDetail = payload.path("detail");
+        if (!nestedDetail.isMissingNode() && !nestedDetail.isNull()) {
+            long nested = extractBytesFreed(nestedDetail);
+            if (nested > 0L) {
+                return nested;
+            }
+        }
+        JsonNode data = payload.path("data");
+        if (!data.isMissingNode() && !data.isNull()) {
+            long nested = extractBytesFreed(data);
+            if (nested > 0L) {
+                return nested;
+            }
+        }
+        return 0L;
+    }
+
+    private JsonNode toJsonNode(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof JsonNode node) {
+            return node;
+        }
+        if (value instanceof String raw) {
+            return McpToolPayloadParser.parsePayload(objectMapper, raw);
+        }
+        try {
+            return objectMapper.valueToTree(value);
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 
     private static PatrolAggregate aggregatePatrol(List<Map<String, Object>> trend) {
-        PatrolAggregate p = new PatrolAggregate();
+        PatrolAggregate aggregate = new PatrolAggregate();
         if (trend == null || trend.isEmpty()) {
-            return p;
+            return aggregate;
         }
         long runs = 0;
         long findings = 0;
         List<Long> dailyAlerts = new ArrayList<>();
         for (Map<String, Object> row : trend) {
-            long rc = longVal(row.get("runCount"));
-            long ac = longVal(row.get("alertCount"));
-            runs += rc;
-            findings += ac;
-            dailyAlerts.add(ac);
+            long runCount = longVal(row.get("runCount"));
+            long alertCount = longVal(row.get("alertCount"));
+            runs += runCount;
+            findings += alertCount;
+            dailyAlerts.add(alertCount);
         }
-        p.runs = runs;
-        p.findings = findings;
-        p.avgFindingsPerRun = runs > 0 ? findings * 1.0 / runs : 0;
+        aggregate.runs = runs;
+        aggregate.findings = findings;
+        aggregate.avgFindingsPerRun = runs > 0 ? findings * 1.0 / runs : 0;
         if (dailyAlerts.size() >= 2) {
             int mid = dailyAlerts.size() / 2;
             double first = dailyAlerts.subList(0, mid).stream().mapToLong(Long::longValue).average().orElse(0);
             double second = dailyAlerts.subList(mid, dailyAlerts.size()).stream().mapToLong(Long::longValue).average().orElse(0);
-            p.trendImproving = second < first * 0.85;
+            aggregate.trendImproving = second < first * 0.85;
         }
-        return p;
+        return aggregate;
     }
 
-    private static int intVal(Object o) {
-        return o instanceof Number n ? n.intValue() : 0;
+    private static Map<String, Object> highlight(String type, String title, String detail) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("type", type);
+        value.put("title", title);
+        value.put("detail", detail);
+        return value;
     }
 
-    private static long longVal(Object o) {
-        return o instanceof Number n ? n.longValue() : 0L;
+    private static int intVal(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
     }
 
-    private static double toDouble(Object o) {
-        return o instanceof Number n ? n.doubleValue() : 0.0;
+    private static long longVal(Object value) {
+        return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    private static double toDouble(Object value) {
+        return value instanceof Number number ? number.doubleValue() : 0.0;
+    }
+
+    private static String str(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private static class AuditAggregate {

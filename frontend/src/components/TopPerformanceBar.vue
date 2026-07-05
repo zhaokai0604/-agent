@@ -1,5 +1,5 @@
 <template>
-  <div class="top-perf-bar">
+  <div class="top-perf-bar" :class="{ 'top-perf-bar--vertical': layout === 'vertical' }">
     <div class="top-perf-title">
       <el-icon class="pulse"><Odometer /></el-icon>
       <span>本机负载</span>
@@ -146,11 +146,20 @@
 
 <script setup>
 import { reactive, ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+
+defineProps({
+  layout: {
+    type: String,
+    default: 'horizontal',
+    validator: value => ['horizontal', 'vertical'].includes(value)
+  }
+})
 import { Odometer, Lock } from '@element-plus/icons-vue'
 import SecuritySelfCheckDialog from './SecuritySelfCheckDialog.vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import {
+  buildManagementWsUrl,
   getPerformanceData,
   getPatrolAlertsRecent,
   getPatrolCorrelationLatest,
@@ -161,18 +170,17 @@ import {
   getPlatformInfo
 } from '../api/index.js'
 
-const runtimeHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
-const runtimeProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
 /** 完整 ws/wss 地址时优先使用（前后端不同域部署时配置 .env） */
 const VITE_AWARD_LOG_WS_URL = typeof import.meta.env?.VITE_AWARD_LOG_WS_URL === 'string'
   ? import.meta.env.VITE_AWARD_LOG_WS_URL.trim()
   : ''
 
-const INTERVAL_MS = 5000
-const PATROL_POLL_MS = 12000
+const INTERVAL_MS = 15000
+const PATROL_POLL_MS = 60000
+const SLOW_PATROL_POLL_MS = 300000
 const WS_RECONNECT_CAP = 10
 /** WS 曾成功推送 performance 后，在此时间内跳过 HTTP 轮询（与后端 5s 推送对齐并留余量） */
-const HTTP_SKIP_AFTER_WS_MS = 12000
+const HTTP_SKIP_AFTER_WS_MS = 30000
 
 const metrics = [
   { key: 'cpuUsage', label: 'CPU 使用率（采集周期内均值）', short: 'CPU' },
@@ -206,6 +214,7 @@ let patrolTrendChart = null
 let patrolTrendPopChart = null
 let timer = null
 let patrolTimer = null
+let slowPatrolTimer = null
 let perfWs = null
 let wsReconnectTimer = null
 let wsReconnectAttempt = 0
@@ -225,9 +234,7 @@ function performanceWsUrl () {
   if (VITE_AWARD_LOG_WS_URL) {
     return VITE_AWARD_LOG_WS_URL
   }
-  const wsScheme = runtimeProtocol === 'https:' ? 'wss:' : 'ws:'
-  const host = typeof window !== 'undefined' ? window.location.host : `${runtimeHost}:8088`
-  return `${wsScheme}//${host}/award-log/ws/performance`
+  return buildManagementWsUrl('/ws/performance')
 }
 
 async function fetchRemediationCoverage () {
@@ -433,7 +440,6 @@ function connectPerformanceWs () {
     wsReconnectAttempt = 0
     try {
       perfWs.send('sync')
-      perfWs.send('refresh')
     } catch {
       /* 首帧由服务端定时推送，refresh 为可选加速 */
     }
@@ -619,6 +625,10 @@ async function fetchPatrolHistoryTrend () {
   }
 }
 
+function isDocumentVisible () {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
+}
+
 watch(showPatrolPopover, (open) => {
   if (open) {
     nextTick(() => {
@@ -630,6 +640,43 @@ watch(showPatrolPopover, (open) => {
     })
   }
 })
+
+async function fetchPatrolRealtime () {
+  if (!isDocumentVisible()) {
+    return
+  }
+  try {
+    const [list, corr, pending] = await Promise.all([
+      getPatrolAlertsRecent(12),
+      getPatrolCorrelationLatest(),
+      getPatrolRemediationPending()
+    ])
+    applyRemediationPendingWs(pending)
+    correlation.value = corr && typeof corr === 'object' ? { ...corr } : {}
+    patrolList.value = Array.isArray(list) ? list : []
+    patrolCount.value = patrolList.value.length
+    refreshPatrolHint()
+  } catch {
+    /* 闈欓粯 */
+  }
+}
+
+async function fetchPatrolAnalytics () {
+  if (!isDocumentVisible()) {
+    return
+  }
+  await Promise.all([
+    fetchPatrolHistoryTrend(),
+    fetchRemediationCoverage()
+  ])
+}
+
+async function runLightPatrolTick (includeAnalytics = false) {
+  await fetchPatrolRealtime()
+  if (includeAnalytics) {
+    await fetchPatrolAnalytics()
+  }
+}
 
 async function patrolTick () {
   try {
@@ -651,6 +698,9 @@ async function patrolTick () {
 }
 
 async function tick () {
+  if (!isDocumentVisible()) {
+    return
+  }
   const wsFresh = lastPerfWsAt.value && (Date.now() - lastPerfWsAt.value < HTTP_SKIP_AFTER_WS_MS)
   if (wsFresh) {
     return
@@ -687,19 +737,49 @@ async function loadPlatformEnv () {
   }
 }
 
-onMounted(() => {
+function startFeed () {
+  if (!isDocumentVisible() || timer || patrolTimer || slowPatrolTimer) {
+    return
+  }
   loadPlatformEnv()
   tick()
+  runLightPatrolTick(true)
   timer = setInterval(tick, INTERVAL_MS)
-  patrolTick()
-  patrolTimer = setInterval(patrolTick, PATROL_POLL_MS)
+  patrolTimer = setInterval(fetchPatrolRealtime, PATROL_POLL_MS)
+  slowPatrolTimer = setInterval(fetchPatrolAnalytics, SLOW_PATROL_POLL_MS)
   connectPerformanceWs()
+}
+
+function stopFeed (forUnmount = false) {
+  if (timer) clearInterval(timer)
+  if (patrolTimer) clearInterval(patrolTimer)
+  if (slowPatrolTimer) clearInterval(slowPatrolTimer)
+  timer = null
+  patrolTimer = null
+  slowPatrolTimer = null
+  disconnectPerformanceWs(true, forUnmount)
+}
+
+function handleVisibilityChange () {
+  if (isDocumentVisible()) {
+    startFeed()
+    return
+  }
+  stopFeed(false)
+}
+
+onMounted(() => {
+  startFeed()
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+  }
 })
 
 onUnmounted(() => {
-  if (timer) clearInterval(timer)
-  if (patrolTimer) clearInterval(patrolTimer)
-  disconnectPerformanceWs(true, true)
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }
+  stopFeed(true)
   patrolTrendChart?.dispose()
   patrolTrendPopChart?.dispose()
   patrolTrendChart = null
@@ -868,8 +948,47 @@ onUnmounted(() => {
   margin-top: 4px;
 }
 
+.top-perf-bar--vertical {
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px;
+  margin: 0;
+  width: 100%;
+  border: none;
+  background: transparent;
+}
+
+.top-perf-bar--vertical .top-perf-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+}
+
+.top-perf-bar--vertical .metric {
+  min-width: 0;
+  max-width: none;
+  width: 100%;
+}
+
+.top-perf-bar--vertical .patrol-trend-chart {
+  width: 100%;
+  height: 72px;
+  margin: 0;
+}
+
+.top-perf-bar--vertical .sec-check-btn {
+  margin: 0;
+  width: 100%;
+}
+
+.top-perf-bar--vertical .patrol-hint {
+  width: 100%;
+}
+
 @media (max-width: 1200px) {
-  .top-perf-bar {
+  .top-perf-bar:not(.top-perf-bar--vertical) {
     display: none;
   }
 }

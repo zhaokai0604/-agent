@@ -37,10 +37,11 @@ public final class LogCollectorPathResolver {
         }
         Set<String> roots = new LinkedHashSet<>();
         if (OsRuntime.isWindows()) {
-            addEnvPath(roots, System.getenv("ProgramData"));
-            addEnvPath(roots, System.getenv("LOCALAPPDATA"));
-            addEnvPath(roots, System.getenv("TEMP"));
-            addEnvPath(roots, System.getenv("USERPROFILE"));
+            addEnvChildPath(roots, System.getenv("TEMP"), "logs");
+            addEnvChildPath(roots, System.getenv("LOCALAPPDATA"), "Temp");
+            addEnvChildPath(roots, System.getenv("ProgramData"), "logs");
+            addEnvChildPath(roots, System.getenv("ProgramData"), "Microsoft", "Windows", "WER", "ReportArchive");
+            addEnvChildPath(roots, System.getenv("ProgramData"), "Microsoft", "Windows", "WER", "ReportQueue");
             addIfExists(roots, "C:\\Windows\\Logs");
             addIfExists(roots, "C:\\inetpub\\logs");
             addIfExists(roots, System.getProperty("user.dir") + "\\logs");
@@ -68,6 +69,23 @@ public final class LogCollectorPathResolver {
     private static void addEnvPath(Set<String> roots, String path) {
         if (path != null && !path.isBlank()) {
             addIfExists(roots, path.trim());
+        }
+    }
+
+    private static void addEnvChildPath(Set<String> roots, String base, String first, String... more) {
+        if (base == null || base.isBlank()) {
+            return;
+        }
+        try {
+            Path child = Path.of(base.trim()).resolve(first);
+            if (more != null) {
+                for (String part : more) {
+                    child = child.resolve(part);
+                }
+            }
+            addIfExists(roots, child.toString());
+        } catch (Exception ignored) {
+            // 非法路径跳过
         }
     }
 

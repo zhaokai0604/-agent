@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -281,7 +282,19 @@ public class FileLogCollector implements LogCollector {
 
     private boolean isAllowedDirectory(Path path) {
         String name = path.getFileName() == null ? "" : path.getFileName().toString().toLowerCase();
-        return !excludeDirectories.contains(name);
+        if (excludeDirectories.contains(name)) {
+            return false;
+        }
+        if (File.separatorChar == '\\') {
+            String normalized = path.toAbsolutePath().toString().replace('\\', '/').toLowerCase(Locale.ROOT);
+            if (normalized.startsWith("c:/programdata/microsoft/")
+                    || normalized.startsWith("c:/programdata/windows defender")
+                    || normalized.startsWith("c:/$recycle.bin")
+                    || normalized.startsWith("c:/system volume information")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private Set<String> parseCsvToLowercaseSet(String csv) {

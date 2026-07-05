@@ -1,19 +1,59 @@
 <template>
-  <div class="ops-page log-analysis-page">
+  <div class="ops-page log-analysis-page" :class="{ 'log-analysis-page--fill': isUploadIdle }">
       <!-- 1. 初始上传状态 -->
       <transition name="el-fade-in-linear">
         <div v-if="!reportData && taskStatus.status !== 'PROCESSING' && taskStatus.status !== 'FAILED'" class="upload-section">
-          <div class="hero-text">
-            <h1>异常诊断</h1>
-            <p>上传系统日志，自动识别异常并生成诊断报告。</p>
-          </div>
-          
-          <div class="upload-box" @click="triggerUpload" @drop.prevent="handleDrop" @dragover.prevent>
-            <input type="file" ref="fileInput" class="hidden-input" @change="handleFileSelect">
-            <el-icon class="upload-icon"><upload-filled /></el-icon>
-            <div class="upload-hint">点击或拖拽系统日志到此处</div>
-            <div class="upload-sub">支持所有日志格式，包括 Windows 事件日志、Linux 系统日志等</div>
-          </div>
+          <OpsPageHeader
+            title="异常诊断"
+            subtitle="上传系统日志，自动识别异常并生成诊断报告"
+          />
+
+          <el-card shadow="never" class="upload-panel">
+            <el-row :gutter="20" align="stretch" class="upload-panel__row">
+              <el-col :xs="24" :lg="15">
+                <div
+                  class="upload-box"
+                  role="button"
+                  tabindex="0"
+                  @click="triggerUpload"
+                  @keydown.enter.prevent="triggerUpload"
+                  @keydown.space.prevent="triggerUpload"
+                  @drop.prevent="handleDrop"
+                  @dragover.prevent
+                >
+                  <input type="file" ref="fileInput" class="hidden-input" @change="handleFileSelect">
+                  <el-icon class="upload-icon"><upload-filled /></el-icon>
+                  <div class="upload-hint">点击或拖拽系统日志到此处</div>
+                  <div class="upload-sub">单文件上传，分析完成后可导出 CSV / HTML 报告</div>
+                </div>
+              </el-col>
+              <el-col :xs="24" :lg="9">
+                <div class="upload-guide">
+                  <div class="upload-guide__block">
+                    <div class="upload-guide__title">支持格式</div>
+                    <div class="upload-guide__tags">
+                      <el-tag size="small" effect="plain">.log</el-tag>
+                      <el-tag size="small" effect="plain">.txt</el-tag>
+                      <el-tag size="small" effect="plain">syslog</el-tag>
+                      <el-tag size="small" effect="plain">Windows 事件</el-tag>
+                      <el-tag size="small" effect="plain">应用日志</el-tag>
+                    </div>
+                  </div>
+                  <div class="upload-guide__block">
+                    <div class="upload-guide__title">分析流程</div>
+                    <ol class="upload-guide__steps">
+                      <li>Drain 模板挖掘与异常检测</li>
+                      <li>生成健康度与风险分布报告</li>
+                      <li>可对单条异常发起 AI 诊断</li>
+                    </ol>
+                  </div>
+                  <div class="upload-guide__tip">
+                    建议使用脱敏后的模拟日志；敏感字段会在展示层脱敏处理。
+                  </div>
+                </div>
+              </el-col>
+            </el-row>
+          </el-card>
         </div>
       </transition>
 
@@ -247,6 +287,7 @@ import {
   agentPrefillHighAnomaly,
   OPS_AGENT_ANOMALY_THRESHOLD
 } from '../utils/opsAgentNavigate'
+import OpsPageHeader from './OpsPageHeader.vue'
 
 // Props to accept taskId from parent (history navigation)
 const props = defineProps(['initialTaskId'])
@@ -261,6 +302,12 @@ const reportData = ref(null)
 const anomalyLogs = ref([])
 const stats = ref([])
 const adviceList = ref([])
+
+const isUploadIdle = computed(() => (
+  !reportData.value
+  && taskStatus.status !== 'PROCESSING'
+  && taskStatus.status !== 'FAILED'
+))
 
 const legendData = [
   { name: '致命故障', color: '#B71C1C' },
@@ -370,7 +417,8 @@ const handleSingleRowDiagnosis = async (row) => {
             method: 'POST',
             credentials: 'include',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
             },
             body: JSON.stringify(payload)
         })
@@ -800,12 +848,59 @@ defineExpose({
 </script>
 
 <style scoped>
+.log-analysis-page--fill {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  /* 抵消 shell-content 内边距，占满主内容区 */
+  margin: -16px -20px -20px;
+  padding: 16px 20px 20px;
+  min-height: calc(100vh - var(--ops-header-h, 52px));
+}
+
 /* 上传区域 */
 .upload-section {
-  text-align: center;
-  margin: 36px 0;
-  padding: 0 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   animation: fadeInUp 0.8s ease;
+}
+
+.upload-section :deep(.ops-page-header) {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
+.upload-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--ops-border, #e2e8f0);
+  border-radius: var(--ops-radius, 12px);
+  background: var(--ops-panel, #fff);
+}
+
+.upload-panel :deep(.el-card__body) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.upload-panel__row {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.upload-panel__row :deep(.el-col) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .failure-section {
@@ -840,19 +935,72 @@ defineExpose({
 }
 
 .upload-box {
-  width: min(760px, 100%);
-  height: 220px;
-  margin: 0 auto;
-  background: var(--ops-panel, #ffffff);
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  background: var(--ops-panel-soft, #f8fafc);
   border: 2px dashed var(--ops-border, #cbd5e1);
-  border-radius: var(--ops-radius, 12px);
+  border-radius: var(--ops-radius-sm, 10px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease;
-  box-shadow: var(--ops-shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.08));
+  box-sizing: border-box;
+  padding: 24px;
+  text-align: center;
+}
+
+.upload-guide {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 4px 4px;
+  box-sizing: border-box;
+}
+
+.upload-guide__block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.upload-guide__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ops-text, #0f172a);
+}
+
+.upload-guide__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.upload-guide__steps {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ops-text-muted, #64748b);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.upload-guide__steps li + li {
+  margin-top: 6px;
+}
+
+.upload-guide__tip {
+  margin-top: auto;
+  padding: 10px 12px;
+  border-radius: var(--ops-radius-sm, 8px);
+  background: rgba(13, 148, 136, 0.06);
+  border: 1px solid rgba(13, 148, 136, 0.15);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ops-text-muted, #64748b);
 }
 
 .upload-box:hover {
@@ -1047,7 +1195,7 @@ defineExpose({
 .kpi-desc {
   font-size: 24px;
   font-weight: 700;
-  color: #1a237e;
+  color: var(--ops-text);
   margin-top: 0;
   line-height: 1.2;
 }
@@ -1111,7 +1259,7 @@ defineExpose({
 .detail-card .el-card__header,
 .chart-card .el-card__header,
 .advice-card .el-card__header {
-  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  background: var(--ops-panel-soft);
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   padding: 20px 24px;
   border-radius: 16px 16px 0 0;
@@ -1254,7 +1402,7 @@ defineExpose({
 }
 
 .ai-dialog .el-dialog__header {
-  background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+  background: var(--ops-primary);
   color: white;
   padding: 24px;
   border-radius: 20px 20px 0 0;
@@ -1281,7 +1429,7 @@ defineExpose({
 .ai-avatar {
   width: 60px;
   height: 60px;
-  background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
+  background: var(--ops-primary-hover);
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1321,7 +1469,7 @@ defineExpose({
 .ai-markdown-body h1,
 .ai-markdown-body h2,
 .ai-markdown-body h3 {
-  color: #1a237e;
+  color: var(--ops-text);
   margin-top: 24px;
   margin-bottom: 16px;
 }
@@ -1364,7 +1512,7 @@ defineExpose({
 }
 
 .stack-trace-box {
-  background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+  background: #0f172a;
   color: #e0e0e0;
   padding: 20px;
   border-radius: 12px;
@@ -1421,8 +1569,7 @@ defineExpose({
   }
   
   .upload-box {
-    width: 600px;
-    height: 280px;
+    min-height: 200px;
   }
   
   .scan-progress {
@@ -1445,22 +1592,40 @@ defineExpose({
 }
 
 @media (max-width: 768px) {
-  .upload-section {
-    margin: 40px 0;
-    padding: 0 20px;
+  .log-analysis-page--fill {
+    min-height: calc(100vh - var(--ops-header-h, 52px));
   }
-  
+
+  .upload-panel :deep(.el-card__body) {
+    padding: 16px;
+  }
+
+  .upload-panel__row :deep(.el-col) {
+    min-height: auto;
+  }
+
+  .upload-box {
+    flex: none;
+    min-height: 220px;
+  }
+
+  .upload-guide {
+    flex: none;
+    min-height: auto;
+    padding-left: 0;
+    margin-top: 12px;
+  }
+
+  .upload-guide__tip {
+    margin-top: 0;
+  }
+
   .hero-text h1 {
     font-size: 28px;
   }
   
   .hero-text p {
     font-size: 16px;
-  }
-  
-  .upload-box {
-    width: 100%;
-    height: 240px;
   }
   
   .processing-section {

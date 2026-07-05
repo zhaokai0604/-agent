@@ -5,6 +5,8 @@
         <span>Agent 记忆层</span>
         <el-tag v-if="awmEnabled" size="small" type="success" effect="plain">AWM 开</el-tag>
         <el-tag v-else size="small" type="info" effect="plain">AWM 关</el-tag>
+        <el-tag v-if="totalRuns" size="small" type="primary" effect="plain">回放 {{ totalRuns }}</el-tag>
+        <el-tag v-if="supportedToolCount" size="small" effect="plain">{{ supportedToolCount }} 工具可回放</el-tag>
         <el-tag v-if="reflexionEnabled" size="small" type="warning" effect="plain">Reflexion 开</el-tag>
       </div>
       <div class="memory-panel-actions">
@@ -41,6 +43,8 @@
                   <span class="wf-title">{{ wf.title }}</span>
                   <span class="wf-id">{{ wf.workflowId }}</span>
                   <el-tag v-if="wf.utilityCount" size="small" type="info">命中 {{ wf.utilityCount }}</el-tag>
+                  <el-tag v-if="wf.successCount" size="small" type="success">成功 {{ wf.successCount }}</el-tag>
+                  <el-tag v-if="wf.runCount" size="small" effect="plain">回放 {{ wf.runCount }}</el-tag>
                 </div>
               </template>
               <p v-if="wf.description" class="wf-desc">{{ wf.description }}</p>
@@ -63,7 +67,16 @@
         </template>
         <div v-loading="loadingLessons" class="memory-tab-body">
           <p v-if="reflexionNote" class="reflexion-note">{{ reflexionNote }}</p>
-          <el-empty v-if="!lessons.length && !loadingLessons" description="暂无教训；在 MCP 触发一次安全拦截后会沉淀" />
+          <el-empty v-if="!lessons.length && !loadingLessons" description="暂无教训">
+            <template #description>
+              <p class="empty-hint">需在对话或工具控制台触发一次<strong>安全拦截</strong>后才会沉淀，例如：</p>
+              <ul class="empty-hint-list">
+                <li>未确认就执行临时清理 / 删除类操作</li>
+                <li>只读会话下请求写操作</li>
+                <li>命中高危命令或注入检测</li>
+              </ul>
+            </template>
+          </el-empty>
           <div v-else class="lesson-list">
             <el-card
               v-for="(lesson, idx) in lessons"
@@ -101,6 +114,8 @@ const domain = ref('all')
 const workflows = ref([])
 const lessons = ref([])
 const awmEnabled = ref(true)
+const totalRuns = ref(0)
+const supportedToolCount = ref(0)
 const reflexionEnabled = ref(true)
 const reflexionNote = ref('')
 const loadingWorkflows = ref(false)
@@ -115,6 +130,8 @@ const loadWorkflows = async () => {
   try {
     const data = await getOpsWorkflowMemory(domain.value)
     awmEnabled.value = data?.enabled !== false
+    totalRuns.value = data?.totalRuns || 0
+    supportedToolCount.value = data?.supportedToolCount || 0
     workflows.value = Array.isArray(data?.workflows) ? data.workflows : []
   } catch (e) {
     ElMessage.error(e.message || '加载 workflow 失败')
@@ -143,7 +160,13 @@ const onInduce = async () => {
   inducing.value = true
   try {
     const data = await induceOpsWorkflowFromAudit(20)
-    ElMessage.success(`离线诱导完成，新增 ${data?.created ?? 0} 条，库内共 ${data?.storedCount ?? 0} 条`)
+    const created = data?.created ?? 0
+    const hint = data?.hint || ''
+    if (created > 0) {
+      ElMessage.success(`离线诱导完成，新增 ${created} 条，库内共 ${data?.storedCount ?? 0} 条`)
+    } else {
+      ElMessage.warning(hint || `未新增套路（已扫描 ${data?.scanned ?? 0} 条审计轨迹）`)
+    }
     await loadWorkflows()
   } catch (e) {
     ElMessage.error(e.message || '诱导失败')
@@ -275,5 +298,19 @@ defineExpose({ refreshAll })
   margin: 6px 0 0;
   font-size: 12px;
   color: #909399;
+}
+.empty-hint {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.5;
+}
+.empty-hint-list {
+  margin: 0;
+  padding-left: 18px;
+  text-align: left;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.6;
 }
 </style>

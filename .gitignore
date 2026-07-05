@@ -84,6 +84,16 @@ src/main/resources/application-local.yml
 # 运行时/本地数据
 logs/
 storage/
+outputs/
+perf/runtime/
+perf/data/results/
+
+# 调试输出
+vite-debug.log
+
+# 性能测试用日志样本（运行 perf/data/generate-log-samples.ps1 生成）
+perf/data/logs/*.log
+!perf/data/logs/.gitkeep
 
 # 一键部署脚本输出（含 Jar 与 dist）
 deploy/release/
@@ -91,3 +101,4 @@ deploy/release/
 # 告警运行时配置（含邮箱等，用 alarm-config.example.json 为模板本地复制）
 alarm-config.json
 agent-path-policy-overrides.json
+system-config-overrides.json

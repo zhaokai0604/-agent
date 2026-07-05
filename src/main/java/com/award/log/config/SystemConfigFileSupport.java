@@ -27,6 +27,7 @@ public final class SystemConfigFileSupport {
     public static final String OVERRIDE_FILE_NAME = "system-config-overrides.json";
     public static final String SECRET_FILE_NAME = "system-config-secrets.json";
     public static final String PATH_POLICY_FILE_NAME = "agent-path-policy-overrides.json";
+    public static final String ALARM_CONFIG_FILE_NAME = "alarm-config.json";
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
@@ -46,8 +47,124 @@ public final class SystemConfigFileSupport {
         return resolve(PATH_POLICY_FILE_NAME);
     }
 
+    public static Path alarmConfigFile() {
+        return resolve(ALARM_CONFIG_FILE_NAME);
+    }
+
     public static Path resolve(String fileName) {
-        return Paths.get(System.getProperty("user.dir"), fileName);
+        String configuredDir = configuredDir();
+        if (configuredDir != null) {
+            return Paths.get(configuredDir, fileName);
+        }
+        for (Path dir : candidateDirectories()) {
+            Path candidate = dir.resolve(fileName);
+            if (Files.exists(candidate)) {
+                return candidate;
+            }
+        }
+        return activeConfigDirPath().resolve(fileName);
+    }
+
+    public static List<Path> candidateDirectories() {
+        List<Path> dirs = new ArrayList<>();
+        addCandidate(dirs, defaultWorkingDir());
+        addCandidate(dirs, classpathRootDir());
+        return dirs;
+    }
+
+    public static Path defaultWorkingDir() {
+        return Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
+    }
+
+    public static String activeConfigDir() {
+        return activeConfigDirPath().toString();
+    }
+
+    public static Path activeConfigDirPath() {
+        String configuredDir = configuredDir();
+        if (configuredDir != null) {
+            return Paths.get(configuredDir).toAbsolutePath().normalize();
+        }
+        Path workingDir = defaultWorkingDir();
+        if (hasKnownConfigFiles(workingDir)) {
+            return workingDir;
+        }
+        Path classpathDir = classpathRootDir();
+        if (classpathDir != null && hasKnownConfigFiles(classpathDir)) {
+            return classpathDir;
+        }
+        return workingDir;
+    }
+
+    private static Path classpathRootDir() {
+        try {
+            Path classesDir = Paths.get(SystemConfigFileSupport.class.getProtectionDomain()
+                    .getCodeSource()
+                    .getLocation()
+                    .toURI());
+            Path dir = Files.isDirectory(classesDir) ? classesDir : classesDir.getParent();
+            if (dir == null) {
+                return null;
+            }
+            Path current = dir.toAbsolutePath().normalize();
+            while (current != null) {
+                if (Files.exists(current.resolve("pom.xml")) || Files.exists(current.resolve(".git"))) {
+                    return current;
+                }
+                current = current.getParent();
+            }
+            return dir.toAbsolutePath().normalize();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static void addCandidate(List<Path> dirs, Path path) {
+        if (path == null) {
+            return;
+        }
+        Path normalized = path.toAbsolutePath().normalize();
+        if (!dirs.contains(normalized)) {
+            dirs.add(normalized);
+        }
+    }
+
+    private static boolean hasKnownConfigFiles(Path dir) {
+        if (dir == null) {
+            return false;
+        }
+        for (String fileName : knownConfigFileNames()) {
+            if (Files.exists(dir.resolve(fileName))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> knownConfigFileNames() {
+        return List.of(
+                OVERRIDE_FILE_NAME,
+                SECRET_FILE_NAME,
+                PATH_POLICY_FILE_NAME,
+                ALARM_CONFIG_FILE_NAME);
+    }
+
+    private static String configuredDir() {
+        return firstNonBlank(
+                System.getProperty("award.config.dir"),
+                System.getenv("AWARD_CONFIG_DIR"));
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     public static Map<String, Object> readJsonFile(Path path) {
@@ -65,6 +182,10 @@ public final class SystemConfigFileSupport {
         try {
             if (path == null) {
                 throw new IllegalArgumentException("path cannot be null");
+            }
+            Path parent = path.toAbsolutePath().normalize().getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
             }
             OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), root);
         } catch (Exception e) {

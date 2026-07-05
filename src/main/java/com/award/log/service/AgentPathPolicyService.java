@@ -1,6 +1,7 @@
 package com.award.log.service;
 
 import com.award.log.config.AgentOpsProperties;
+import com.award.log.config.SystemConfigFileSupport;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,7 +32,7 @@ public class AgentPathPolicyService {
     private final AgentOpsProperties agentOpsProperties;
     private final OpsPathPolicy opsPathPolicy;
     private final ObjectMapper objectMapper;
-    private final String overrideFilePath;
+    private final Path overrideFilePath;
 
     public AgentPathPolicyService(
             AgentOpsProperties agentOpsProperties,
@@ -39,8 +41,7 @@ public class AgentPathPolicyService {
         this.agentOpsProperties = agentOpsProperties;
         this.opsPathPolicy = opsPathPolicy;
         this.objectMapper = objectMapper;
-        this.overrideFilePath = System.getProperty("user.dir").replace('\\', '/')
-                + "/agent-path-policy-overrides.json";
+        this.overrideFilePath = SystemConfigFileSupport.pathPolicyFile();
     }
 
     @PostConstruct
@@ -55,8 +56,8 @@ public class AgentPathPolicyService {
             boolean win = OsRuntime.isWindows();
             view.put("platform", win ? "windows" : "linux");
             view.put("policyVersion", opsPathPolicy.getPolicyVersion());
-            view.put("overrideFile", overrideFilePath);
-            view.put("overrideFileExists", new File(overrideFilePath).exists());
+            view.put("overrideFile", overrideFilePath.toAbsolutePath().toString());
+            view.put("overrideFileExists", overrideFilePath.toFile().exists());
             view.put("readPrefixes", opsPathPolicy.snapshotReadPrefixes());
             view.put("cleanRoots", opsPathPolicy.snapshotTempCleanRoots());
             view.put("logCleanupRoots", opsPathPolicy.snapshotLogCleanupRoots());
@@ -110,7 +111,7 @@ public class AgentPathPolicyService {
     }
 
     public void applyOverridesFromFileIfPresent() {
-        File file = new File(overrideFilePath);
+        File file = overrideFilePath.toFile();
         if (!file.exists()) {
             return;
         }
@@ -156,7 +157,7 @@ public class AgentPathPolicyService {
 
     private void writeOverrideFile(Map<String, Object> body) {
         try {
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(new File(overrideFilePath), body);
+            SystemConfigFileSupport.writeJsonFile(overrideFilePath, body);
         } catch (Exception e) {
             throw new IllegalStateException("写入白名单覆盖文件失败: " + e.getMessage(), e);
         }

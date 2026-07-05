@@ -56,11 +56,20 @@ export function normalizeMcpToolResponse(raw) {
     success,
     data,
     duration,
+    statusCode: raw.statusCode,
     traceId: raw.traceId ?? raw.trace_id,
     needConfirm: raw.needConfirm === true,
+    confirmationId: raw.confirmationId ?? '',
+    expiresAtMs: raw.expiresAtMs ?? null,
+    writeMismatch: raw.writeMismatch === true,
+    writeMismatchMessage: raw.writeMismatchMessage,
     riskScore: Number.isFinite(riskScore) ? riskScore : raw.riskScore,
     riskDimensions: raw.riskDimensions,
     riskExplanation: raw.riskExplanation,
-    securityCode: raw.securityCode
+    securityCode: raw.securityCode,
+    warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
+    platformSupport: raw.platformSupport && typeof raw.platformSupport === 'object'
+      ? raw.platformSupport
+      : null
   }
 }
