@@ -9,6 +9,12 @@ import {
   getOpsTraceRecent,
   getPlatformInfo
 } from '../api/index.js'
+import {
+  canAttemptPerformanceWs,
+  notePerformanceWsFailure,
+  notePerformanceWsOpen,
+  performanceWsCooldownMs
+} from '../utils/performanceWsBackoff.js'
 
 const METRIC_DEFS = [
   { key: 'cpuUsage', label: 'CPU', color: '#38bdf8' },
@@ -22,7 +28,7 @@ const INTERVAL_MS = 15000
 const PATROL_POLL_MS = 60000
 const SLOW_POLL_MS = 300000
 const HTTP_SKIP_AFTER_WS_MS = 30000
-const WS_RECONNECT_CAP = 10
+const WS_RECONNECT_CAP = 3
 
 const VITE_AWARD_LOG_WS_URL =
   typeof import.meta.env?.VITE_AWARD_LOG_WS_URL === 'string'
@@ -154,6 +160,16 @@ export function useLiveWallFeed () {
     }
   }
 
+  function applyRemediationPending (data) {
+    pendingRemediation.value =
+      data && typeof data === 'object' ? { ...data, hasPending: !!data.hasPending } : { hasPending: false }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('ops-patrol-pending-change', {
+        detail: { ...pendingRemediation.value }
+      }))
+    }
+  }
+
   function handlePerfWsMessage (ev) {
     let data
     try {
@@ -168,10 +184,33 @@ export function useLiveWallFeed () {
     }
     if (ch === 'patrol_alert') {
       applyPatrolWsEnvelope(data)
+      return
+    }
+    if (ch === 'patrol_remediation_pending') {
+      applyRemediationPending(data)
+      return
+    }
+    if (ch === 'patrol_remediation') {
+      applyRemediationPending({ hasPending: false })
     }
   }
 
+  function schedulePerfWsCooldownRetry () {
+    if (wsReconnectTimer != null || perfWsUnmounting) return
+    wsReconnectTimer = window.setTimeout(() => {
+      wsReconnectTimer = null
+      connectPerformanceWs()
+    }, Math.max(1000, performanceWsCooldownMs() + 250))
+  }
+
   function schedulePerfWsReconnect () {
+    if (!canAttemptPerformanceWs()) {
+      wsConnected.value = false
+      dataSource.value = 'GET /admin/statistics/performance（WS 已降级）'
+      loadError.value = '实时 WebSocket 暂不可用，已切换轮询'
+      schedulePerfWsCooldownRetry()
+      return
+    }
     if (wsReconnectAttempt >= WS_RECONNECT_CAP) return
     wsReconnectAttempt += 1
     const delay = Math.min(30000, 2000 * 2 ** (wsReconnectAttempt - 1))
@@ -205,21 +244,38 @@ export function useLiveWallFeed () {
 
   function connectPerformanceWs () {
     if (perfWsUnmounting) return
+    if (!canAttemptPerformanceWs()) {
+      dataSource.value = 'GET /admin/statistics/performance（WS 已降级）'
+      schedulePerfWsCooldownRetry()
+      return
+    }
     disconnectPerformanceWs(false, false)
     try {
       perfWs = new WebSocket(performanceWsUrl())
     } catch {
+      notePerformanceWsFailure()
       schedulePerfWsReconnect()
       return
     }
     perfWs.onopen = () => {
+      notePerformanceWsOpen()
       wsReconnectAttempt = 0
       wsConnected.value = true
+      loadError.value = ''
     }
     perfWs.onmessage = handlePerfWsMessage
     perfWs.onclose = () => {
       wsConnected.value = false
-      if (!perfWsUnmounting) schedulePerfWsReconnect()
+      if (!perfWsUnmounting) {
+        const state = notePerformanceWsFailure()
+        if (state.disabled) {
+          dataSource.value = 'GET /admin/statistics/performance（WS 已降级）'
+          loadError.value = '实时 WebSocket 暂不可用，已切换轮询'
+          schedulePerfWsCooldownRetry()
+          return
+        }
+        schedulePerfWsReconnect()
+      }
     }
     perfWs.onerror = () => {
       wsConnected.value = false
@@ -231,7 +287,7 @@ export function useLiveWallFeed () {
     const wsFresh = lastPerfWsAt.value && Date.now() - lastPerfWsAt.value < HTTP_SKIP_AFTER_WS_MS
     if (wsFresh) return
     try {
-      const data = await getPerformanceData()
+      const data = await getPerformanceData({ silent: true })
       METRIC_DEFS.forEach(({ key }) => {
         metricsMap[key] = data[key] ?? null
       })
@@ -247,14 +303,13 @@ export function useLiveWallFeed () {
     if (!isDocumentVisible()) return
     try {
       const [alerts, corr, pending] = await Promise.all([
-        getPatrolAlertsRecent(30),
-        getPatrolCorrelationLatest(),
-        getPatrolRemediationPending()
+        getPatrolAlertsRecent(30, { silent: true }),
+        getPatrolCorrelationLatest({ silent: true }),
+        getPatrolRemediationPending({ silent: true })
       ])
       patrolAlerts.value = Array.isArray(alerts) ? alerts : []
       correlation.value = corr && typeof corr === 'object' ? { ...corr } : {}
-      pendingRemediation.value =
-        pending && typeof pending === 'object' ? { ...pending } : { hasPending: false }
+      applyRemediationPending(pending)
     } catch {
       /* 淇濈暀涓婃鐪熷疄鏁版嵁 */
     }
@@ -263,7 +318,7 @@ export function useLiveWallFeed () {
   async function fetchPatrolTrendOnly () {
     if (!isDocumentVisible()) return
     try {
-      const trend = await getPatrolHistoryTrend(7)
+      const trend = await getPatrolHistoryTrend(7, { silent: true })
       patrolTrend.value = Array.isArray(trend) ? trend : []
     } catch {
       /* 淇濈暀涓婃鐪熷疄鏁版嵁 */
@@ -273,16 +328,15 @@ export function useLiveWallFeed () {
   async function fetchPatrolBundle () {
     try {
       const [alerts, corr, trend, pending] = await Promise.all([
-        getPatrolAlertsRecent(30),
-        getPatrolCorrelationLatest(),
-        getPatrolHistoryTrend(7),
-        getPatrolRemediationPending()
+        getPatrolAlertsRecent(30, { silent: true }),
+        getPatrolCorrelationLatest({ silent: true }),
+        getPatrolHistoryTrend(7, { silent: true }),
+        getPatrolRemediationPending({ silent: true })
       ])
       patrolAlerts.value = Array.isArray(alerts) ? alerts : []
       correlation.value = corr && typeof corr === 'object' ? { ...corr } : {}
       patrolTrend.value = Array.isArray(trend) ? trend : []
-      pendingRemediation.value =
-        pending && typeof pending === 'object' ? { ...pending } : { hasPending: false }
+      applyRemediationPending(pending)
     } catch {
       /* 保留上次真实数据 */
     }
@@ -291,7 +345,7 @@ export function useLiveWallFeed () {
   async function fetchTraces () {
     if (!isDocumentVisible()) return
     try {
-      const rows = await getOpsTraceRecent(20)
+      const rows = await getOpsTraceRecent(20, { silent: true })
       recentTraces.value = (Array.isArray(rows) ? rows : [])
         .filter((r) => r?.toolName && r.toolName !== 'NONE')
         .slice(0, 12)
@@ -303,7 +357,7 @@ export function useLiveWallFeed () {
   async function fetchPlatform () {
     if (!isDocumentVisible()) return
     try {
-      platformInfo.value = await getPlatformInfo()
+      platformInfo.value = await getPlatformInfo({ silent: true })
     } catch {
       platformInfo.value = null
     }

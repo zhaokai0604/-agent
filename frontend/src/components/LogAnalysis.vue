@@ -100,7 +100,7 @@
 
       <!-- 3. 分析报告仪表盘 -->
       <transition name="el-zoom-in-bottom">
-        <div v-if="reportData" class="dashboard-container">
+        <div v-if="reportData && taskStatus.status === 'COMPLETED'" class="dashboard-container">
           <!-- 顶部核心指标栏 -->
           <div class="kpi-board">
             <div class="kpi-card health-score">
@@ -274,7 +274,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, onMounted, defineExpose } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted, defineExpose } from 'vue'
 import { UploadFilled, WarningFilled, Warning, CircleCheck, Refresh, Download, Cpu, Timer, CircleCheckFilled, ArrowDown, CircleClose, Service } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { uploadLog, uploadLogs, getTaskStatus, getReport, performDiagnosis, cancelTask, downloadReport, getApiBaseUrl } from '../api'
@@ -347,47 +347,128 @@ let stallTicks = 0
 // Initialize with prop if available
 onMounted(() => {
     if (props.initialTaskId) {
-        taskId.value = props.initialTaskId
-        // 标记为已完成以触发历史任务报告加载
-        taskStatus.status = 'COMPLETED'
-        fetchReport()
+        loadTask(props.initialTaskId)
     }
 })
+
+onUnmounted(() => {
+  clearPollTimer()
+  abortDiagnosis()
+  disposeCharts()
+})
+
+const gaugeChartRef = ref(null)
+const pieChartRef = ref(null)
+let diagnosisAbort = null
+
+function disposeCharts () {
+  try {
+    gaugeChartRef.value?.dispose?.()
+  } catch { /* noop */ }
+  try {
+    pieChartRef.value?.dispose?.()
+  } catch { /* noop */ }
+  gaugeChartRef.value = null
+  pieChartRef.value = null
+}
+
+function abortDiagnosis () {
+  if (diagnosisAbort) {
+    try { diagnosisAbort.abort() } catch { /* noop */ }
+    diagnosisAbort = null
+  }
+}
+
+function clearPollTimer () {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+function startStatusPolling () {
+  clearPollTimer()
+  pollFailCount = 0
+  lastProgress = -1
+  stallTicks = 0
+  timer = setInterval(async () => {
+    try {
+      const res = await getTaskStatus(taskId.value)
+      pollFailCount = 0
+      taskStatus.progress = res.progress
+      taskStatus.currentStep = res.currentStep
+      taskStatus.status = res.status
+
+      if (res.status === 'PROCESSING') {
+        if (res.progress === lastProgress) {
+          stallTicks++
+          if (stallTicks >= 30 && stallTicks % 15 === 0) {
+            taskStatus.currentStep = `${res.currentStep || '处理中'}（仍在运行，请稍候…）`
+          }
+        } else {
+          stallTicks = 0
+          lastProgress = res.progress
+        }
+      }
+
+      if (res.status === 'COMPLETED') {
+        clearPollTimer()
+        fetchReport()
+      } else if (res.status === 'FAILED') {
+        clearPollTimer()
+        taskStatus.errorMsg = res.errorMsg || '分析失败'
+        ElMessage.error(taskStatus.errorMsg)
+      } else if (res.status === 'PAUSED' || res.status === 'CANCELLED') {
+        clearPollTimer()
+        if (res.status === 'CANCELLED') {
+          taskStatus.errorMsg = res.errorMsg || '任务已取消'
+          ElMessage.info(taskStatus.errorMsg)
+        }
+      }
+    } catch (err) {
+      pollFailCount++
+      if (pollFailCount >= 3) {
+        clearPollTimer()
+        taskStatus.status = 'FAILED'
+        taskStatus.errorMsg = err?.message || '任务状态查询失败，请稍后到任务记录查看'
+        ElMessage.error(taskStatus.errorMsg)
+      }
+    }
+  }, 1000)
+}
 
 // Expose a method to load specific task
 const loadTask = async (id) => {
     taskId.value = id
-    taskStatus.status = 'COMPLETED'
+    clearPollTimer()
     try {
-        // 直接调用getReport，捕获错误
-        const data = await getReport(id)
-        reportData.value = data
-        
-        // 确保data.result不是null，否则使用空数组
-        const result = data.result || []
-        
-        anomalyLogs.value = result.filter(i => 
-          i.severity.includes('ERROR') || i.severity.includes('FATAL') || i.anomaly
-        ).slice(0, 100)
+        const statusRes = await getTaskStatus(id)
+        const status = statusRes?.status || ''
+        taskStatus.progress = statusRes?.progress ?? 0
+        taskStatus.currentStep = statusRes?.currentStep || ''
+        taskStatus.errorMsg = statusRes?.errorMsg || ''
 
-        const s = data.summary
-        const healthScore = Math.max(0, 100 - (s.anomalyCount * 5))
+        if (status === 'PROCESSING' || status === 'PENDING' || status === 'PAUSED') {
+          taskStatus.status = status === 'PENDING' ? 'PROCESSING' : status
+          reportData.value = null
+          anomalyLogs.value = []
+          if (status !== 'PAUSED') {
+            startStatusPolling()
+          }
+          return
+        }
+        if (status === 'FAILED' || status === 'CANCELLED') {
+          taskStatus.status = status
+          taskStatus.errorMsg = statusRes?.errorMsg || (status === 'CANCELLED' ? '任务已取消' : '分析失败')
+          reportData.value = null
+          return
+        }
 
-        stats.value = [
-          { label: '扫描耗时', value: (s.costTime / 1000).toFixed(2) + 's', color: '#606266', icon: Timer, bg: '#f2f6fc' },
-          { label: '风险条目', value: s.anomalyCount, color: '#F56C6C', icon: WarningFilled, bg: '#fef0f0' },
-          { label: '安全威胁', value: '无', color: '#67C23A', icon: CircleCheckFilled, bg: '#f0f9eb' }
-        ]
-        
-        generateAdvice(anomalyLogs.value)
-
-        nextTick(() => {
-          initCharts(result, healthScore)
-        })
+        taskStatus.status = 'COMPLETED'
+        await fetchReport()
     } catch (error) {
         console.error('加载任务失败:', error)
-        ElMessage.error('加载任务失败：未找到相关任务')
-        // 重置任务状态，显示上传界面
+        ElMessage.error('加载任务失败：' + (error.message || '未找到相关任务'))
         taskStatus.status = 'IDLE'
         reportData.value = null
     }
@@ -480,11 +561,15 @@ const handleGlobalDiagnosis = async () => {
     aiThinking.value = true
     aiResultText.value = ''
 
+    abortDiagnosis()
+    diagnosisAbort = new AbortController()
+
     // 与「统一 AI 助手」一致：用 fetch + ReadableStream 读流。浏览器 EventSource 对 Spring SSE 兼容性差，易导致无输出或立即断开。
     try {
         const response = await fetch(`${getApiBaseUrl()}/log/diagnose/stream/${taskId.value}`, {
             method: 'GET',
-            credentials: 'include'
+            credentials: 'include',
+            signal: diagnosisAbort.signal
         })
         if (!response.ok) {
             const errText = await response.text().catch(() => '')
@@ -521,6 +606,9 @@ const handleGlobalDiagnosis = async () => {
             reportData.value.aiDiagnosis = aiResultText.value
         }
     } catch (error) {
+        if (error?.name === 'AbortError') {
+          return
+        }
         console.error('Global diagnosis error:', error)
         if (aiResultText.value.length === 0) {
             aiResultText.value = '诊断服务连接中断，请确认任务存在且AI服务可用。'
@@ -529,6 +617,7 @@ const handleGlobalDiagnosis = async () => {
         }
     } finally {
         aiThinking.value = false
+        diagnosisAbort = null
     }
 }
 
@@ -558,54 +647,7 @@ const processFiles = async (files) => {
     formData.append('file', file)
     const id = await uploadLog(formData)
     taskId.value = id
-    
-    pollFailCount = 0
-    lastProgress = -1
-    stallTicks = 0
-    if (timer) {
-      clearInterval(timer)
-      timer = null
-    }
-
-    timer = setInterval(async () => {
-      try {
-        const res = await getTaskStatus(taskId.value)
-        pollFailCount = 0
-        taskStatus.progress = res.progress
-        taskStatus.currentStep = res.currentStep
-        taskStatus.status = res.status
-
-        if (res.status === 'PROCESSING') {
-          if (res.progress === lastProgress) {
-            stallTicks++
-            if (stallTicks >= 30 && stallTicks % 15 === 0) {
-              taskStatus.currentStep = `${res.currentStep || '处理中'}（仍在运行，请稍候…）`
-            }
-          } else {
-            stallTicks = 0
-            lastProgress = res.progress
-          }
-        }
-
-        if (res.status === 'COMPLETED') {
-          clearInterval(timer)
-          timer = null
-          fetchReport()
-        } else if (res.status === 'FAILED') {
-          clearInterval(timer)
-          timer = null
-          taskStatus.errorMsg = res.errorMsg || '分析失败'
-          ElMessage.error(taskStatus.errorMsg)
-        }
-      } catch (err) {
-        pollFailCount++
-        if (pollFailCount >= 3) {
-          clearInterval(timer)
-          timer = null
-          ElMessage.error(err?.message || '任务状态查询失败，请稍后刷新页面查看结果')
-        }
-      }
-    }, 1000)
+    startStatusPolling()
 
   } catch (err) {
     taskStatus.status = 'FAILED'
@@ -616,30 +658,75 @@ const processFiles = async (files) => {
 
 // --- Report Logic ---
 const fetchReport = async () => {
-  const data = await getReport(taskId.value)
-  reportData.value = data
-  
-  // 确保data.result不是null，否则使用空数组
-  const result = data.result || []
-  
-  anomalyLogs.value = result.filter(i => 
-    i.severity.includes('ERROR') || i.severity.includes('FATAL') || i.anomaly
-  ).slice(0, 100)
+  try {
+    const data = await getReport(taskId.value)
+    const result = data.result || []
+    const s = data.summary || {}
 
-  const s = data.summary
-  const healthScore = Math.max(0, 100 - (s.anomalyCount * 5))
+    anomalyLogs.value = result.filter(i => {
+      const sev = String(i?.severity || '')
+      return sev.includes('ERROR') || sev.includes('FATAL') || i.anomaly
+    }).slice(0, 100)
 
-  stats.value = [
-    { label: '扫描耗时', value: (s.costTime / 1000).toFixed(2) + 's', color: '#606266', icon: Timer, bg: '#f2f6fc' },
-    { label: '风险条目', value: s.anomalyCount, color: '#F56C6C', icon: WarningFilled, bg: '#fef0f0' },
-    { label: '安全威胁', value: '无', color: '#67C23A', icon: CircleCheckFilled, bg: '#f0f9eb' }
-  ]
-  
-  generateAdvice(anomalyLogs.value)
+    const sev = s?.severityCounts || {}
+    const fatalCount = Number(sev.FATAL ?? sev.fatal ?? 0) || 0
+    const errorCount = Number(sev.ERROR ?? sev.error ?? 0) || 0
+    const warnCount = Number(sev.WARN ?? sev.WARNING ?? sev.warn ?? 0) || 0
+    const anomalyCount = Number(s?.anomalyCount ?? 0) || 0
+    const healthScore = Math.max(
+      0,
+      Math.min(100, 100 - fatalCount * 20 - errorCount * 8 - warnCount * 2 - Math.max(0, anomalyCount - fatalCount - errorCount))
+    )
+    let threatLabel = '无'
+    let threatColor = '#67C23A'
+    let threatBg = '#f0f9eb'
+    if (fatalCount > 0) {
+      threatLabel = `致命 ${fatalCount}`
+      threatColor = '#F56C6C'
+      threatBg = '#fef0f0'
+    } else if (errorCount > 0) {
+      threatLabel = `错误 ${errorCount}`
+      threatColor = '#E6A23C'
+      threatBg = '#fdf6ec'
+    } else if (anomalyCount > 0) {
+      threatLabel = `异常 ${anomalyCount}`
+      threatColor = '#E6A23C'
+      threatBg = '#fdf6ec'
+    }
 
-  nextTick(() => {
-    initCharts(result, healthScore)
-  })
+    stats.value = [
+      { label: '扫描耗时', value: ((s?.costTime || 0) / 1000).toFixed(2) + 's', color: '#606266', icon: Timer, bg: '#f2f6fc' },
+      { label: '风险条目', value: anomalyCount, color: '#F56C6C', icon: WarningFilled, bg: '#fef0f0' },
+      { label: '安全威胁', value: threatLabel, color: threatColor, icon: CircleCheckFilled, bg: threatBg }
+    ]
+
+    reportData.value = {
+      ...data,
+      result: anomalyLogs.value
+    }
+    taskStatus.status = 'COMPLETED'
+
+    if (s.lineCapApplied) {
+      ElMessage.warning(
+        `文件过大，分析已截断至上限（另跳过约 ${s.linesSkipped || 0} 行）；报告为异常抽样。`
+      )
+    } else if (s.resultTruncated) {
+      ElMessage.info(
+        `报告仅返回异常抽样 ${s.resultReturned || anomalyLogs.value.length} 条（明细共 ${s.detailTotal || '—'} 条）。`
+      )
+    }
+
+    generateAdvice(anomalyLogs.value)
+
+    nextTick(() => {
+      initCharts(result, healthScore, s.severityCounts)
+    })
+  } catch (error) {
+    console.error('获取报告失败:', error)
+    taskStatus.status = 'FAILED'
+    taskStatus.errorMsg = error?.message || '获取分析报告失败'
+    ElMessage.error(taskStatus.errorMsg)
+  }
 }
 
 // --- Health Score Logic ---
@@ -693,20 +780,25 @@ const generateAdvice = (logs) => {
 }
 
 // --- Visuals ---
-const initCharts = (result, healthScore) => {
-  // 确保result是数组，否则使用空数组
+const initCharts = (result, healthScore, severityCounts) => {
   const chartData = Array.isArray(result) ? result : []
-  
-  const gaugeChart = echarts.init(document.getElementById('healthGauge'))
+  disposeCharts()
+
+  const gaugeEl = document.getElementById('healthGauge')
+  const pieEl = document.getElementById('severityChart')
+  if (!gaugeEl || !pieEl) return
+
+  const gaugeChart = echarts.init(gaugeEl)
+  gaugeChartRef.value = gaugeChart
   gaugeChart.setOption({
     series: [{
       type: 'gauge',
       startAngle: 90, endAngle: -270,
       pointer: { show: false },
-      progress: { 
-        show: true, 
-        overlap: false, 
-        roundCap: true, 
+      progress: {
+        show: true,
+        overlap: false,
+        roundCap: true,
         clip: false
       },
       axisLine: { lineStyle: { width: 10, color: [[1, '#E6EBF8']] } },
@@ -726,9 +818,9 @@ const initCharts = (result, healthScore) => {
     }]
   })
 
-  // 2. Pie Chart
-  const pieChart = echarts.init(document.getElementById('severityChart'))
-  
+  const pieChart = echarts.init(pieEl)
+  pieChartRef.value = pieChart
+
   const severityMap = {
     'FATAL_LEVEL': { name: '致命故障', color: '#B71C1C' },
     'ERROR_LEVEL': { name: '运行错误', color: '#FF5722' },
@@ -739,22 +831,31 @@ const initCharts = (result, healthScore) => {
   }
 
   const counts = {}
-  chartData.forEach(r => {
-    const key = r.severity
-    counts[key] = (counts[key] || 0) + 1
-  })
+  if (severityCounts && typeof severityCounts === 'object') {
+    Object.keys(severityCounts).forEach(k => {
+      counts[k] = Number(severityCounts[k]) || 0
+    })
+  } else {
+    const sample = chartData.length > 5000
+      ? chartData.filter((_, i) => i % Math.ceil(chartData.length / 5000) === 0)
+      : chartData
+    sample.forEach(r => {
+      const key = r.severity
+      counts[key] = (counts[key] || 0) + 1
+    })
+  }
 
   const data = Object.keys(counts).map(k => {
     const config = severityMap[k] || { name: k, color: '#909399' }
-    return { 
-      name: config.name, 
+    return {
+      name: config.name,
       value: counts[k],
       itemStyle: { color: config.color }
     }
   })
-  
+
   pieChart.setOption({
-    tooltip: { 
+    tooltip: {
       trigger: 'item',
       formatter: '{b}: {c} ({d}%)'
     },
@@ -774,21 +875,23 @@ const initCharts = (result, healthScore) => {
 }
 
 const getSeverityType = (sev) => {
-  if (sev.includes('FATAL')) return 'danger'
-  if (sev.includes('ERROR')) return 'danger'
-  if (sev.includes('WARN')) return 'warning'
+  const s = String(sev || '')
+  if (s.includes('FATAL')) return 'danger'
+  if (s.includes('ERROR')) return 'danger'
+  if (s.includes('WARN')) return 'warning'
   return 'info'
 }
 
 const resetTask = () => {
+  disposeCharts()
+  abortDiagnosis()
   reportData.value = null
   taskStatus.status = 'IDLE'
   taskStatus.progress = 0
   taskStatus.currentStep = ''
   taskStatus.errorMsg = ''
-  // 只有当fileInput.value存在时才重置其值
   if (fileInput.value) {
-    fileInput.value.value = '' // reset input
+    fileInput.value.value = ''
   }
 }
 

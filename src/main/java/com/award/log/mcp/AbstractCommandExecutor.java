@@ -20,6 +20,12 @@ public abstract class AbstractCommandExecutor {
     private static final int MAX_STDOUT_CHARS = 512 * 1024;
     private static final int MAX_STDERR_CHARS = 256 * 1024;
 
+    private static final ExecutorService STREAM_DRAIN_EXECUTOR = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "mcp-stream-drain");
+        t.setDaemon(true);
+        return t;
+    });
+
     protected final ExecutorService executor;
 
     protected AbstractCommandExecutor(ExecutorService executor) {
@@ -176,10 +182,10 @@ public abstract class AbstractCommandExecutor {
 
             CompletableFuture<Void> stdoutFuture = CompletableFuture.runAsync(
                     () -> drainStream(process.getInputStream(), output, MAX_STDOUT_CHARS, "stdout"),
-                    executor);
+                    STREAM_DRAIN_EXECUTOR);
             CompletableFuture<Void> stderrFuture = CompletableFuture.runAsync(
                     () -> drainStream(process.getErrorStream(), errorOutput, MAX_STDERR_CHARS, "stderr"),
-                    executor);
+                    STREAM_DRAIN_EXECUTOR);
 
             if (timeoutMillis <= 0) {
                 CompletableFuture.allOf(stdoutFuture, stderrFuture).join();

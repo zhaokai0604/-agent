@@ -219,7 +219,8 @@ class AutonomousOpsOrchestratorTest {
                 orchestrator.run("full check", McpToolSurface.READ_ONLY, RiskLevel.LOW);
 
         assertEquals("trace-auto-1", result.traceId());
-        assertTrue(result.markdown().contains("read-only") || result.markdown().contains("Trace"));
+        assertTrue(result.markdown().contains("read-only"));
+        assertFalse(result.markdown().contains("Trace"));
         verify(workflowExecutionService, never()).execute(any(), any());
         verify(logCleanupTool, never()).cleanupOldLogs(anyString(), anyInt(), anyBoolean(), anyBoolean());
     }
@@ -257,7 +258,9 @@ class AutonomousOpsOrchestratorTest {
         AutonomousOpsOrchestrator.RunResult result =
                 orchestrator.run("autonomous ops", McpToolSurface.FULL, RiskLevel.LOW);
 
-        assertTrue(result.markdown().contains("AWM"));
+        assertTrue(result.markdown().contains("历史处置经验"));
+        assertFalse(result.markdown().contains("AWM"));
+        assertFalse(result.markdown().contains("Trace"));
         verify(opsPerceptionCache).invalidate();
         verify(workflowRetriever).recordHit(workflow);
         verify(workflowInductionService).afterSuccessfulRun(eq("trace-auto-1"), eq("autonomous ops"),

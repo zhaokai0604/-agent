@@ -99,7 +99,7 @@ class UserProfileControllerSmokeTest {
 
         SysUser payload = new SysUser();
         payload.setEmail("ops@example.com");
-        payload.setWechat_userid("wx-1");
+        payload.setWechatUserid("wx-1");
 
         assertEquals(200, controller.updateUserInfo(request, payload).getCode());
         assertEquals(500, controller.updateUserInfo(request, new SysUser()).getCode());

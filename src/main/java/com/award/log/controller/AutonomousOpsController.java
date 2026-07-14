@@ -23,7 +23,7 @@ import java.util.Map;
 /**
  * 兼容旧“自主运维”入口，现统一收口到巡检自动修复单轨。
  */
-@Tag(name = "巡检自动修复")
+@Tag(name = "巡检自动修复", description = "巡检内部/可选：见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/api/ops/autonomous")
 @RequiredArgsConstructor

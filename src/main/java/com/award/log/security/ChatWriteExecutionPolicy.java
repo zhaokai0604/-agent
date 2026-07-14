@@ -13,6 +13,12 @@ public final class ChatWriteExecutionPolicy {
     public record ResolvedRestart(boolean dryRun, boolean confirmRestart) {
     }
 
+    public record ResolvedKill(boolean dryRun, boolean confirmKill) {
+    }
+
+    public record ResolvedStop(boolean dryRun, boolean confirmStop) {
+    }
+
     public static ResolvedRestart resolveRestart(Boolean dryRun, Boolean confirmRestart) {
         OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
         if (ctx != null && ctx.isUserConfirmedWrite()) {
@@ -23,6 +29,30 @@ public final class ChatWriteExecutionPolicy {
         }
         boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
         return new ResolvedRestart(isDryRun, Boolean.TRUE.equals(confirmRestart));
+    }
+
+    public static ResolvedKill resolveKill(Boolean dryRun, Boolean confirmKill) {
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        if (ctx != null && ctx.isUserConfirmedWrite()) {
+            return new ResolvedKill(false, true);
+        }
+        if (ctx != null && ctx.isChatAgentPath()) {
+            return new ResolvedKill(true, false);
+        }
+        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
+        return new ResolvedKill(isDryRun, Boolean.TRUE.equals(confirmKill));
+    }
+
+    public static ResolvedStop resolveStop(Boolean dryRun, Boolean confirmStop) {
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        if (ctx != null && ctx.isUserConfirmedWrite()) {
+            return new ResolvedStop(false, true);
+        }
+        if (ctx != null && ctx.isChatAgentPath()) {
+            return new ResolvedStop(true, false);
+        }
+        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
+        return new ResolvedStop(isDryRun, Boolean.TRUE.equals(confirmStop));
     }
 
     private ChatWriteExecutionPolicy() {

@@ -41,7 +41,7 @@ public final class AssistantIntentSignals {
 
     /** 对话上下文中出现运维/磁盘/文件相关词 */
     public static final Pattern OPS_CONTEXT = Pattern.compile(
-            "(磁盘|空间|硬盘|C盘|c盘|临时|日志|照片|图片|文件|扫描|清理|释放|热点|目录|占用|满了|备份|盘符|文件夹|微信|相册)",
+            "(磁盘|空间|硬盘|C盘|c盘|临时|日志|照片|图片|文件|扫描|检查|排查|诊断|体检|清理|释放|热点|目录|占用|满了|备份|盘符|文件夹|微信|相册|电脑|本机|系统)",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     public static final Pattern CAPABILITY_INQUIRY = Pattern.compile(
@@ -109,8 +109,9 @@ public final class AssistantIntentSignals {
 
     public static final Pattern PATROL_ORCHESTRATE = Pattern.compile(
             "自动运维|自主运维|一键运维|一键巡检|智能运维|全自动|健康检查|运维检查|全面检查|帮我运维|"
-                    + "(检查|排查|诊断|体检|巡检|看看).*(系统|服务器|主机|本机|机器|环境)|"
-                    + "(系统|服务器|主机|本机).*(检查|排查|诊断|健康|状态|怎么样|如何)",
+                    + "(检查|排查|诊断|体检|巡检|看看).*(系统|服务器|主机|本机|电脑|机器|环境)|"
+                    + "(系统|服务器|主机|本机|电脑).*(检查|排查|诊断|体检|健康|状态|怎么样|如何|正常)|"
+                    + "(帮我|请).*(检查|排查|诊断|体检|看看).*(电脑|本机|系统)",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     public static final Pattern PATROL_CONTINUATION = Pattern.compile(
@@ -126,8 +127,8 @@ public final class AssistantIntentSignals {
 
     /** 运维管家 / 文件整理 / 本机管理 */
     public static final Pattern COMPUTER_MANAGE = Pattern.compile(
-            "(帮我|请|麻烦|能否|可以).*(管理|整理|扫描|清理|备份|释放|查找|搜索|删除|优化|排查|诊断).*(电脑|本机|系统|磁盘|文件|照片|图片|目录|C盘|c盘|文件夹|空间|运维)|"
-                    + "(电脑|本机|系统|磁盘).*(管理|整理|扫描|清理|备份|优化|帮忙|怎么办)|"
+            "(帮我|请|麻烦|能否|可以).*(管理|整理|扫描|清理|备份|释放|查找|搜索|删除|优化|检查|排查|诊断|体检).*(电脑|本机|系统|磁盘|文件|照片|图片|目录|C盘|c盘|文件夹|空间|运维)|"
+                    + "(电脑|本机|系统|磁盘).*(管理|整理|扫描|清理|备份|优化|检查|排查|诊断|体检|帮忙|怎么办)|"
                     + "(整理|备份|扫描|清理|释放|查找).*(照片|图片|文件|磁盘|空间|目录|文件夹|相册)|"
                     + "帮我管理|运维管家|电脑管家|系统管家|自动整理|接手.*电脑|管理我的电脑|帮我运维",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);

@@ -60,14 +60,33 @@ public final class WriteToolResultSupport {
         if (parameters == null) {
             return false;
         }
-        Object dryRun = parameters.get("dryRun");
-        if (Boolean.FALSE.equals(dryRun)) {
+        if (Boolean.FALSE.equals(coerceBool(parameters.get("dryRun")))) {
             return true;
         }
-        return Boolean.TRUE.equals(parameters.get("confirmDelete"))
-                || Boolean.TRUE.equals(parameters.get("confirmRestart"))
-                || Boolean.TRUE.equals(parameters.get("confirmKill"))
-                || Boolean.TRUE.equals(parameters.get("confirmStop"));
+        return Boolean.TRUE.equals(coerceBool(parameters.get("confirmDelete")))
+                || Boolean.TRUE.equals(coerceBool(parameters.get("confirmRestart")))
+                || Boolean.TRUE.equals(coerceBool(parameters.get("confirmKill")))
+                || Boolean.TRUE.equals(coerceBool(parameters.get("confirmStop")));
+    }
+
+    private static Boolean coerceBool(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Boolean b) {
+            return b;
+        }
+        String s = String.valueOf(v).trim().toLowerCase();
+        if (s.isEmpty()) {
+            return null;
+        }
+        if ("true".equals(s) || "1".equals(s) || "yes".equals(s)) {
+            return true;
+        }
+        if ("false".equals(s) || "0".equals(s) || "no".equals(s)) {
+            return false;
+        }
+        return null;
     }
 
     public static boolean isConfirmedRealWrite(String toolResultJson) {
@@ -79,9 +98,9 @@ public final class WriteToolResultSupport {
             return false;
         }
         JsonNode data = parseDataNode(root);
-        boolean wrappedResult = root.isObject() && root.has("success");
         if (data == null || data.isNull()) {
-            return bareSuccessfulEnvelope(root);
+            // 无业务 data 时：不再把空信封 {"success":true} 当成写落地
+            return false;
         }
         String mode = data.path("mode").asText(extractMode(toolResultJson));
         if (!isRealWriteMode(mode)) {
@@ -90,15 +109,6 @@ public final class WriteToolResultSupport {
             }
             if (hasWriteEffectEvidence(data)) {
                 return true;
-            }
-            if (!wrappedResult && data.isObject() && !data.isEmpty()) {
-                return true;
-            }
-            if (data.isTextual() && !data.asText("").isBlank()) {
-                return bareSuccessfulEnvelope(root);
-            }
-            if (data.isObject() && data.has("service")) {
-                return bareSuccessfulEnvelope(root);
             }
             return false;
         }
@@ -109,7 +119,15 @@ public final class WriteToolResultSupport {
         if (nestedSuccess != null && nestedSuccess.isBoolean()) {
             return nestedSuccess.asBoolean(false);
         }
-        return bareSuccessfulEnvelope(root);
+        // mode=DELETE/EXECUTED 但无效果字段：杀进程/重启至少应有目标标识
+        if (data.has("pid") || data.has("service") || data.has("containerName") || data.has("command")) {
+            return !"DRY-RUN".equalsIgnoreCase(mode);
+        }
+        // 空删除（filesDeleted 缺失且为 0）不当成真写成功
+        if (data.has("filesDeleted") && data.path("filesDeleted").asInt(0) <= 0) {
+            return false;
+        }
+        return false;
     }
 
     private static boolean hasWriteEffectEvidence(JsonNode data) {
@@ -119,18 +137,23 @@ public final class WriteToolResultSupport {
         JsonNode nestedSuccess = data.get("success");
         boolean nestedOk = nestedSuccess != null && nestedSuccess.isBoolean() && nestedSuccess.asBoolean(false);
         if (data.has("filesDeleted")) {
-            return data.path("filesDeleted").asInt(0) > 0 || nestedOk;
+            return data.path("filesDeleted").asInt(0) > 0;
         }
         if (data.has("removed")) {
-            return data.path("removed").asBoolean(false) || nestedOk;
+            return data.path("removed").asBoolean(false);
         }
         if (data.has("bytesFreed")) {
             return data.path("bytesFreed").asLong(0L) > 0L
-                    || data.path("filesDeleted").asInt(0) > 0
-                    || nestedOk;
+                    || data.path("filesDeleted").asInt(0) > 0;
+        }
+        if (data.has("pid") && nestedOk) {
+            return true;
         }
         if (data.has("service")) {
             return !looksLikePreviewOnly("", data) && (nestedOk || !data.path("service").asText("").isBlank());
+        }
+        if (data.has("containerName") && nestedOk) {
+            return true;
         }
         return nestedOk;
     }

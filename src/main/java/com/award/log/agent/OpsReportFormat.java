@@ -1,5 +1,6 @@
 package com.award.log.agent;
 
+import com.award.log.security.ChatToolExecutionTracker;
 import com.award.log.util.OsRuntime;
 
 import java.util.List;
@@ -209,10 +210,29 @@ public final class OpsReportFormat {
     }
 
     public static String dataBasisFooter(boolean writeConfirmed) {
-        if (writeConfirmed) {
-            return "\n\n> **数据依据**：本回复包含经您确认后执行的写操作结果。";
+        return dataBasisFooter(writeConfirmed, ChatToolExecutionTracker.hasAnyToolInvocation(),
+                ChatToolExecutionTracker.hasSuccessfulRealWrite());
+    }
+
+    /**
+     * @param writeConfirmed 用户本轮是否确认写
+     * @param anyTool        是否实际调用过工具
+     * @param realWriteOk    是否有 mode=DELETE/EXECUTED 的成功证据
+     */
+    public static String dataBasisFooter(boolean writeConfirmed, boolean anyTool, boolean realWriteOk) {
+        if (writeConfirmed && realWriteOk) {
+            return "\n\n> **数据依据**：本回复包含经您确认后执行的写操作结果（已校验 MCP `mode=DELETE/EXECUTED`）。";
         }
-        return "\n\n> **数据依据**：结论来自本轮真实工具或编排输出，非模型臆测。";
+        if (writeConfirmed && !realWriteOk) {
+            return "\n\n> **数据依据**：您已确认写操作，但本轮工具未返回成功落地证据（可能仍为预览或失败），请勿视为已处置完成。";
+        }
+        if (!anyTool) {
+            return "\n\n> **数据依据**：本轮未调用运维工具，以上为模型基于上下文的说明，非正式执行结果。";
+        }
+        if (ChatToolExecutionTracker.hasOnlyPreviewOrRead()) {
+            return "\n\n> **数据依据**：本轮工具结果以只读采集或 Dry-Run 预览为准，尚未真正写入/删除/重启。";
+        }
+        return "\n\n> **数据依据**：结论来自本轮真实工具或编排输出。";
     }
 
     public static String planActionForKind(String kind) {

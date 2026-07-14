@@ -20,7 +20,8 @@ import java.util.List;
 import java.util.Map;
 
 @Slf4j
-@Tag(name = "OpsSchedule")
+@Deprecated(since = "delivery-2026-07", forRemoval = false)
+@Tag(name = "OpsSchedule", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/api/ops-schedule")
 @RequiredArgsConstructor

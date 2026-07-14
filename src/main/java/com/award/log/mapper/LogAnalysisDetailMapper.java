@@ -10,6 +10,20 @@ import java.util.Map;
 @Mapper
 public interface LogAnalysisDetailMapper {
     List<LogAnalysisDetail> selectByTaskId(String taskId);
+
+    long countByTaskId(@Param("taskId") String taskId);
+
+    long countAnomaliesByTaskId(@Param("taskId") String taskId);
+
+    List<LogAnalysisDetail> selectAnomaliesByTaskId(@Param("taskId") String taskId, @Param("limit") int limit);
+
+    List<LogAnalysisDetail> selectByTaskIdPage(@Param("taskId") String taskId,
+                                               @Param("offset") int offset,
+                                               @Param("limit") int limit,
+                                               @Param("anomalyOnly") Boolean anomalyOnly);
+
+    List<Map<String, Object>> selectSeverityDistributionByTaskId(@Param("taskId") String taskId);
+
     int insert(LogAnalysisDetail detail);
     int batchInsert(List<LogAnalysisDetail> details);
     

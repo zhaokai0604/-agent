@@ -3,26 +3,33 @@
  * 忽略注释行、心跳与 [DONE]。
  */
 export function appendSsePayloadFromChunk(buffer, chunkText, onPayload) {
-  let buf = buffer + chunkText
-  const lines = buf.split('\n')
-  const rest = lines.pop()
-  for (const raw of lines) {
-    const line = raw.trimEnd()
-    if (!line || line.startsWith(':')) continue
-    if (!line.startsWith('data:')) continue
-    let payload = line.slice(5).replace(/^\s/, '')
-    if (payload === '[DONE]') continue
-    if (payload) onPayload(payload)
+  const buf = String(buffer || '') + String(chunkText || '')
+  const normalized = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const events = normalized.split('\n\n')
+  const rest = events.pop()
+  for (const eventText of events) {
+    emitSseEventPayload(eventText, onPayload)
   }
   return rest ?? ''
 }
 
 export function flushSseBuffer(buffer, onPayload) {
-  if (!buffer || !buffer.trim()) return ''
-  const line = buffer.trimEnd()
-  if (line.startsWith('data:')) {
-    let payload = line.slice(5).replace(/^\s/, '')
-    if (payload && payload !== '[DONE]') onPayload(payload)
-  }
+  emitSseEventPayload(buffer, onPayload)
   return ''
+}
+
+function emitSseEventPayload(eventText, onPayload) {
+  if (!eventText || !String(eventText).trim()) return
+  const dataLines = []
+  for (const raw of String(eventText).split('\n')) {
+    const line = raw.trimEnd()
+    if (!line || line.startsWith(':')) continue
+    if (!line.startsWith('data:')) continue
+    let payload = line.slice(5)
+    if (payload.startsWith(' ')) payload = payload.slice(1)
+    dataLines.push(payload)
+  }
+  if (!dataLines.length) return
+  const payload = dataLines.join('\n')
+  if (payload && payload !== '[DONE]') onPayload(payload)
 }

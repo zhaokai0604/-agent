@@ -40,6 +40,10 @@ public class DecisionFeedbackSchemaService {
                   log_template VARCHAR(255) DEFAULT NULL,
                   model_confidence DOUBLE DEFAULT NULL,
                   is_trained TINYINT(1) DEFAULT 0,
+                  error_rate_1m DOUBLE DEFAULT NULL,
+                  error_1m DOUBLE DEFAULT NULL,
+                  total_1m DOUBLE DEFAULT NULL,
+                  interval_ms DOUBLE DEFAULT NULL,
                   PRIMARY KEY (id),
                   UNIQUE KEY uk_decision_feedback (decision_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='决策人工反馈表'
@@ -52,6 +56,10 @@ public class DecisionFeedbackSchemaService {
         tryAlter("ALTER TABLE decision_feedback ADD COLUMN log_template VARCHAR(255) DEFAULT NULL");
         tryAlter("ALTER TABLE decision_feedback ADD COLUMN model_confidence DOUBLE DEFAULT NULL");
         tryAlter("ALTER TABLE decision_feedback ADD COLUMN is_trained TINYINT(1) DEFAULT 0");
+        tryAlter("ALTER TABLE decision_feedback ADD COLUMN error_rate_1m DOUBLE DEFAULT NULL");
+        tryAlter("ALTER TABLE decision_feedback ADD COLUMN error_1m DOUBLE DEFAULT NULL");
+        tryAlter("ALTER TABLE decision_feedback ADD COLUMN total_1m DOUBLE DEFAULT NULL");
+        tryAlter("ALTER TABLE decision_feedback ADD COLUMN interval_ms DOUBLE DEFAULT NULL");
         tryUpdate("UPDATE decision_feedback SET is_trained = 0 WHERE is_trained IS NULL");
     }
 

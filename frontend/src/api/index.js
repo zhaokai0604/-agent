@@ -2,6 +2,8 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { formatApiError } from '../utils/apiError.js'
 
+// DELIVERY: 部分 export 为死封装/无挂载页，保留以免破坏脚本；见 docs/deployment/交付API白名单.md
+
 /** 生产/同源部署：构建或 .env 中设置 VITE_AWARD_LOG_BASE_URL（须含 /award-log 后缀，无末尾斜杠） */
 const viteAwardBase =
   typeof import.meta !== 'undefined' && import.meta.env?.VITE_AWARD_LOG_BASE_URL
@@ -152,7 +154,9 @@ function attachInterceptors(client, surface) {
         setTimeout(() => window.location.reload(), 300)
         return Promise.reject(buildApiError(errMsg, res.data))
       }
-      ElMessage.error(errMsg)
+      if (!res.config?.silent) {
+        ElMessage.error(errMsg)
+      }
       return Promise.reject(buildApiError(errMsg, res.data))
     },
     error => {
@@ -172,7 +176,9 @@ function attachInterceptors(client, surface) {
         setTimeout(() => window.location.reload(), 300)
         return Promise.reject(buildApiError(errMsg, error.response?.data))
       }
-      ElMessage.error(errMsg)
+      if (!error.config?.silent) {
+        ElMessage.error(errMsg)
+      }
       return Promise.reject(buildApiError(errMsg, error.response?.data))
     }
   )
@@ -189,6 +195,9 @@ export const uploadLogs = (formData) => request.post('/log/upload/multi', formDa
 
 export const getTaskStatus = (taskId) => request.get(`/log/task/${taskId}`)
 export const getReport = (taskId) => request.get(`/log/report/${taskId}`)
+/** 大数据：分页查明细；anomalyOnly=true 只拉异常 */
+export const getReportDetails = (taskId, pageNum = 1, pageSize = 50, anomalyOnly = false) =>
+  request.get(`/log/report/${taskId}/details`, { params: { pageNum, pageSize, anomalyOnly } })
 export const getHistory = (pageNum = 1, pageSize = 10, filters = {}) => {
   const params = { pageNum, pageSize }
   for (const [k, v] of Object.entries(filters || {})) {
@@ -199,6 +208,7 @@ export const getHistory = (pageNum = 1, pageSize = 10, filters = {}) => {
   return request.get('/log/history', { params })
 }
 export const performDiagnosis = (taskId) => request.post(`/log/diagnose/${taskId}`)
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
 export const pauseTask = (taskId) => request.post(`/log/pause/${taskId}`)
 export const resumeTask = (taskId) => request.post(`/log/resume/${taskId}`)
 export const cancelTask = (taskId) => request.post(`/log/cancel/${taskId}`)
@@ -210,42 +220,45 @@ export const downloadReport = (taskId, type) =>
 export const login = (user) => managementRequest.post('/admin/user/login', user)
 export const logout = () => managementRequest.post('/admin/user/logout')
 export const register = (user) => request.post('/admin/user/register', user)
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
 export const getUserById = (userId) => managementRequest.get(`/admin/user/${userId}`)
 export const updateUser = (user) => managementRequest.put('/admin/user', user)
 export const deleteUser = (userId) => managementRequest.delete(`/admin/user/${userId}`)
 export const getUsers = () => managementRequest.get('/admin/user/list')
 export const getUsersPage = (pageNum = 1, pageSize = 10) =>
   managementRequest.get('/admin/user/page', { params: { pageNum, pageSize } })
-// 忘记密码相关接口
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（忘记密码未闭环）
 export const checkUserExists = (userInfo) => request.post('/admin/user/check-user', userInfo)
 export const resetPassword = (passwordInfo) => managementRequest.post('/admin/user/reset-password', passwordInfo)
 
-// 数据统计相关接口
+// 数据统计相关接口（log-summary / performance / task-status 为交付主链路）
 export const getLogSummary = (days = 7) =>
   managementRequest.get('/admin/statistics/log-summary', { params: { days } })
 export const getPerformance = (networkInterface = '') =>
   managementRequest.get('/admin/statistics/performance', { params: { networkInterface } })
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
 export const getAnomalyStatistics = (days = 7) =>
   managementRequest.get('/admin/statistics/anomaly-statistics', { params: { days } })
 export const getTaskStatusStatistics = () => managementRequest.get('/admin/statistics/task-status')
 
-// 性能分析相关 API
-export const getPerformanceData = () => managementRequest.get('/admin/statistics/performance')
-export const getPatrolAlertsRecent = (limit = 12) =>
-  managementRequest.get('/api/ops/patrol/alerts/recent', { params: { limit } })
+// 性能：交付主链路用 statistics/performance；下方 /api/performance/* 为扩展死封装
+export const getPerformanceData = (config = {}) => managementRequest.get('/admin/statistics/performance', config)
+export const getPatrolAlertsRecent = (limit = 12, config = {}) =>
+  managementRequest.get('/api/ops/patrol/alerts/recent', { ...config, params: { ...(config.params || {}), limit } })
 
-export const getPatrolCorrelationLatest = () =>
-  managementRequest.get('/api/ops/patrol/correlation/latest')
+export const getPatrolCorrelationLatest = (config = {}) =>
+  managementRequest.get('/api/ops/patrol/correlation/latest', config)
 
-export const getPatrolRemediationPending = () =>
-  managementRequest.get('/api/ops/patrol/remediation/pending')
+export const getPatrolRemediationPending = (config = {}) =>
+  managementRequest.get('/api/ops/patrol/remediation/pending', config)
 
 export const confirmPatrolRemediation = (proposalId, confirmCode = '确认执行') =>
   managementRequest.post('/api/ops/patrol/remediation/confirm', { proposalId, confirmCode })
 
-export const getPatrolRemediationCoverage = () =>
-  managementRequest.get('/api/ops/patrol/remediation/coverage')
+export const getPatrolRemediationCoverage = (config = {}) =>
+  managementRequest.get('/api/ops/patrol/remediation/coverage', config)
 
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（/api/performance 扩展）
 export const collectSystemPerformanceData = () => managementRequest.post('/api/performance/collect-system-data')
 
 export const getPerformanceTrend = (dataType, startTime, endTime, interval = 5) =>
@@ -261,6 +274,7 @@ export const getPerformanceMultiDimension = (startTime, endTime, interval = 10) 
 export const getAssistantContext = () => managementRequest.get('/api/assistant/context')
 
 /** 统一运维助手：流式自然语言对话（含可选多轮 history） */
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
 /** 延时执行本地工具任务（与 /api/mcp 同源；服务重启后任务丢失） */
 export const scheduleDeferredOpsTask = (payload) =>
   managementRequest.post('/api/ops-schedule/tasks', payload)
@@ -269,7 +283,6 @@ export const listDeferredOpsTasks = () => managementRequest.get('/api/ops-schedu
 
 export const cancelDeferredOpsTask = (taskId) =>
   managementRequest.delete(`/api/ops-schedule/tasks/${taskId}`)
-
 export const assistantChatStream = (message, history = [], options = {}) =>
   fetch(`${getManagementApiBaseUrl()}/api/assistant/chat/stream`, {
     method: 'POST',
@@ -300,23 +313,24 @@ export function buildManagementWsUrl(pathname = '/ws/performance') {
   return `${wsScheme}//${base.host}${base.pathname}${wsPath}`
 }
 
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（/api/performance 扩展）
 export const getPerformanceBaseline = (dataType, days = 7) =>
   managementRequest.get('/api/performance/baseline', {
     params: { dataType, days }
   })
 
-// 告警配置相关 API（支持默认配置与任务级配置）
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（告警无默认页）
 export const getAlarmConfig = (taskId = '') =>
   taskId ? request.get(`/api/alarm/config/${taskId}`) : request.get('/api/alarm/config')
 
 export const saveAlarmConfig = (config, taskId = '') =>
   taskId ? request.post(`/api/alarm/config/${taskId}`, config) : request.post('/api/alarm/config', config)
 
-/** MCP 路径/服务白名单（控制台「路径白名单」弹窗） */
+/** MCP 路径/服务白名单（系统配置中心可一并使用；独立弹窗组件为遗留） */
 export const getAgentPathPolicy = () => managementRequest.get('/api/agent/path-policy')
 export const saveAgentPathPolicy = (body) => managementRequest.put('/api/agent/path-policy', body)
 
-// 角色管理相关接口
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（RBAC 无 UI）
 export const getRoleById = (roleId) => managementRequest.get(`/admin/role/${roleId}`)
 export const getRoleByRoleName = (roleName) => managementRequest.get(`/admin/role/name/${roleName}`)
 export const getRoles = () => managementRequest.get('/admin/role/list')
@@ -326,7 +340,7 @@ export const addRole = (role) => managementRequest.post('/admin/role', role)
 export const updateRole = (role) => managementRequest.put('/admin/role', role)
 export const deleteRole = (roleId) => managementRequest.delete(`/admin/role/${roleId}`)
 
-// 权限管理相关接口
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（RBAC 无 UI）
 export const getPermissionById = (permissionId) => managementRequest.get(`/admin/permission/${permissionId}`)
 export const getPermissionByPermissionCode = (permissionCode) => managementRequest.get(`/admin/permission/code/${permissionCode}`)
 export const getPermissions = () => managementRequest.get('/admin/permission/list')
@@ -355,12 +369,12 @@ export const revokeUserApiKey = (id) => request.post(`/api/profile/api-keys/${id
 export const getSystemConfigEffective = () => managementRequest.get('/api/system-config/effective')
 export const saveSystemConfigEffective = (payload) => managementRequest.put('/api/system-config/effective', payload)
 export const reconcileSystemBootstrap = () => managementRequest.post('/api/system-config/bootstrap/reconcile')
-export const getPlatformInfo = () => managementRequest.get('/api/platform/info')
+export const getPlatformInfo = (config = {}) => managementRequest.get('/api/platform/info', config)
 
-/** 公开验收探针（无需登录） */
+/** 公开验收探针（无需登录；运维/交付验收用，非默认导航） */
 export const getPlatformAcceptance = () => request.get('/api/platform/acceptance')
 
-// 告警历史相关接口
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（告警历史）
 export const getAlarmHistory = (pageNum = 1, pageSize = 10, level = '', taskId = '') =>
   request.get('/api/alarm/history/list', { params: { pageNum, pageSize, level, taskId } })
 
@@ -386,7 +400,7 @@ export const getAlarmRootCauseStatistics = (days = 7, level = '', taskId = '') =
 export const processAlarmsByTaskId = (taskId) =>
   request.get('/api/alarm/history/process-by-task', { params: { taskId } })
 
-// 告警规则管理相关接口
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（告警规则兼容 API）
 export const addAlarmRule = (rule) => request.post('/api/alarm-rule/add', rule)
 export const updateAlarmRule = (rule) => request.post('/api/alarm-rule/update', rule)
 export const deleteAlarmRule = (id) => request.delete(`/api/alarm-rule/delete/${id}`)
@@ -396,12 +410,12 @@ export const getEnabledAlarmRules = () => request.get('/api/alarm-rule/enabled')
 export const enableAlarmRule = (id, enabled) => request.post('/api/alarm-rule/enable', null, { params: { id, enabled } })
 export const testAlarmRule = (ruleId, testContent) => request.post('/api/alarm-rule/test', null, { params: { ruleId, testContent } })
 
-// 日志清洗相关 API
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
 export const getCleanRules = () => request.get('/api/log/clean/rules')
 export const saveCleanRules = (rules) => request.post('/api/log/clean/rules', rules)
 export const cleanLog = (logContent, rules) => request.post('/api/log/clean', { logContent, rules })
 
-// Elasticsearch 相关 API
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
 export const getESLogs = (pageNum = 1, pageSize = 10) =>
   request.get('/api/elasticsearch/logs', { params: { pageNum, pageSize } })
 
@@ -421,12 +435,12 @@ export const searchESLogs = (
 
 export const getESLogById = (id) => request.get(`/api/elasticsearch/get/${id}`)
 
-// 运维状态相关 API
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（Env 不直打专端）
 export const getModelRfHealth = () => managementRequest.get('/api/v1/model/health')
 export const getCollectorStatus = () => managementRequest.get('/api/collector/status')
 export const getKafkaStatus = () => managementRequest.get('/api/kafka/status')
 
-// AI 审计与 Runbook 审批
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（AiAuditCenter 未挂载）
 export const getAiAuditRecent = (limit = 100) =>
   managementRequest.get('/admin/audit/ai/recent', { params: { limit } })
 
@@ -447,20 +461,20 @@ export const getAuditDetail = ({ entryId = '', traceId = '' } = {}) =>
     }
   })
 
-export const getOpsTraceRecent = (limit = 100) =>
-  managementRequest.get('/api/ops-trace/recent', { params: { limit } })
+export const getOpsTraceRecent = (limit = 100, config = {}) =>
+  managementRequest.get('/api/ops-trace/recent', { ...config, params: { ...(config.params || {}), limit } })
 
 /** 单条审计含 steps_json（思维链） */
 export const getOpsTraceDetail = (traceId) =>
   managementRequest.get('/api/ops-trace/detail', { params: { traceId } })
 
+// DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md（Runbook 无 UI）
 export const getRunbookList = () => managementRequest.get('/api/runbook/list')
 export const submitRunbook = (payload) => managementRequest.post('/api/runbook/submit', payload)
 export const approveRunbook = (id) => managementRequest.post(`/api/runbook/${id}/approve`)
 export const rejectRunbook = (id, reason = '') => managementRequest.post(`/api/runbook/${id}/reject`, { reason })
 export const executeRunbook = (id) => managementRequest.post(`/api/runbook/${id}/execute`)
 
-// 决策反馈相关 API
 export const submitDecisionFeedback = (feedback) => request.post('/api/decision-feedback/submit', feedback)
 export const submitDecisionFeedbackBatch = (feedbacks) => request.post('/api/decision-feedback/submit/batch', feedbacks)
 export const getUntrainedSamples = (pageNum = 1, pageSize = 20) =>
@@ -501,14 +515,13 @@ export const getSecuritySelfCheck = () => managementRequest.get('/api/security/s
 export const getPatrolHistory = (days = 7, limit = 50) =>
   managementRequest.get('/api/ops/patrol/history', { params: { days, limit } })
 
-export const getPatrolHistoryTrend = (days = 7) =>
-  managementRequest.get('/api/ops/patrol/history/trend', { params: { days } })
+export const getPatrolHistoryTrend = (days = 7, config = {}) =>
+  managementRequest.get('/api/ops/patrol/history/trend', { ...config, params: { ...(config.params || {}), days } })
 
 /** 运维效果评分仪表盘 */
 export const getOpsEffectDashboard = (days = 7) =>
   managementRequest.get('/api/ops/effect/dashboard', { params: { days } })
 
-/** AWM 已沉淀 workflow 套路 */
 export const getOpsWorkflowMemory = (domain = 'all', q = '') =>
   managementRequest.get('/api/ops/workflow/memory', {
     params: { domain, ...(q ? { q } : {}) }
@@ -519,17 +532,15 @@ export const getOpsWorkflowRuns = (workflowId, limit = 8) =>
     params: { workflowId, limit }
   })
 
-/** Reflexion 安全教训 */
 export const getOpsFailureInsights = (q = '', limit = 12) =>
   managementRequest.get('/api/ops/workflow/failure-insights', {
     params: { limit, ...(q ? { q } : {}) }
   })
 
-/** 从近期审计轨迹离线诱导 workflow */
 export const induceOpsWorkflowFromAudit = (limit = 20) =>
   managementRequest.post('/api/ops/workflow/induce-from-audit', null, { params: { limit } })
 
-/** 兼容旧 autonomous 入口，现统一触发巡检自动修复单轨 */
+// DELIVERY: 死封装/无挂载页 — 巡检内部/可选（见 docs/deployment/交付API白名单.md）
 export const runAutonomousOps = (forceRemediate = false, readOnly = false) =>
   managementRequest.post('/api/ops/autonomous/run', null, {
     params: { forceRemediate, readOnly }

@@ -80,10 +80,14 @@ const outcomeClass = computed(() => {
     case 'EXECUTED':
       return 'outcome-chip--ok'
     case 'DIAGNOSED':
+    case 'NO_TOOL':
+    case 'NO_PENDING':
       return 'outcome-chip--info'
     case 'PREVIEW':
+    case 'PREVIEW_OR_WRITE_PENDING':
       return 'outcome-chip--warn'
     case 'ERROR':
+    case 'FAILED':
       return 'outcome-chip--err'
     default:
       return ''

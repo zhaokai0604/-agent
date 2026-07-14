@@ -22,6 +22,8 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class OpsAutoRemediationServiceTest {
@@ -60,6 +62,7 @@ class OpsAutoRemediationServiceTest {
                 opsGovernanceService,
                 opsAuditTraceService,
                 httpAuditSubject);
+        ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "riskPatrolAutoMax", 6.0d);
         ReflectionTestUtils.setField(service, "pendingProposalId", "p-1");
         ReflectionTestUtils.setField(service, "pendingExpiresAtMs", System.currentTimeMillis() + 60_000L);
@@ -89,5 +92,28 @@ class OpsAutoRemediationServiceTest {
         assertTrue(String.valueOf(denied.get("error")).contains("其他操作者"));
 
         assertTrue(Boolean.TRUE.equals(ownerViewAgain.get("hasPending")));
+    }
+
+    @Test
+    void afterPatrolNoActionClearsStaleExecutionSummaryAndPendingProposal() {
+        when(opsPathPolicy.snapshotTempCleanRoots()).thenReturn(List.of());
+        when(opsPathPolicy.snapshotLogCleanupRoots()).thenReturn(List.of());
+        when(opsGovernanceService.filterPlanSteps(anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        ReflectionTestUtils.setField(service, "lastSummary", Map.of(
+                "traceId", "old-trace",
+                "actions", List.of(Map.of("success", true))));
+
+        service.afterPatrol(Map.of(
+                "diskUsagePct", 42.0,
+                "cpuUsagePct", 10.0,
+                "memoryUsagePct", 35.0), List.of());
+
+        Map<String, Object> summary = service.getLastSummary();
+        assertEquals("NO_ACTION", summary.get("status"));
+        assertEquals(0, summary.get("plannedCount"));
+        assertFalse(summary.containsKey("traceId"));
+        assertTrue(summary.get("actions") instanceof List<?> actions && actions.isEmpty());
+        assertFalse(Boolean.TRUE.equals(service.getPendingProposalView("u1").get("hasPending")));
     }
 }

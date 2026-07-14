@@ -119,17 +119,32 @@ public final class McpToolParamReader {
                     parameters.put("confirmDelete", true);
                 }
             }
-            case "ServiceRestartTool", "ServiceOpsTool" -> {
-                if (toolName.equals("ServiceRestartTool") || operationIs(parameters, "restart", "reload")) {
+            case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" -> {
+                if (toolName.equals("ServiceRestartTool")
+                        || toolName.equals("SystemdTool")
+                        || operationIs(parameters, "restart", "reload")) {
                     parameters.put("dryRun", false);
                     parameters.put("confirmRestart", true);
+                    if (toolName.equals("SystemdTool") || toolName.equals("ServiceOpsTool")) {
+                        if (!parameters.containsKey("operation") || String.valueOf(parameters.get("operation")).isBlank()) {
+                            parameters.put("operation", "restart");
+                        }
+                    }
                 }
             }
             case "ContainerOpsTool", "DockerTool" -> applyContainerWriteConfirm(parameters);
             case "ProcessOpsTool", "ProcessTool" -> {
-                if (toolName.equals("ProcessOpsTool") || operationIs(parameters, "kill", "terminate", "stop")) {
+                boolean killOp = toolName.equals("ProcessOpsTool")
+                        || operationIs(parameters, "kill", "terminate", "stop")
+                        || parameters.get("pid") != null;
+                if (killOp) {
                     parameters.put("dryRun", false);
                     parameters.put("confirmKill", true);
+                    if (toolName.equals("ProcessTool") || toolName.equals("ProcessOpsTool")) {
+                        if (!parameters.containsKey("operation") || String.valueOf(parameters.get("operation")).isBlank()) {
+                            parameters.put("operation", "kill");
+                        }
+                    }
                 }
             }
             default -> { }

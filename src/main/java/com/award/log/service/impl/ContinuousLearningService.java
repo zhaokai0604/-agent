@@ -18,6 +18,7 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -40,20 +41,32 @@ public class ContinuousLearningService {
 
     @Scheduled(cron = "0 0 2 * * ?")
     public void dailyCollectAndRetrain() {
-        if (!enabled) {
+        runCollectAndRetrain(false);
+    }
+
+    /**
+     * @param force 手动触发时忽略样本阈值与 enabled=false（仍会真实跑脚本）
+     * @return 是否实际完成一次成功训练并标记样本
+     */
+    public boolean runCollectAndRetrain(boolean force) {
+        if (!enabled && !force) {
             log.info("[持续学习] 持续学习功能已禁用");
-            return;
+            return false;
         }
 
-        log.info("[持续学习] ===== 开始执行日常样本收集和训练任务 =====");
-        
+        log.info("[持续学习] ===== 开始执行样本收集和训练任务 force={} =====", force);
+
         try {
             int untrainedCount = decisionFeedbackMapper.countUntrained();
             log.info("[持续学习] 当前未训练样本数: [{}]", untrainedCount);
 
-            if (untrainedCount < sampleThreshold) {
+            if (!force && untrainedCount < sampleThreshold) {
                 log.info("[持续学习] 未训练样本数 [{}] 低于阈值 [{}]，跳过重训练", untrainedCount, sampleThreshold);
-                return;
+                return false;
+            }
+            if (untrainedCount <= 0) {
+                log.warn("[持续学习] 无未训练样本，无法训练");
+                return false;
             }
 
             List<DecisionFeedback> samples = decisionFeedbackMapper.selectUntrainedSamples(5000);
@@ -63,19 +76,24 @@ public class ContinuousLearningService {
             log.info("[持续学习] 训练数据已导出至: [{}]", trainingDataFile);
 
             boolean trainSuccess = runTrainScript(trainingDataFile);
-            
+
             if (trainSuccess) {
                 List<Long> trainedIds = samples.stream()
                         .map(DecisionFeedback::getId)
+                        .filter(id -> id != null)
                         .toList();
-                int marked = decisionFeedbackMapper.markAsTrained(trainedIds);
-                log.info("[持续学习] 已标记 [{}] 个样本为已训练", marked);
+                if (!trainedIds.isEmpty()) {
+                    int marked = decisionFeedbackMapper.markAsTrained(trainedIds);
+                    log.info("[持续学习] 已标记 [{}] 个样本为已训练", marked);
+                }
                 log.info("[持续学习] ===== 持续学习任务完成 =====");
-            } else {
-                log.error("[持续学习] ===== 训练失败，请检查日志 =====");
+                return true;
             }
+            log.error("[持续学习] ===== 训练失败，请检查日志 =====");
+            return false;
         } catch (Exception e) {
             log.error("[持续学习] 执行过程中发生异常", e);
+            return false;
         }
     }
 
@@ -89,16 +107,19 @@ public class ContinuousLearningService {
 
         try (BufferedWriter writer = Files.newBufferedWriter(outputFile)) {
             for (DecisionFeedback sample : samples) {
-                Map<String, Object> record = Map.of(
-                        "content", sample.getLogContent() != null ? sample.getLogContent() : "",
-                        "label", sample.getActualAlert() != null ? sample.getActualAlert() : 0,
-                        "level", sample.getLogLevel() != null ? sample.getLogLevel() : "INFO",
-                        "template", sample.getLogTemplate() != null ? sample.getLogTemplate() : "",
-                        "confidence", sample.getModelConfidence() != null ? sample.getModelConfidence() : 0.0,
-                        "decisionId", sample.getDecisionId() != null ? sample.getDecisionId() : "",
-                        "reviewer", sample.getReviewer() != null ? sample.getReviewer() : "",
-                        "remark", sample.getRemark() != null ? sample.getRemark() : ""
-                );
+                Map<String, Object> record = new LinkedHashMap<>();
+                record.put("content", sample.getLogContent() != null ? sample.getLogContent() : "");
+                record.put("label", sample.getActualAlert() != null ? sample.getActualAlert() : 0);
+                record.put("level", sample.getLogLevel() != null ? sample.getLogLevel() : "INFO");
+                record.put("template", sample.getLogTemplate() != null ? sample.getLogTemplate() : "");
+                record.put("confidence", sample.getModelConfidence() != null ? sample.getModelConfidence() : 0.0);
+                record.put("decisionId", sample.getDecisionId() != null ? sample.getDecisionId() : "");
+                record.put("reviewer", sample.getReviewer() != null ? sample.getReviewer() : "");
+                record.put("remark", sample.getRemark() != null ? sample.getRemark() : "");
+                record.put("error_rate_1m", sample.getErrorRate1m() != null ? sample.getErrorRate1m() : 0.0);
+                record.put("error_1m", sample.getError1m() != null ? sample.getError1m() : 0.0);
+                record.put("total_1m", sample.getTotal1m() != null ? sample.getTotal1m() : 0.0);
+                record.put("interval_ms", sample.getIntervalMs() != null ? sample.getIntervalMs() : 0.0);
                 writer.write(OBJECT_MAPPER.writeValueAsString(record));
                 writer.newLine();
             }
@@ -109,7 +130,7 @@ public class ContinuousLearningService {
 
     private boolean runTrainScript(Path trainingDataFile) {
         log.info("[持续学习] 开始执行训练脚本...");
-        
+
         try {
             if (!Files.exists(TRAIN_SCRIPT_PATH)) {
                 log.error("[持续学习] 训练脚本不存在: [{}]", TRAIN_SCRIPT_PATH);
@@ -133,14 +154,19 @@ public class ContinuousLearningService {
                 }
             }
 
-            int exitCode = process.waitFor();
+            boolean finished = process.waitFor(45, java.util.concurrent.TimeUnit.MINUTES);
+            if (!finished) {
+                process.destroyForcibly();
+                log.error("[持续学习] 训练脚本超时（45 分钟），已强制终止");
+                return false;
+            }
+            int exitCode = process.exitValue();
             if (exitCode == 0) {
                 log.info("[持续学习] 训练脚本执行成功");
                 return true;
-            } else {
-                log.error("[持续学习] 训练脚本执行失败，退出码: [{}]", exitCode);
-                return false;
             }
+            log.error("[持续学习] 训练脚本执行失败，退出码: [{}]", exitCode);
+            return false;
         } catch (Exception e) {
             log.error("[持续学习] 执行训练脚本时发生异常", e);
             return false;
@@ -158,7 +184,6 @@ public class ContinuousLearningService {
 
     public boolean triggerManualTraining() {
         log.info("[持续学习] 收到手动训练触发请求");
-        dailyCollectAndRetrain();
-        return true;
+        return runCollectAndRetrain(true);
     }
 }

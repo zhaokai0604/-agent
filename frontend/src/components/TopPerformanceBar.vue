@@ -169,6 +169,12 @@ import {
   getPatrolHistoryTrend,
   getPlatformInfo
 } from '../api/index.js'
+import {
+  canAttemptPerformanceWs,
+  notePerformanceWsFailure,
+  notePerformanceWsOpen,
+  performanceWsCooldownMs
+} from '../utils/performanceWsBackoff.js'
 
 /** 完整 ws/wss 地址时优先使用（前后端不同域部署时配置 .env） */
 const VITE_AWARD_LOG_WS_URL = typeof import.meta.env?.VITE_AWARD_LOG_WS_URL === 'string'
@@ -178,7 +184,7 @@ const VITE_AWARD_LOG_WS_URL = typeof import.meta.env?.VITE_AWARD_LOG_WS_URL === 
 const INTERVAL_MS = 15000
 const PATROL_POLL_MS = 60000
 const SLOW_PATROL_POLL_MS = 300000
-const WS_RECONNECT_CAP = 10
+const WS_RECONNECT_CAP = 3
 /** WS 曾成功推送 performance 后，在此时间内跳过 HTTP 轮询（与后端 5s 推送对齐并留余量） */
 const HTTP_SKIP_AFTER_WS_MS = 30000
 
@@ -239,7 +245,7 @@ function performanceWsUrl () {
 
 async function fetchRemediationCoverage () {
   try {
-    const rows = await getPatrolRemediationCoverage()
+    const rows = await getPatrolRemediationCoverage({ silent: true })
     remediationCoverage.value = Array.isArray(rows) ? rows : []
   } catch {
     remediationCoverage.value = []
@@ -258,6 +264,7 @@ function laneTagType (lane) {
 function applyRemediationPendingWs (data) {
   if (!data || typeof data !== 'object') {
     pendingRemediation.value = { hasPending: false }
+    emitPatrolPendingChange(pendingRemediation.value)
     return
   }
   pendingRemediation.value = {
@@ -268,11 +275,19 @@ function applyRemediationPendingWs (data) {
     expiresAtMs: data.expiresAtMs,
     riskPatrolAutoMax: data.riskPatrolAutoMax
   }
+  emitPatrolPendingChange(pendingRemediation.value)
+}
+
+function emitPatrolPendingChange (pending) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('ops-patrol-pending-change', {
+    detail: pending && typeof pending === 'object' ? { ...pending } : { hasPending: false }
+  }))
 }
 
 async function fetchRemediationPending () {
   try {
-    const p = await getPatrolRemediationPending()
+    const p = await getPatrolRemediationPending({ silent: true })
     applyRemediationPendingWs(p)
     refreshPatrolHint()
   } catch {
@@ -290,12 +305,34 @@ async function onConfirmRemediation () {
   remConfirmLoading.value = true
   try {
     const res = await confirmPatrolRemediation(id, '确认执行')
+    const actions = Array.isArray(res?.actions) ? res.actions : null
+    if (actions && actions.length > 0) {
+      const okCount = actions.filter((a) => a && a.success === true).length
+      const failCount = actions.length - okCount
+      if (failCount === 0) {
+        ElMessage.success('已按方案执行修复')
+        pendingRemediation.value = { hasPending: false }
+        emitPatrolPendingChange(pendingRemediation.value)
+        refreshPatrolHint()
+      } else if (okCount === 0) {
+        ElMessage.error((res && res.error) || res?.resultSummary || '修复全部失败')
+        await fetchRemediationPending()
+      } else {
+        ElMessage.warning(
+          (res && res.resultSummary) || `部分修复失败（成功 ${okCount} / 失败 ${failCount}）`
+        )
+        await fetchRemediationPending()
+      }
+      return
+    }
     if (res && res.success) {
       ElMessage.success('已按方案执行修复')
       pendingRemediation.value = { hasPending: false }
+      emitPatrolPendingChange(pendingRemediation.value)
       refreshPatrolHint()
     } else {
       ElMessage.error((res && res.error) || '执行失败')
+      await fetchRemediationPending()
     }
   } catch (e) {
     ElMessage.error('请求失败')
@@ -387,7 +424,22 @@ function handlePerfWsMessage (ev) {
   }
 }
 
+function schedulePerfWsCooldownRetry () {
+  if (wsReconnectTimer != null || perfWsUnmounting) {
+    return
+  }
+  wsReconnectTimer = window.setTimeout(() => {
+    wsReconnectTimer = null
+    connectPerformanceWs()
+  }, Math.max(1000, performanceWsCooldownMs() + 250))
+}
+
 function schedulePerfWsReconnect () {
+  if (!canAttemptPerformanceWs()) {
+    errorHint.value = '实时 WebSocket 暂不可用，已使用 HTTP 轮询'
+    schedulePerfWsCooldownRetry()
+    return
+  }
   if (wsReconnectAttempt >= WS_RECONNECT_CAP) {
     return
   }
@@ -429,15 +481,23 @@ function connectPerformanceWs () {
     return
   }
   perfWsUnmounting = false
+  if (!canAttemptPerformanceWs()) {
+    errorHint.value = '实时 WebSocket 暂不可用，已使用 HTTP 轮询'
+    schedulePerfWsCooldownRetry()
+    return
+  }
   disconnectPerformanceWs(false, false)
   try {
     perfWs = new WebSocket(performanceWsUrl())
   } catch {
+    notePerformanceWsFailure()
     schedulePerfWsReconnect()
     return
   }
   perfWs.onopen = () => {
+    notePerformanceWsOpen()
     wsReconnectAttempt = 0
+    errorHint.value = ''
     try {
       perfWs.send('sync')
     } catch {
@@ -451,6 +511,12 @@ function connectPerformanceWs () {
   perfWs.onclose = () => {
     perfWs = null
     if (perfWsUnmounting) {
+      return
+    }
+    const state = notePerformanceWsFailure()
+    if (state.disabled) {
+      errorHint.value = '实时 WebSocket 暂不可用，已使用 HTTP 轮询'
+      schedulePerfWsCooldownRetry()
       return
     }
     schedulePerfWsReconnect()
@@ -616,7 +682,7 @@ function renderPatrolTrendCharts () {
 
 async function fetchPatrolHistoryTrend () {
   try {
-    const rows = await getPatrolHistoryTrend(7)
+    const rows = await getPatrolHistoryTrend(7, { silent: true })
     patrolTrendRows.value = Array.isArray(rows) ? rows : []
     renderPatrolTrendCharts()
   } catch {
@@ -647,9 +713,9 @@ async function fetchPatrolRealtime () {
   }
   try {
     const [list, corr, pending] = await Promise.all([
-      getPatrolAlertsRecent(12),
-      getPatrolCorrelationLatest(),
-      getPatrolRemediationPending()
+      getPatrolAlertsRecent(12, { silent: true }),
+      getPatrolCorrelationLatest({ silent: true }),
+      getPatrolRemediationPending({ silent: true })
     ])
     applyRemediationPendingWs(pending)
     correlation.value = corr && typeof corr === 'object' ? { ...corr } : {}
@@ -681,8 +747,8 @@ async function runLightPatrolTick (includeAnalytics = false) {
 async function patrolTick () {
   try {
     const [list, corr] = await Promise.all([
-      getPatrolAlertsRecent(12),
-      getPatrolCorrelationLatest()
+      getPatrolAlertsRecent(12, { silent: true }),
+      getPatrolCorrelationLatest({ silent: true })
     ])
     await fetchPatrolHistoryTrend()
     await fetchRemediationPending()
@@ -706,7 +772,7 @@ async function tick () {
     return
   }
   try {
-    const data = await getPerformanceData()
+    const data = await getPerformanceData({ silent: true })
     errorHint.value = ''
     metrics.forEach(({ key }) => {
       metricsMap[key] = data[key] ?? null
@@ -715,13 +781,12 @@ async function tick () {
     updatedAt.value = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
   } catch (e) {
     errorHint.value = '性能拉取失败'
-    console.warn('[TopPerformanceBar]', e)
   }
 }
 
 async function loadPlatformEnv () {
   try {
-    const info = await getPlatformInfo()
+    const info = await getPlatformInfo({ silent: true })
     const profiles = Array.isArray(info?.activeProfiles) ? info.activeProfiles.join('+') : 'default'
     const profileLabels = { dev: '开发环境', prod: '生产环境', test: '测试环境', 'test-kylin': '麒麟测试' }
     const profileText = profiles.split('+').map((p) => profileLabels[p] || p).join('+')

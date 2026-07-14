@@ -237,12 +237,18 @@ public class SecuritySignalNormalizer {
 
     private static boolean isProcessLike(JsonNode node, String sourceHint) {
         String hint = sourceHint == null ? "" : sourceHint.toLowerCase(Locale.ROOT);
-        if (hint.contains("sysmon") || hint.contains("pids")) {
+        if (hint.contains("syscheck") || hint.contains("fim") || hint.contains("integrity")) {
+            return false;
+        }
+        // 文件完整性：有 syscheck/file path 应走 HIDS，勿误判 PIDS
+        if (!text(node, "syscheck.path").isBlank() || !text(node, "file.path").isBlank()) {
+            return false;
+        }
+        if (hint.contains("sysmon") || hint.contains("pids") || hint.contains("process")) {
             return true;
         }
         return !text(node, "data.win.eventdata.Image").isBlank()
-                || !text(node, "process.name").isBlank()
-                || !text(node, "syscheck.path").isBlank();
+                || !text(node, "process.name").isBlank();
     }
 
     private static String normalizeSourceType(String sourceHint) {

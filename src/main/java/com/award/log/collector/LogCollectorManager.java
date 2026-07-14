@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * 日志采集器管理器
@@ -15,8 +16,12 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 public class LogCollectorManager {
 
+    private static final int FAN_OUT_CAPACITY = 10_000;
+
     private final Map<String, LogCollector> collectors;
     private KafkaLogProducer kafkaLogProducer;
+    /** WebSocket 等次级消费者读此队列，不与调度器抢空采集器缓冲 */
+    private final ConcurrentLinkedQueue<String> fanOutQueue = new ConcurrentLinkedQueue<>();
 
     public LogCollectorManager() {
         this.collectors = new ConcurrentHashMap<>();
@@ -73,8 +78,8 @@ public class LogCollectorManager {
     }
 
     /**
-     * 采集所有日志
-     * @return 所有采集器采集的日志列表
+     * 从各采集器 drain 一次，并将副本 fan-out 给 WebSocket 等订阅方。
+     * 仅应由调度器（主消费方）调用，避免多方 collect 抢空。
      */
     public List<String> collectAll() {
         List<String> allLogs = new ArrayList<>();
@@ -84,7 +89,32 @@ public class LogCollectorManager {
                 allLogs.addAll(logs);
             }
         });
+        publishFanOut(allLogs);
         return allLogs;
+    }
+
+    /**
+     * WebSocket 等次级消费：只读 fan-out，不清空采集器内部缓冲。
+     */
+    public List<String> takeFanOut() {
+        List<String> out = new ArrayList<>();
+        String line;
+        while ((line = fanOutQueue.poll()) != null) {
+            out.add(line);
+        }
+        return out;
+    }
+
+    private void publishFanOut(List<String> logs) {
+        if (logs == null || logs.isEmpty()) {
+            return;
+        }
+        for (String line : logs) {
+            while (fanOutQueue.size() >= FAN_OUT_CAPACITY) {
+                fanOutQueue.poll();
+            }
+            fanOutQueue.offer(line);
+        }
     }
 
     /**

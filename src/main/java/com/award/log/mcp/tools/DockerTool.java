@@ -97,8 +97,10 @@ public class DockerTool extends AbstractCommandExecutor {
         if (!CONTAINER_NAME.matcher(name).matches()) {
             return buildError("容器名称格式不合法", start);
         }
-        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
-        if (!isDryRun && !Boolean.TRUE.equals(confirmRestart)) {
+        com.award.log.security.ChatWriteExecutionPolicy.ResolvedRestart write =
+                com.award.log.security.ChatWriteExecutionPolicy.resolveRestart(dryRun, confirmRestart);
+        boolean isDryRun = write.dryRun();
+        if (!isDryRun && !write.confirmRestart()) {
             return buildError("真实重启需 dryRun=false 且 confirmRestart=true", start);
         }
         List<String> cmd = List.of("docker", "restart", name);
@@ -136,8 +138,10 @@ public class DockerTool extends AbstractCommandExecutor {
         if (!CONTAINER_NAME.matcher(name).matches()) {
             return buildError("容器名称格式不合法", start);
         }
-        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
-        if (!isDryRun && !Boolean.TRUE.equals(confirmStop)) {
+        com.award.log.security.ChatWriteExecutionPolicy.ResolvedStop write =
+                com.award.log.security.ChatWriteExecutionPolicy.resolveStop(dryRun, confirmStop);
+        boolean isDryRun = write.dryRun();
+        if (!isDryRun && !write.confirmStop()) {
             return buildError("真实停止需 dryRun=false 且 confirmStop=true", start);
         }
         List<String> cmd = List.of("docker", "stop", name);

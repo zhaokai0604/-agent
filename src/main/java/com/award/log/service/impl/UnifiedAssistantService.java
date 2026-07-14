@@ -24,6 +24,7 @@ import com.award.log.security.PromptInjectionGuard;
 import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.security.RiskLevel;
 import com.award.log.security.ToolSurfaceResolver;
+import com.award.log.security.WriteExecutionCoordinator;
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.KnowledgeBaseService;
 import com.award.log.service.OpsOpenIncidentService;
@@ -355,41 +356,51 @@ public class UnifiedAssistantService {
         }
 
         boolean allowWrite = confirmRemediation || opsIntentRouter.forceRemediate(userMessage);
-        Map<String, Object> metaExtras = Map.of("writeConfirmed", allowWrite);
+        // writeConfirmed 仅表示用户意图确认；是否落地由结束时 securityOutcome / Tracker 再定
+        Map<String, Object> metaExtras = new LinkedHashMap<>();
+        metaExtras.put("userIntentConfirmed", allowWrite);
+        metaExtras.put("writeConfirmed", false);
 
         if (orchestratorEnabled && opsRuntimeService != null
                 && opsRuntimeService.shouldOrchestrateFromContext(userMessage, history)) {
             McpToolSurface surface = toolSurfaceResolver.resolve(userMessage, intentRisk);
             String traceId = UUID.randomUUID().toString();
-            OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite);
-            try {
-                String hint = plan.statusHintZh().isBlank()
-                        ? AssistantReplyPrompts.orchestrateStatusHint()
-                        : plan.statusHintZh();
-                Flux<String> body = Flux.concat(
-                        Flux.just("> " + hint + "\n\n"),
-                        Mono.fromCallable(() -> opsRuntimeService.run(userMessage, surface, intentRisk))
-                                .subscribeOn(Schedulers.boundedElastic())
-                                .timeout(Duration.ofMinutes(5))
-                                .flatMapMany(result -> {
-                                    Flux<String> event = Flux.empty();
-                                    String encoded = AssistantStreamEvents.encode(result.report());
-                                    if (encoded != null) {
-                                        event = Flux.just(encoded);
-                                    }
-                                    return Flux.concat(
-                                            event,
-                                            chunkTextForSse(appendChatAntiHallucinationFooter(
-                                                    result.markdown(), allowWrite)));
-                                })
-                ).onErrorResume(e -> {
-                    log.error("assistant orchestrated run failed", e);
-                    return Flux.just("巡检编排执行失败：" + e.getMessage());
-                });
-                return prependAssistantMeta(body, userMessage, metaExtras, plan);
-            } finally {
-                OpsSecurityContext.clear();
-            }
+            String hint = plan.statusHintZh().isBlank()
+                    ? AssistantReplyPrompts.orchestrateStatusHint()
+                    : plan.statusHintZh();
+            AssistantReplyPlanner.ReplyPlan orchestratePlan = new AssistantReplyPlanner.ReplyPlan(
+                    AssistantReplyMode.ORCHESTRATE, plan.category(), true, hint);
+            Flux<String> body = Flux.concat(
+                    Flux.just("> " + hint + "\n\n"),
+                    Mono.fromCallable(() -> {
+                                OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite);
+                                try {
+                                    return opsRuntimeService.runFromContext(userMessage, history, surface, intentRisk);
+                                } finally {
+                                    OpsSecurityContext.clear();
+                                }
+                            })
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .timeout(Duration.ofMinutes(5))
+                            .flatMapMany(result -> {
+                                Flux<String> event = Flux.empty();
+                                String encoded = AssistantStreamEvents.encode(result.report());
+                                if (encoded != null) {
+                                    event = Flux.just(encoded);
+                                }
+                                Object outcome = result.report() != null
+                                        ? result.report().get("securityOutcome") : null;
+                                boolean orchLanded = "EXECUTED".equals(String.valueOf(outcome));
+                                return Flux.concat(
+                                        event,
+                                        chunkTextForSse(appendChatAntiHallucinationFooter(
+                                                result.markdown(), allowWrite, orchLanded)));
+                    })
+            ).onErrorResume(e -> {
+                log.error("assistant orchestrated run failed", e);
+                return Flux.just("巡检编排执行失败：" + e.getMessage());
+            });
+            return prependAssistantMeta(body, userMessage, metaExtras, orchestratePlan);
         }
 
         String toolHint = plan.statusHintZh().isBlank()
@@ -460,16 +471,24 @@ public class UnifiedAssistantService {
             }
             assistantAuditRecorder.addCot(steps, 4, "verify", "tool surface=" + surface.name());
             assistantAuditRecorder.addStep(steps, "result", truncateForAudit(content, 600));
-            String toolAgentOutcome = surface == McpToolSurface.READ_ONLY
-                    ? "READ_ONLY_SURFACE"
-                    : (allowWrite ? "EXECUTED" : "DIAGNOSED");
+            String toolAgentOutcome;
+            if (surface == McpToolSurface.READ_ONLY) {
+                toolAgentOutcome = "READ_ONLY_SURFACE";
+            } else if (ChatToolExecutionTracker.hasSuccessfulRealWrite()) {
+                toolAgentOutcome = "EXECUTED";
+            } else if (ChatToolExecutionTracker.hasAnyToolInvocation()) {
+                toolAgentOutcome = allowWrite ? "PREVIEW_OR_WRITE_PENDING" : "DIAGNOSED";
+            } else {
+                toolAgentOutcome = "NO_TOOL";
+            }
+            boolean auditOk = !"NO_TOOL".equals(toolAgentOutcome) || content != null;
             assistantAuditRecorder.record(
                     traceId,
                     userMessage,
                     parseIntentRisk(context).name(),
                     toolAgentOutcome,
                     "ChatClient.tools",
-                    true,
+                    auditOk,
                     truncateForAudit(content, 400),
                     steps,
                     System.currentTimeMillis() - startedAt
@@ -479,6 +498,7 @@ public class UnifiedAssistantService {
             cleaned = cleaned.replaceAll("(?m)^>\\s*\\*\\*traceId:\\*\\*\\s*`[^`]+`\\s*\\n\\n?", "");
             cleaned = polishAssistantResponse(cleaned, new AssistantReplyPlanner.ReplyPlan(
                     AssistantReplyMode.TOOL_AGENT, AssistantIntentCategory.OPS_DIAGNOSIS, true, ""));
+            cleaned = WriteExecutionCoordinator.sanitizeAssistantText(cleaned, allowWrite);
             return appendChatAntiHallucinationFooter(cleaned, allowWrite);
         } finally {
             ChatToolExecutionTracker.clear();
@@ -768,10 +788,16 @@ public class UnifiedAssistantService {
     }
 
     private String appendChatAntiHallucinationFooter(String content, boolean writeConfirmed) {
-        if (content == null || content.isBlank() || content.contains("Data Basis")) {
+        return appendChatAntiHallucinationFooter(content, writeConfirmed, false);
+    }
+
+    private String appendChatAntiHallucinationFooter(String content, boolean writeConfirmed, boolean forceRealWrite) {
+        if (content == null || content.isBlank() || content.contains("Data Basis") || content.contains("数据依据")) {
             return content;
         }
-        return content + OpsReportFormat.dataBasisFooter(writeConfirmed);
+        boolean anyTool = ChatToolExecutionTracker.hasAnyToolInvocation() || forceRealWrite;
+        boolean realWrite = ChatToolExecutionTracker.hasSuccessfulRealWrite() || forceRealWrite;
+        return content + OpsReportFormat.dataBasisFooter(writeConfirmed, anyTool, realWrite);
     }
 
     private String appendChatAntiHallucinationFooter(String content) {

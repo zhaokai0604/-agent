@@ -121,8 +121,9 @@ public class ElasticsearchServiceImpl implements ElasticsearchService {
     }
 
     private String buildSearchQuery(String query, String severity, Boolean anomaly, LocalDateTime startTime, LocalDateTime endTime) {
+        // StringQuery 需要 query 内部 DSL（bool/...），不要包 {"query":...} 外壳
         StringBuilder builder = new StringBuilder();
-        builder.append("{\"query\":{\"bool\":{\"must\":[");
+        builder.append("{\"bool\":{\"must\":[");
         boolean hasCondition = false;
 
         if (query != null && !query.trim().isEmpty()) {
@@ -162,7 +163,7 @@ public class ElasticsearchServiceImpl implements ElasticsearchService {
             builder.append("{\"match_all\":{}}");
         }
 
-        builder.append("]}}}");
+        builder.append("]}}");
         return builder.toString();
     }
 

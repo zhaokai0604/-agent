@@ -1,9 +1,20 @@
 package com.award.log.service.impl;
 
+import com.award.log.agent.OpsIntentRouter;
+import com.award.log.agent.OpsRunResult;
+import com.award.log.agent.OpsRuntimeService;
+import com.award.log.security.HighRiskCommandDetector;
+import com.award.log.security.IntentRiskFilter;
+import com.award.log.security.McpToolSurface;
+import com.award.log.security.OpsSecurityContext;
+import com.award.log.security.PromptInjectionGuard;
+import com.award.log.security.RiskLevel;
+import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.agent.AssistantReplyPlanner;
 import com.award.log.agent.MultiAgentContextBuilder;
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.StatisticsService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,6 +26,10 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -26,6 +41,18 @@ class UnifiedAssistantServiceTest {
     private AiLogAlarmService aiLogAlarmService;
     @Mock
     private MultiAgentContextBuilder multiAgentContextBuilder;
+    @Mock
+    private PromptInjectionGuard promptInjectionGuard;
+    @Mock
+    private HighRiskCommandDetector highRiskCommandDetector;
+    @Mock
+    private IntentRiskFilter intentRiskFilter;
+    @Mock
+    private ToolSurfaceResolver toolSurfaceResolver;
+    @Mock
+    private OpsIntentRouter opsIntentRouter;
+    @Mock
+    private OpsRuntimeService opsRuntimeService;
 
     private UnifiedAssistantService service;
 
@@ -35,6 +62,13 @@ class UnifiedAssistantServiceTest {
         ReflectionTestUtils.setField(service, "statisticsService", statisticsService);
         ReflectionTestUtils.setField(service, "aiLogAlarmService", aiLogAlarmService);
         ReflectionTestUtils.setField(service, "multiAgentContextBuilder", multiAgentContextBuilder);
+        ReflectionTestUtils.setField(service, "objectMapper", new ObjectMapper());
+        ReflectionTestUtils.setField(service, "promptInjectionGuard", promptInjectionGuard);
+        ReflectionTestUtils.setField(service, "highRiskCommandDetector", highRiskCommandDetector);
+        ReflectionTestUtils.setField(service, "intentRiskFilter", intentRiskFilter);
+        ReflectionTestUtils.setField(service, "toolSurfaceResolver", toolSurfaceResolver);
+        ReflectionTestUtils.setField(service, "opsIntentRouter", opsIntentRouter);
+        ReflectionTestUtils.setField(service, "opsRuntimeService", opsRuntimeService);
         ReflectionTestUtils.setField(service, "assistantReplyPlanner", new AssistantReplyPlanner());
         ReflectionTestUtils.setField(service, "knowledgeSearchTopK", 5);
         ReflectionTestUtils.setField(service, "defaultUseToolAgent", true);
@@ -86,5 +120,33 @@ class UnifiedAssistantServiceTest {
         Map<String, Object> context = service.getAssistantContext("check disk");
         assertEquals(Boolean.TRUE, ((Map<?, ?>) context.get("performance")).get("unavailable"));
         assertEquals(List.of(), context.get("recentAlarms"));
+    }
+
+    @Test
+    void orchestratedStreamKeepsSecurityContextInExecutionThread() {
+        when(promptInjectionGuard.isInjection(anyString())).thenReturn(false);
+        when(highRiskCommandDetector.isHighRiskCommand(anyString())).thenReturn(false);
+        when(intentRiskFilter.evaluate(anyString())).thenReturn(RiskLevel.LOW);
+        when(opsIntentRouter.forceRemediate(anyString())).thenReturn(false);
+        when(toolSurfaceResolver.resolve(anyString(), eq(RiskLevel.LOW))).thenReturn(McpToolSurface.FULL);
+        when(opsRuntimeService.shouldOrchestrateFromContext(anyString(), anyList())).thenReturn(true);
+        when(opsRuntimeService.runFromContext(anyString(), anyList(), eq(McpToolSurface.FULL), eq(RiskLevel.LOW)))
+                .thenAnswer(invocation -> {
+                    OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+                    assertNotNull(ctx);
+                    assertTrue(ctx.isChatAgentPath());
+                    assertEquals(McpToolSurface.FULL, ctx.getToolSurface());
+                    assertFalse(ctx.isUserConfirmedWrite());
+                    return new OpsRunResult("## 全面巡检\n\n- 发现项：**0**\n", "trace-test",
+                            Map.of("type", "orchestrate-result", "traceId", "trace-test"));
+                });
+
+        String joined = String.join("", service.chatStream("帮我检查电脑", List.of(), true, false)
+                .collectList()
+                .block());
+
+        assertTrue(joined.contains("ASSISTANT_META:"));
+        assertTrue(joined.contains("## 全面巡检"));
+        assertNull(OpsSecurityContext.get());
     }
 }

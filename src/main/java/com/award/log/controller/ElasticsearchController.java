@@ -5,6 +5,7 @@ import com.award.log.model.LogDocument;
 import com.award.log.security.RequestUserResolver;
 import com.award.log.service.ElasticsearchService;
 import com.award.log.task.AnalysisTaskManager;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,8 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 
 @Slf4j
+@Deprecated(since = "delivery-2026-07", forRemoval = false)
+@Tag(name = "Elasticsearch", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/api/elasticsearch")
 @RequiredArgsConstructor

@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
 /**
  * 与前端 /api/alarm-rule/** 对齐的兼容接口，底层改为真实数据库持久化。
  */
-@Tag(name = "Alarm Rule (compat)")
+@Tag(name = "Alarm Rule (compat)", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/api/alarm-rule")
 public class AlarmRuleCompatController {

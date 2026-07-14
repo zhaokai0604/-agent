@@ -299,8 +299,8 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
                 
                 // 每1秒发送一次日志数据
                 while (session.isOpen()) {
-                    // 从日志收集器获取最新日志
-                    var logs = logCollectorManager.collectAll();
+                    // 从 fan-out 队列取日志，不与调度器抢空采集器缓冲
+                    var logs = logCollectorManager.takeFanOut();
                     
                     if (!logs.isEmpty()) {
                         // 批量处理日志

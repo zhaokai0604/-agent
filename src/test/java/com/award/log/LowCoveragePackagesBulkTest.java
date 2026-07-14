@@ -148,7 +148,7 @@ class LowCoveragePackagesBulkTest {
     void logWebSocketHandler_refreshMessage() throws Exception {
         LogWebSocketHandler handler = new LogWebSocketHandler();
         ReflectionTestUtils.setField(handler, "logCollectorManager", logCollectorManager);
-        when(logCollectorManager.collectAll()).thenReturn(List.of());
+        when(logCollectorManager.takeFanOut()).thenReturn(List.of());
         when(webSocketSession.getId()).thenReturn("ws-log-1");
 
         handler.afterConnectionEstablished(webSocketSession);
@@ -208,7 +208,7 @@ class LowCoveragePackagesBulkTest {
     void mcpExecutionService_dispatchesTool() {
         when(mcpToolDispatcher.dispatch(eq("DiskTool"), anyMap()))
                 .thenReturn(new McpToolDispatchResult(true, "{\"ok\":true}", null));
-        McpExecutionService service = new McpExecutionService(mcpToolDispatcher);
+        McpExecutionService service = new McpExecutionService(mcpToolDispatcher, new com.fasterxml.jackson.databind.ObjectMapper());
 
         Map<String, Object> params = new HashMap<>();
         params.put("dryRun", true);

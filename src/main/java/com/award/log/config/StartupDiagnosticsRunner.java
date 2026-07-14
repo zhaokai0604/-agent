@@ -51,6 +51,10 @@ public class StartupDiagnosticsRunner implements ApplicationRunner {
 
         String dbPass = environment.getProperty("spring.datasource.password", "");
         boolean dbPassOk = StringUtils.hasText(dbPass);
+        String localConfigPath = environment.getProperty("award.local-config.path", "");
+        String localConfigLoaded = environment.getProperty("award.local-config.loaded", "false");
+        String aiApiKey = environment.getProperty("spring.ai.openai.api-key", "");
+        boolean aiKeyOk = StringUtils.hasText(aiApiKey);
 
         log.info("========== [ThreshCore] 后端已就绪 ==========");
         log.info("[ThreshCore] activeProfiles={}", active);
@@ -69,6 +73,10 @@ public class StartupDiagnosticsRunner implements ApplicationRunner {
                 SystemConfigFileSupport.pathPolicyFile().toAbsolutePath(),
                 SystemConfigFileSupport.pathPolicyFile().toFile().exists());
         log.info("[ThreshCore] classpath:application-local.yml 是否存在={}", localPresent);
+        log.info("[ThreshCore] external application-local.yml loaded={} path={}",
+                localConfigLoaded,
+                StringUtils.hasText(localConfigPath) ? localConfigPath : "(not found)");
+        log.info("[ThreshCore] spring.ai.openai.api-key configured={} (secret is not printed)", aiKeyOk);
         log.info("[ThreshCore] spring.datasource.password 已配置={}（未配置时 JDBC 将失败；开发请用 application-local.yml 或 DB_PASSWORD）", dbPassOk);
         log.info("[ThreshCore] 日志：本控制台 + 相对启动目录下 logs/award-log.log");
         log.info("==============================================");

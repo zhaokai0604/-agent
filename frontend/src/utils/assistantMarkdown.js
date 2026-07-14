@@ -31,6 +31,15 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;')
 }
 
+function decodeHtmlEntities(s) {
+  return String(s)
+    .replace(/&gt;/gi, '>')
+    .replace(/&lt;/gi, '<')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, '&')
+}
+
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -449,7 +458,7 @@ function normalizeTableSeparators(text) {
 }
 
 function preprocess(raw, options = {}) {
-  let text = String(raw).replace(/\r\n/g, '\n').trim()
+  let text = decodeHtmlEntities(raw).replace(/\r\n/g, '\n').trim()
   if (options.streaming) {
     text = stabilizePartialMarkdown(text)
   }

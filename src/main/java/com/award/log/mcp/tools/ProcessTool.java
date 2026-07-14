@@ -286,8 +286,10 @@ public class ProcessTool extends AbstractCommandExecutor {
         if (pid == null || pid <= 10) {
             return buildErrorResponse("PID 无效或属于受保护范围（须 >10）", startTime);
         }
-        boolean isDryRun = dryRun == null || Boolean.TRUE.equals(dryRun);
-        if (!isDryRun && !Boolean.TRUE.equals(confirmKill)) {
+        com.award.log.security.ChatWriteExecutionPolicy.ResolvedKill write =
+                com.award.log.security.ChatWriteExecutionPolicy.resolveKill(dryRun, confirmKill);
+        boolean isDryRun = write.dryRun();
+        if (!isDryRun && !write.confirmKill()) {
             return buildErrorResponse("真实结束进程需 dryRun=false 且 confirmKill=true", startTime);
         }
         String sig = signal == null || signal.isBlank() ? "TERM" : signal.trim().toUpperCase();

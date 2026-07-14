@@ -68,6 +68,12 @@ public class LogCollectorConfig {
     @Value("${log.collector.db.enabled:false}")
     private boolean dbEnabled;
 
+    @Value("${log.pipeline.collector.buffer-max-lines:8000}")
+    private int bufferMaxLines;
+
+    @Value("${log.pipeline.collector.start-at-eof:true}")
+    private boolean startAtEof;
+
     @Value("${log.collector.db.query:SELECT id, level, message, created_at FROM system_log WHERE id > {lastId} ORDER BY id ASC LIMIT 500}")
     private String dbQuery;
 
@@ -101,7 +107,8 @@ public class LogCollectorConfig {
                                 ? "file-collector"
                                 : "file-collector-" + (++idx);
                         FileLogCollector fileCollector = new FileLogCollector(
-                                root, collectorName, includeExtensions, excludeDirectories, maxDepth, pollIntervalMs);
+                                root, collectorName, includeExtensions, excludeDirectories,
+                                maxDepth, pollIntervalMs, bufferMaxLines, startAtEof);
                         collectorManager.addCollector(fileCollector);
                         log.info("[采集器配置] 文件采集器 {} → {}", collectorName, root);
                     } catch (Exception e) {

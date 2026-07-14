@@ -28,6 +28,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.TimeUnit;
@@ -85,6 +87,15 @@ public class OpsPatrolService {
     @Value("${ops.patrol.disk-hotspot-visit-budget:12000}")
     private int diskHotspotVisitBudget;
 
+    @Value("${ops.patrol.disk-hotspot-child-limit:120}")
+    private int diskHotspotChildLimit = 120;
+
+    @Value("${ops.patrol.disk-hotspot-cache-ms:120000}")
+    private long diskHotspotCacheMs = 120_000L;
+
+    @Value("${ops.patrol.disk-hotspot-command-timeout-ms:8000}")
+    private long diskHotspotCommandTimeoutMs = 8_000L;
+
     @Value("${ops.patrol.anomaly-min-delta:5}")
     private int anomalyMinDelta;
 
@@ -98,6 +109,10 @@ public class OpsPatrolService {
     private volatile long lastAnomalyTotal = -1L;
     private volatile boolean anomalyBaselineInitialized = false;
     private volatile Map<String, Object> lastCorrelationSnapshot = Map.of();
+    private volatile String diskHotspotCacheKey = "";
+    private volatile long diskHotspotCacheAtMs = 0L;
+    private volatile List<Map<String, Object>> diskHotspotCache = List.of();
+    private final Object diskHotspotCacheLock = new Object();
 
     public OpsPatrolService(
             StatisticsService statisticsService,
@@ -383,8 +398,17 @@ public class OpsPatrolService {
     }
 
     private List<Map<String, Object>> scanDiskHotspots() {
-        List<Map<String, Object>> rows = new ArrayList<>();
+        long now = System.currentTimeMillis();
         int depth = Math.min(Math.max(diskHotspotMaxDepth, 1), 5);
+        int visitBudget = Math.min(Math.max(diskHotspotVisitBudget, 200), 50_000);
+        int childLimit = Math.min(Math.max(diskHotspotChildLimit, 20), 500);
+        String cacheKey = inspectRootsRaw + "|" + depth + "|" + visitBudget + "|" + childLimit + "|" + diskHotspotTopN;
+        List<Map<String, Object>> cached = cachedDiskHotspots(cacheKey, now);
+        if (cached != null) {
+            return cached;
+        }
+
+        List<Map<String, Object>> rows = new ArrayList<>();
         for (String raw : inspectRootsRaw.split(",")) {
             String root = raw.trim();
             if (root.isEmpty()) {
@@ -400,39 +424,46 @@ public class OpsPatrolService {
                     continue;
                 }
                 if (OsRuntime.isUnixLike()) {
-                    rows.addAll(scanDiskHotspotsViaDu(path, depth));
+                    rows.addAll(scanDiskHotspotsViaDu(path, depth, visitBudget, childLimit));
                 } else {
-                    rows.addAll(scanDiskHotspotsViaWalk(path, depth));
+                    rows.addAll(scanDiskHotspotsViaWalk(path, depth, visitBudget, childLimit));
                 }
             } catch (Exception e) {
                 log.debug("skip disk hotspot root {}: {}", root, e.getMessage());
             }
         }
-        return rows.stream()
+        List<Map<String, Object>> result = rows.stream()
                 .sorted(Comparator.comparingDouble(item -> -asDouble(item.get("approxMiB"))))
                 .limit(Math.max(1, diskHotspotTopN))
                 .collect(Collectors.toList());
+        storeDiskHotspotCache(cacheKey, now, result);
+        return copyHotspotRows(result);
     }
 
-    private List<Map<String, Object>> scanDiskHotspotsViaDu(Path root, int depth) {
+    private List<Map<String, Object>> scanDiskHotspotsViaDu(Path root, int depth, int visitBudget, int childLimit) {
         List<Map<String, Object>> rows = new ArrayList<>();
         String rootArg = root.toString().replace('\\', '/');
         try {
             Process process = new ProcessBuilder("du", "-xk", "--max-depth=" + depth, rootArg)
                     .redirectErrorStream(true)
                     .start();
-            String output;
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                output = reader.lines().collect(Collectors.joining("\n"));
-            }
-            if (!process.waitFor(90, TimeUnit.SECONDS)) {
+            CompletableFuture<String> outputFuture = CompletableFuture.supplyAsync(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    return reader.lines().collect(Collectors.joining("\n"));
+                } catch (Exception e) {
+                    return "";
+                }
+            });
+            if (!process.waitFor(Math.max(1000L, diskHotspotCommandTimeoutMs), TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
-                return scanDiskHotspotsViaWalk(root, depth);
+                outputFuture.cancel(true);
+                return scanDiskHotspotsViaWalk(root, depth, visitBudget, childLimit);
             }
             if (process.exitValue() != 0) {
-                return scanDiskHotspotsViaWalk(root, depth);
+                return scanDiskHotspotsViaWalk(root, depth, visitBudget, childLimit);
             }
+            String output = outputFuture.get(2, TimeUnit.SECONDS);
             for (String line : output.split("\n")) {
                 String trimmed = line.trim();
                 if (trimmed.isEmpty()) {
@@ -459,21 +490,25 @@ public class OpsPatrolService {
                 rows.add(row);
             }
         } catch (Exception e) {
-            return scanDiskHotspotsViaWalk(root, depth);
+            return scanDiskHotspotsViaWalk(root, depth, visitBudget, childLimit);
         }
         return rows;
     }
 
-    private List<Map<String, Object>> scanDiskHotspotsViaWalk(Path root, int depth) {
+    private List<Map<String, Object>> scanDiskHotspotsViaWalk(Path root, int depth, int visitBudget, int childLimit) {
         List<Map<String, Object>> rows = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(root)) {
             int scanned = 0;
+            AtomicInteger visits = new AtomicInteger();
             for (Path child : stream) {
-                if (++scanned > 400) {
+                if (++scanned > childLimit) {
                     break;
                 }
-                AtomicInteger visits = new AtomicInteger();
-                long bytes = recursiveDirectorySizeBytes(child, depth, visits);
+                if (visits.get() >= visitBudget) {
+                    break;
+                }
+                int before = visits.get();
+                long bytes = recursiveDirectorySizeBytes(child, depth, visits, visitBudget);
                 if (bytes <= 0) {
                     continue;
                 }
@@ -481,7 +516,7 @@ public class OpsPatrolService {
                 row.put("path", child.toString());
                 row.put("approxMiB", bytes / (1024.0 * 1024.0));
                 row.put("scanMode", "walk");
-                if (visits.get() >= diskHotspotVisitBudget) {
+                if (visits.get() >= visitBudget || visits.get() == before) {
                     row.put("truncated", true);
                 }
                 rows.add(row);
@@ -492,8 +527,8 @@ public class OpsPatrolService {
         return rows;
     }
 
-    private long recursiveDirectorySizeBytes(Path path, int remainingDepth, AtomicInteger visitBudget) {
-        if (visitBudget.get() >= diskHotspotVisitBudget) {
+    private long recursiveDirectorySizeBytes(Path path, int remainingDepth, AtomicInteger visitBudget, int maxVisits) {
+        if (visitBudget.get() >= maxVisits) {
             return 0L;
         }
         visitBudget.incrementAndGet();
@@ -507,14 +542,14 @@ public class OpsPatrolService {
             long sum = 0L;
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(path)) {
                 for (Path entry : stream) {
-                    if (visitBudget.get() >= diskHotspotVisitBudget) {
+                    if (visitBudget.get() >= maxVisits) {
                         break;
                     }
                     if (Files.isRegularFile(entry)) {
                         visitBudget.incrementAndGet();
                         sum += Files.size(entry);
                     } else if (Files.isDirectory(entry)) {
-                        sum += recursiveDirectorySizeBytes(entry, remainingDepth - 1, visitBudget);
+                        sum += recursiveDirectorySizeBytes(entry, remainingDepth - 1, visitBudget, maxVisits);
                     }
                 }
             }
@@ -522,6 +557,41 @@ public class OpsPatrolService {
         } catch (Exception e) {
             return 0L;
         }
+    }
+
+    private List<Map<String, Object>> cachedDiskHotspots(String key, long now) {
+        if (diskHotspotCacheMs <= 0) {
+            return null;
+        }
+        if (!Objects.equals(key, diskHotspotCacheKey)) {
+            return null;
+        }
+        if (now - diskHotspotCacheAtMs > diskHotspotCacheMs) {
+            return null;
+        }
+        return copyHotspotRows(diskHotspotCache);
+    }
+
+    private void storeDiskHotspotCache(String key, long now, List<Map<String, Object>> rows) {
+        if (diskHotspotCacheMs <= 0) {
+            return;
+        }
+        synchronized (diskHotspotCacheLock) {
+            diskHotspotCacheKey = key;
+            diskHotspotCacheAtMs = now;
+            diskHotspotCache = copyHotspotRows(rows);
+        }
+    }
+
+    private static List<Map<String, Object>> copyHotspotRows(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> copy = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            copy.add(new LinkedHashMap<>(row));
+        }
+        return copy;
     }
 
     private void applyAnomalyBaseline(long anomalyTotal,

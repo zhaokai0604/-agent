@@ -1,17 +1,18 @@
-# 本机覆盖配置（复制为 application-local.yml，已在 .gitignore）
+# 本机覆盖配置（推荐复制到项目根目录 config/application-local.yml，已在 .gitignore）
 #
-# Windows: copy src\main\resources\application-local.example.yml src\main\resources\application-local.yml
-# Linux/macOS: cp src/main/resources/application-local.example.yml src/main/resources/application-local.yml
+# Windows: mkdir config; copy src\main\resources\application-local.example.yml config\application-local.yml
+# Linux/macOS: mkdir -p config && cp src/main/resources/application-local.example.yml config/application-local.yml
 #
-# 与主配置合并后，可覆盖数据库密码、大模型 Key、SSH 凭证加密密钥等。
+# 与主配置合并后，可覆盖数据库密码、大模型 Key、SSH 凭证加密密钥等。不要放进 src/main/resources，避免打包进 jar。
 
 spring:
   profiles:
     active: dev
   datasource:
-    # 默认 MariaDB 10.11（与 application.yml 一致）
-    driver-class-name: org.mariadb.jdbc.Driver
-    url: jdbc:mariadb://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    # MariaDB: org.mariadb.jdbc.Driver + jdbc:mariadb://...
+    # MySQL: com.mysql.cj.jdbc.Driver + jdbc:mysql://...
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
     password: "请填写本地 MariaDB 密码"
 

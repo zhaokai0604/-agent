@@ -58,6 +58,20 @@ public class ProductionProfileValidator implements ApplicationRunner {
                 throw new IllegalStateException(
                         "[prod-kylin] app.security.ai-audit-relaxed-read 不得为 true（生产审计必须收紧）");
             }
+            String dryRunGlobal = environment.getProperty("ops.dry-run.global", "false");
+            if ("true".equalsIgnoreCase(dryRunGlobal)) {
+                log.warn("[prod-kylin] ops.dry-run.global=true：写操作全部为演练，真删/真重启不会落地");
+            }
+            String minPriv = environment.getProperty("agent.min-privilege.enabled", "false");
+            if ("true".equalsIgnoreCase(minPriv)) {
+                log.warn("[prod-kylin] agent.min-privilege.enabled=true：请确认 award-agent 用户与 sudoers 已配置，否则写操作易失败");
+            }
+            String profiles = environment.getProperty("spring.profiles.active", "");
+            if (!StringUtils.hasText(profiles) || "dev".equalsIgnoreCase(profiles.trim())) {
+                throw new IllegalStateException(
+                        "[prod] 检测到生产 Profile 组下 spring.profiles.active 异常为 [" + profiles
+                                + "]。麒麟交付请使用 prod-kylin，并确认 /etc/threshcore/threshcore.env 已加载。");
+            }
         }
         log.info("[prod] 生产配置校验通过：已检测到非空 spring.datasource.password。");
     }

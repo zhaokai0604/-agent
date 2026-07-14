@@ -221,6 +221,10 @@ CREATE TABLE IF NOT EXISTS `decision_feedback` (
   `log_template` varchar(255) DEFAULT NULL,
   `model_confidence` double DEFAULT NULL,
   `is_trained` tinyint(1) DEFAULT '0',
+  `error_rate_1m` double DEFAULT NULL COMMENT '1分钟错误率',
+  `error_1m` double DEFAULT NULL COMMENT '1分钟错误条数',
+  `total_1m` double DEFAULT NULL COMMENT '1分钟总量',
+  `interval_ms` double DEFAULT NULL COMMENT 'ingest-event 间隔毫秒',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_decision_feedback` (`decision_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='决策人工反馈表';

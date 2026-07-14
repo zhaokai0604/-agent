@@ -48,13 +48,17 @@ public class CollectorDispatchScheduler {
         if (!dispatchEnabled) {
             return;
         }
-        if (kafkaLogProducer == null) {
-            return;
-        }
+        // 始终由调度器单点 drain；Kafka 未装配时仍 fan-out，供 WebSocket 消费
         List<String> collected = logCollectorManager.collectAll();
         totalCollected.addAndGet(collected.size());
         if (collected.isEmpty()) {
             lastBatchSize.set(0);
+            return;
+        }
+
+        if (kafkaLogProducer == null) {
+            lastBatchSize.set(collected.size());
+            lastDispatchTime.set(System.currentTimeMillis());
             return;
         }
 

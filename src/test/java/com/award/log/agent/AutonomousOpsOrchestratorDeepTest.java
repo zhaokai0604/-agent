@@ -405,7 +405,7 @@ class AutonomousOpsOrchestratorDeepTest {
                 orchestrator.run("autonomous ops", McpToolSurface.FULL, RiskLevel.LOW);
 
         assertTrue(result.markdown().contains("trace"));
-        verify(cleanTempTool).scanAllTempJunk(0);
+        assertTrue(result.markdown().contains("### Remediation"));
     }
 
     private Object newFinding(String severity, String title, String detail, String kind) {

@@ -55,6 +55,9 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     @Value("${log.analysis.max-concurrent-tasks:4}")
     private int maxConcurrentAnalysisTasks;
 
+    @Value("${log.analysis.max-lines:300000}")
+    private int maxAnalysisLines;
+
     private Semaphore analysisConcurrencyGate;
 
     // 任务状态映射，用于跟踪每个任务的状态
@@ -78,6 +81,10 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     @Autowired
     @Qualifier("logAnalysisExecutor")
     private ThreadPoolTaskExecutor logAnalysisExecutor;
+
+    @Autowired
+    @Qualifier("logAnalysisShardExecutor")
+    private ThreadPoolTaskExecutor logAnalysisShardExecutor;
     
     @Autowired
     private AiLogAlarmService aiLogAlarmService;
@@ -101,6 +108,9 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     // 暂停任务：阻塞分析线程直至恢复或取消
     @Override
     public void pauseAnalysis(String taskId) {
+        if (taskManager.isTerminalDbStatus(taskId)) {
+            throw new IllegalStateException("任务已结束，无法暂停");
+        }
         log.info("[任务状态变更] 暂停任务，任务ID: [{}]", taskId);
         taskStatusMap.put(taskId, "PAUSED");
         taskManager.pauseTask(taskId);
@@ -108,9 +118,10 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
     @Override
     public void resumeAnalysis(String taskId) {
-        String status = taskStatusMap.get(taskId);
-        if (!"PAUSED".equals(status)) {
-            throw new IllegalStateException("仅运行中已暂停的任务可恢复；任务不在内存暂停态或已结束");
+        String mem = taskStatusMap.get(taskId);
+        String db = taskManager.getDbStatus(taskId);
+        if (!"PAUSED".equals(mem) && !"PAUSED".equals(db)) {
+            throw new IllegalStateException("仅已暂停的任务可恢复；当前状态: mem=" + mem + ", db=" + db);
         }
         log.info("[任务状态变更] 恢复任务，任务ID: [{}]", taskId);
         taskStatusMap.put(taskId, "PROCESSING");
@@ -120,20 +131,18 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     // 添加取消任务方法
     @Override
     public void cancelAnalysis(String taskId) {
+        if (taskManager.isTerminalDbStatus(taskId)) {
+            throw new IllegalStateException("任务已结束（完成/失败/已取消），无法再次取消");
+        }
         log.info("[任务状态变更] 开始取消任务，任务ID: [{}]", taskId);
         
-        // 1. 更新内存状态
         String oldStatus = taskStatusMap.get(taskId);
         taskStatusMap.put(taskId, "CANCELLED");
         log.debug("[任务状态变更] 内存状态已更新，任务ID: [{}]，从 [{}] 变为 [CANCELLED]", taskId, oldStatus);
         
-        // 2. 更新数据库状态
-        taskManager.failTask(taskId, "任务被用户取消");
+        taskManager.cancelTask(taskId, "任务被用户取消");
         artifactCleaner.purgeTaskArtifacts(taskId);
-        log.debug("[任务状态变更] 数据库状态已更新，任务ID: [{}]，状态变更为 [CANCELLED]", taskId);
-        
 
-        // 4. 中断任务执行线程
         Thread taskThread = taskThreadMap.remove(taskId);
         if (taskThread != null) {
             taskThread.interrupt();
@@ -212,22 +221,32 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
             try (InputStream inputStream = new FileInputStream(logFile)) {
 
-                // 1. 分片 - 根据内存使用情况动态调整分片大小
                 int adjustedShardSize = MemoryMonitor.adjustShardSize(config.shardSize);
-                List<List<String>> logShards = LogShardUtil.splitLogToShards(inputStream, adjustedShardSize);
+                int lineCap = Math.max(10_000, maxAnalysisLines);
+                LogShardUtil.SplitOutcome splitOutcome =
+                        LogShardUtil.splitLogToShards(inputStream, adjustedShardSize, lineCap);
+                List<List<String>> logShards = splitOutcome.shards();
 
                 if (logShards.isEmpty()) {
 
                     taskManager.failTask(taskId, "文件内容为空，未读取到日志数据。");
+                    taskStatusMap.put(taskId, "FAILED");
                     artifactCleaner.purgeTaskArtifacts(taskId);
                     return;
 
                 }
 
+                if (splitOutcome.truncated()) {
+                    taskManager.updateProgress(taskId, 8,
+                            "文件过大，已截断至 " + lineCap + " 行（跳过 " + splitOutcome.skippedLines() + " 行）...");
+                    log.warn("【分析行数上限】taskId={} maxLines={} skipped={}",
+                            taskId, lineCap, splitOutcome.skippedLines());
+                }
+
                 taskManager.updateProgress(taskId, 10, "文件分片完成，准备并行处理...");
 
-                log.info("【日志分片完成】总分片数: [{}], 实际分片大小: [{}], 预估总行数: [{}]", 
-                        logShards.size(), adjustedShardSize, logShards.size() * adjustedShardSize);
+                log.info("【日志分片完成】总分片数: [{}], 实际分片大小: [{}], 已读行数: [{}], 截断: [{}]",
+                        logShards.size(), adjustedShardSize, splitOutcome.readLines(), splitOutcome.truncated());
 
     
 
@@ -247,6 +266,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 CountDownLatch countDownLatch = new CountDownLatch(logShards.size());
 
                 AtomicInteger processedShards = new AtomicInteger(0);
+                AtomicInteger failedShards = new AtomicInteger(0);
 
     
 
@@ -256,7 +276,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
                     final List<String> shardLines = logShards.get(i);
 
-                    logAnalysisExecutor.execute(() -> {
+                    logAnalysisShardExecutor.execute(() -> {
 
                         try {
 
@@ -283,6 +303,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                         } catch (Exception e) {
 
                             log.error("【分片处理异常】分片索引 [" + shardIndex + "]", e);
+                            failedShards.incrementAndGet();
 
                         } finally {
 
@@ -305,6 +326,15 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                     if (Thread.currentThread().isInterrupted() || "CANCELLED".equals(taskStatusMap.get(taskId))) {
                         log.info("【任务取消】多线程处理被中断，任务ID: [{}]", taskId);
                         throw new InterruptedException("任务被用户取消");
+                    }
+
+                    if (failedShards.get() > 0 || shardResults.size() != logShards.size()) {
+                        String err = String.format("分片分析失败 %d/%d，结果不完整，已终止任务",
+                                failedShards.get(), logShards.size());
+                        log.error("【分片完整性校验失败】任务ID: [{}] {}", taskId, err);
+                        taskManager.failTask(taskId, err);
+                        taskStatusMap.put(taskId, "FAILED");
+                        return;
                     }
 
                     finalResult = new ArrayList<>();
@@ -414,45 +444,48 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             summary.setAnomalyCount((int)anomalyCount);
             summary.setAnomalyRate(finalResult.isEmpty() ? 0 : (double)anomalyCount / finalResult.size());
             summary.setCostTime(costTime);
+            if (splitOutcome.truncated()) {
+                summary.setLineCapApplied(true);
+                summary.setLinesSkipped(splitOutcome.skippedLines());
+            }
 
             final boolean exportCsv = config.enableCsvExport;
             final boolean exportHtml = config.enableVisualReport;
             final String exportOutputDir = config.outputDir;
-            final List<EnhancedLogParseResultEntity> exportSnapshot = (exportCsv || exportHtml)
-                    ? new ArrayList<>(finalResult)
-                    : List.of();
-            
-            // 6. AI告警处理：文件级别整体告警
+            // 不双份拷贝全量结果；导出异步任务直接复用 finalResult（完成后由引用释放）
+
+            // 6. AI告警处理：文件级别整体告警（最多采样 40 条，避免超大 Prompt）
             if (config.enableAnomalyDetect && anomalyCount > 0) {
                 log.info("【AI告警启动】开始处理异常日志，生成智能告警...");
                 log.info("【AI告警启动】异常日志数量: [{}]", anomalyCount);
-                
-                // 使用日志分析线程池异步处理AI告警，避免阻塞主线程
-                logAnalysisExecutor.execute(() -> {
+
+                final int alarmSampleLimit = 40;
+                try {
+                    logAnalysisExecutor.execute(() -> {
                     log.info("【AI告警线程】开始执行告警处理，任务ID: [{}]", taskId);
                     try {
-                        // 收集所有异常日志信息
                         List<String> anomalyReasons = new ArrayList<>();
                         StringBuilder anomalyLogsSummary = new StringBuilder();
-                        
+                        int sampled = 0;
+
                         for (EnhancedLogParseResultEntity anomalyLog : finalResult) {
-                            if (anomalyLog.isAnomaly()) {
-                                // 收集异常原因
-                                anomalyReasons.addAll(anomalyLog.getAnomalyReasons());
-                                // 生成异常日志摘要
+                            if (!anomalyLog.isAnomaly()) {
+                                continue;
+                            }
+                            anomalyReasons.addAll(anomalyLog.getAnomalyReasons());
+                            if (sampled < alarmSampleLimit) {
                                 anomalyLogsSummary.append("[时间: ").append(anomalyLog.getLogTime())
                                         .append("][等级: ").append(anomalyLog.getSeverity().getSeverityCnName())
                                         .append("][原因: ").append(String.join("| ", anomalyLog.getAnomalyReasons()))
                                         .append("][内容: ").append(AiDiagnosisContextBuilder.truncateForPrompt(
                                                 anomalyLog.getDesensitizedLog(), AiDiagnosisContextBuilder.ALARM_LOG_SNIPPET_CHARS))
                                         .append("\n");
+                                sampled++;
                             }
                         }
-                        
-                        // 去重异常原因
+
                         Set<String> uniqueReasons = new HashSet<>(anomalyReasons);
-                        
-                        // 生成文件级别的整体告警内容
+
                         StringBuilder alarmContent = new StringBuilder();
                         alarmContent.append("【文件异常分析报告】\n")
                                 .append("文件路径: " + logFile.getAbsolutePath()).append("\n")
@@ -460,52 +493,82 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                                 .append("异常日志数量: " + anomalyCount).append("\n")
                                 .append("异常率: " + String.format("%.2f%%", (double) anomalyCount / finalResult.size() * 100)).append("\n")
                                 .append("\n异常原因汇总: \n");
-                        
+
                         for (String reason : uniqueReasons) {
                             alarmContent.append("- " + reason).append("\n");
                         }
-                        
-                        alarmContent.append("\n异常日志示例: \n").append(anomalyLogsSummary);
-                        
-                        // 调用AI告警服务，生成并推送整体告警
+
+                        alarmContent.append("\n异常日志示例（最多 ").append(alarmSampleLimit).append(" 条）: \n")
+                                .append(anomalyLogsSummary);
+
                         aiLogAlarmService.analyzeLogAndGenerateAlarm(
                             taskId,
                             alarmContent.toString()
                         );
-                        
+
                         log.info("【AI告警线程】完成文件级别整体告警处理，任务ID: [{}]", taskId);
                     } catch (Exception e) {
                         log.error("【AI告警异常】处理文件整体告警失败，异常信息: [{}]", e.getMessage(), e);
                     }
                 });
+                } catch (java.util.concurrent.RejectedExecutionException rex) {
+                    log.warn("【AI告警】线程池繁忙，跳过告警提交（不影响分析完成）: {}", rex.getMessage());
+                }
             } else {
-                log.info("【AI告警跳过】未满足告警条件，enableAnomalyDetect: [{}], anomalyCount: [{}]", 
+                log.info("【AI告警跳过】未满足告警条件，enableAnomalyDetect: [{}], anomalyCount: [{}]",
                         config.enableAnomalyDetect, anomalyCount);
             }
 
             taskManager.completeTask(taskId, finalResult, summary);
+            taskStatusMap.put(taskId, "COMPLETED");
 
-            if (!exportSnapshot.isEmpty()) {
-                logAnalysisExecutor.execute(() -> exportReportArtifactsAsync(taskId, exportSnapshot, exportOutputDir, exportCsv, exportHtml));
+            if (exportCsv || exportHtml) {
+                try {
+                    logAnalysisExecutor.execute(() ->
+                            exportReportArtifactsAsync(taskId, finalResult, exportOutputDir, exportCsv, exportHtml));
+                } catch (java.util.concurrent.RejectedExecutionException rex) {
+                    log.warn("【报告导出】线程池繁忙，将同步生成报告产物: {}", rex.getMessage());
+                    try {
+                        exportReportArtifactsAsync(taskId, finalResult, exportOutputDir, exportCsv, exportHtml);
+                    } catch (Exception ex) {
+                        log.error("【报告导出】同步生成失败（分析本身已完成）: {}", ex.getMessage());
+                    }
+                }
             }
 
             // 成功：仅删除上传临时文件，保留 output 供下载
             artifactCleaner.deleteUploadTemps(taskId);
 
         } catch (Exception e) {
-            // 检查任务是否被取消，如果是，则不记录为失败
-            if (!"CANCELLED".equals(taskStatusMap.get(taskId))) {
-                log.error("分析任务失败", e);
-                taskManager.failTask(taskId, "分析过程发生意外错误: " + e.getMessage());
-                artifactCleaner.purgeTaskArtifacts(taskId);
+            String memStatus = taskStatusMap.get(taskId);
+            String dbStatus = taskManager.getDbStatus(taskId);
+            // 终态任务（完成/取消/已失败）不降级、不清理产物
+            if ("CANCELLED".equals(memStatus) || "CANCELLED".equals(dbStatus)
+                    || "COMPLETED".equals(dbStatus) || "FAILED".equals(dbStatus)
+                    || taskManager.isTerminalDbStatus(taskId)) {
+                if ("COMPLETED".equals(dbStatus)) {
+                    log.warn("分析后续步骤异常但任务已完成，保留 COMPLETED: {} - {}", taskId, e.getMessage());
+                } else {
+                    log.info("任务 [{}] 已终态({}/{})，不再降级处理: {}", taskId, memStatus, dbStatus, e.getMessage());
+                }
             } else {
-                log.info("任务 [{}] 已被取消，不再处理异常", taskId);
+                log.error("分析任务失败", e);
+                String msg = e instanceof java.util.concurrent.RejectedExecutionException
+                        ? "分析队列繁忙，请稍后重试"
+                        : ("分析过程发生意外错误: " + e.getMessage());
+                taskManager.failTask(taskId, msg);
+                taskStatusMap.put(taskId, "FAILED");
+                artifactCleaner.purgeTaskArtifacts(taskId);
             }
         } finally {
             if (acquired) {
                 analysisConcurrencyGate.release();
             }
             taskThreadMap.remove(taskId);
+            String terminal = taskStatusMap.get(taskId);
+            if ("COMPLETED".equals(terminal) || "FAILED".equals(terminal) || "CANCELLED".equals(terminal)) {
+                taskStatusMap.remove(taskId);
+            }
             if (logFile != null) {
                 try {
                     Files.deleteIfExists(logFile.toPath());
@@ -954,7 +1017,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
             if (idx == 0 || idx == evalLimit - 1 || idx % 5 == 0) {
                 // 智能决策占整体进度 85%–97%，避免 91% 时仍显示 1/N 的错觉
-                int progress = 85 + (idx + 1) * 12 / Math.max(1, evalLimit);
+                int progress = 91 + (idx + 1) * 6 / Math.max(1, evalLimit);
                 taskManager.updateProgress(taskId, progress,
                         String.format("智能决策评估 %d/%d...", idx + 1, evalLimit));
             }
@@ -997,12 +1060,10 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 double currentScore = logEntity.getAnomalyScore();
                 double confidenceReduction = decisionResult.getConfidence() * 0.25;
                 logEntity.setAnomalyScore(Math.max(0.0, currentScore - confidenceReduction));
-                if (logEntity.getAnomalyScore() < 0.4) {
-                    logEntity.setAnomaly(false);
-                    logEntity.getAnomalyReasons().clear();
-                    log.info("【智能决策】异常日志被取消，模板: [{}], 原因: [{}], 置信度: [{}]",
-                            logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence());
-                }
+                // 只降分，不撤销启发式已认定的异常（避免报告「被清掉」）
+                log.info("【智能决策】降分保留启发式异常，模板: [{}], 原因: [{}], 置信度: [{}], score={}",
+                        logEntity.getTemplateId(), decisionResult.getReason(), decisionResult.getConfidence(),
+                        logEntity.getAnomalyScore());
             }
         }
     }
@@ -1157,24 +1218,40 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
      * 日志分片工具类
      */
     private static class LogShardUtil {
-        public static List<List<String>> splitLogToShards(InputStream inputStream, int shardSize) throws IOException {
+        record SplitOutcome(List<List<String>> shards, int readLines, int skippedLines, boolean truncated) {
+        }
+
+        public static SplitOutcome splitLogToShards(InputStream inputStream, int shardSize, int maxLines)
+                throws IOException {
             List<List<String>> shards = new ArrayList<>();
+            int readLines = 0;
+            int skippedLines = 0;
+            boolean truncated = false;
+            int cap = Math.max(1, maxLines);
             try (BufferedReader br = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
                 String line;
-                List<String> currentShard = new ArrayList<>(shardSize);
+                List<String> currentShard = new ArrayList<>(Math.min(shardSize, 4096));
                 while ((line = br.readLine()) != null) {
                     if (line.trim().isEmpty()) continue;
+                    if (readLines >= cap) {
+                        truncated = true;
+                        while (br.readLine() != null) {
+                            skippedLines++;
+                        }
+                        break;
+                    }
                     currentShard.add(line);
+                    readLines++;
                     if (currentShard.size() >= shardSize) {
                         shards.add(currentShard);
-                        currentShard = new ArrayList<>(shardSize);
+                        currentShard = new ArrayList<>(Math.min(shardSize, 4096));
                     }
                 }
                 if (!currentShard.isEmpty()) {
                     shards.add(currentShard);
                 }
             }
-            return shards;
+            return new SplitOutcome(shards, readLines, skippedLines, truncated);
         }
     }
 

@@ -20,17 +20,70 @@ ops:
   dry-run:
     global: false
   auto-remediation:
-    enabled: false
+    enabled: true
+    run-mode: HYBRID
+    risk-patrol-auto-max: 6.0
+    allow-above-confirm-max-in-pending: true
+    propose-temp-clean-disk-min: 1
+    propose-log-clean-disk-min: 1
+    disk-temp-clean-min-percent: 1
+    disk-log-clean-min-percent: 1
+    cooldown-ms: 60000
+    on-log-anomaly-propose-log-clean: true
+    on-alarm-severity-propose-log-clean: true
   patrol:
-    inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:logs,C:/Users/Administrator/AppData/Local/Temp,C:/Windows/Temp}
+    enabled: true
+    disk-warn-percent: 1
+    cpu-warn-percent: 1
+    inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:logs,C:/Users/Administrator/AppData/Local/Temp,C:/Windows/Temp,C:/Temp,D:/Temp,E:/Temp,F:/Temp}
 
 # 本地 Windows / 无 sudo 用户时可改为 false，避免 sudo -u 失败
 agent:
+  paths:
+    policy-version: path-policy-v2-windows-local
+    windows-read-prefixes:
+      - C:/Windows/Logs
+      - C:/Windows/System32/winevt/Logs
+      - C:/inetpub/logs
+      - C:/ProgramData/logs
+      - C:/ProgramData/Microsoft/Windows/WER/ReportArchive
+      - C:/ProgramData/Microsoft/Windows/WER/ReportQueue
+      - C:/Users/Administrator/AppData/Local/Temp
+      - C:/Windows/Temp
+      - C:/Temp
+      - D:/Temp
+      - E:/Temp
+      - F:/Temp
+      - logs
+    windows-clean-roots:
+      - C:/Users/Administrator/AppData/Local/Temp
+      - C:/Windows/Temp
+      - C:/Temp
+      - D:/Temp
+      - E:/Temp
+      - F:/Temp
+    windows-log-cleanup-roots:
+      - C:/Windows/Logs
+      - C:/Windows/System32/winevt/Logs
+      - C:/inetpub/logs
+      - C:/ProgramData/logs
+      - logs
+  runtime:
+    enabled: true
+  assistant:
+    use-tool-agent-default: true
+    orchestrator:
+      enabled: true
+  autonomous:
+    enabled: true
+    disk-pressure-percent: 1
+    cpu-warn-percent: 1
   min-privilege:
     enabled: false
 
 knowledge:
-  seed-on-startup: false
+  enabled: true
+  seed-on-startup: true
 
 logging:
   level:

@@ -8,6 +8,7 @@ import com.award.log.model.LogSeverityLevel;
 import com.award.log.model.TaskAlarmConfig;
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.AlarmConfigService;
+import com.award.log.service.AlarmLifecycleService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,9 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
     @Autowired
     private AlarmConfigService alarmConfigService;
 
+    @Autowired(required = false)
+    private AlarmLifecycleService alarmLifecycleService;
+
     @Autowired
     private AnalysisTaskManager analysisTaskManager;
 
@@ -73,6 +77,22 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
     @Override
     public LogAlarm analyzeLogAndGenerateAlarm(String taskId, String logContent) {
         log.info("Analyze alarm for task {}", taskId);
+        if (alarmLifecycleService != null && alarmLifecycleService.isSilencedNow()) {
+            log.info("Silence window active, skip AI alarm generation for task {}", taskId);
+            LogAlarm skipped = new LogAlarm();
+            skipped.setAlarmId(UUID.randomUUID().toString());
+            skipped.setTaskId(taskId);
+            skipped.setLogContent(logContent);
+            skipped.setCreateTime(LocalDateTime.now());
+            skipped.setUpdateTime(LocalDateTime.now());
+            skipped.setPushStatus("SKIPPED:SILENCED");
+            skipped.setLifecycleStatus("SUPPRESSED");
+            skipped.setEscalationLevel(0);
+            skipped.setLevel("INFO");
+            skipped.setRootCause("Silence window");
+            skipped.setSolution("Wait until silence ends");
+            return skipped;
+        }
         String aiPrompt = String.format(AI_PROMPT_TEMPLATE, logContent);
         String aiResponse;
         try {
@@ -166,6 +186,12 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
 
     @Override
     public boolean pushAlarm(LogAlarm alarm) {
+        if (alarmLifecycleService != null && alarmLifecycleService.isSilencedNow()) {
+            alarm.setPushStatus("SKIPPED:SILENCED");
+            alarm.setUpdateTime(LocalDateTime.now());
+            updateAlarm(alarm);
+            return false;
+        }
         TaskAlarmConfig taskConfig = alarmConfigService.getEffectiveConfig(alarm.getTaskId());
         AlarmDecision decision = evaluatePushPolicy(alarm, taskConfig);
         if (!decision.allowed()) {

@@ -4,6 +4,7 @@ import com.award.log.common.PageResult;
 import com.award.log.common.Result;
 import com.award.log.model.SysPermission;
 import com.award.log.service.SysPermissionService;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -14,6 +15,8 @@ import java.util.List;
  * 系统权限控制器
  */
 @Slf4j
+@Deprecated(since = "delivery-2026-07", forRemoval = false)
+@Tag(name = "System Permission", description = "非默认交付面：RBAC 无 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/admin/permission")
 public class SysPermissionController {

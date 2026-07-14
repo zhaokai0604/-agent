@@ -136,6 +136,21 @@ public class LogAnalysisController {
         return Result.success(task);
     }
 
+    @Operation(summary = "Paginated task details (big-data safe)")
+    @GetMapping("/report/{taskId}/details")
+    public Result<PageResult<EnhancedLogParseResultEntity>> getTaskReportDetails(
+            HttpServletRequest request,
+            @PathVariable String taskId,
+            @RequestParam(defaultValue = "1") int pageNum,
+            @RequestParam(defaultValue = "50") int pageSize,
+            @RequestParam(defaultValue = "false") boolean anomalyOnly) {
+        TaskInfo task = resolveOwnedTask(request, taskId);
+        if (task == null) {
+            return Result.error(404, "Task not found or access denied");
+        }
+        return Result.success(taskManager.getTaskDetailsPage(taskId, pageNum, pageSize, anomalyOnly));
+    }
+
     @Operation(summary = "Download report file")
     @GetMapping("/download/{taskId}/{type}")
     public void downloadReport(HttpServletRequest request,
@@ -156,12 +171,12 @@ public class LogAnalysisController {
             }
             String fileName = csv ? "log_analysis_result.csv" : "log_analysis_report.html";
             File file = Paths.get(System.getProperty("user.dir"), "target", "output", taskId, fileName).toFile();
-            if (!file.exists()
-                    && "COMPLETED".equalsIgnoreCase(task.getStatus())
-                    && task.getResult() != null
-                    && !task.getResult().isEmpty()) {
-                logAnalysisService.ensureReportArtifacts(taskId, task.getResult());
-                file = Paths.get(System.getProperty("user.dir"), "target", "output", taskId, fileName).toFile();
+            if (!file.exists() && "COMPLETED".equalsIgnoreCase(task.getStatus())) {
+                List<EnhancedLogParseResultEntity> reload = taskManager.loadDetailsForExport(taskId);
+                if (reload != null && !reload.isEmpty()) {
+                    logAnalysisService.ensureReportArtifacts(taskId, reload);
+                    file = Paths.get(System.getProperty("user.dir"), "target", "output", taskId, fileName).toFile();
+                }
             }
             if (!file.exists()) {
                 response.sendError(404, "Report file not generated");

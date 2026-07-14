@@ -190,8 +190,9 @@ public class CleanTempTool extends AbstractCommandExecutor {
 
             if (result.output() == null || result.output().isBlank()) {
                 long duration = System.currentTimeMillis() - startTime;
-                String data = String.format("{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"message\":\"没有找到符合条件的文件\"}",
-                    isDryRun ? "DRY-RUN" : "DELETE", targetPath, targetDays);
+                String data = String.format(
+                    "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"message\":\"没有找到符合条件的文件\"}",
+                    isDryRun ? "DRY-RUN" : "NOOP", targetPath, targetDays);
                 return buildSuccessResponse(data, duration, false);
             }
 
@@ -366,8 +367,9 @@ public class CleanTempTool extends AbstractCommandExecutor {
         }
         if (fileList.isEmpty()) {
             long duration = System.currentTimeMillis() - startTime;
-            String data = String.format("{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"message\":\"没有找到符合条件的文件\",\"platform\":\"windows\"}",
-                    isDryRun ? "DRY-RUN" : "DELETE", targetPath, targetDays);
+            String data = String.format(
+                    "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"message\":\"没有找到符合条件的文件\",\"platform\":\"windows\"}",
+                    isDryRun ? "DRY-RUN" : "NOOP", targetPath, targetDays);
             return buildSuccessResponse(data, duration, false);
         }
         int filesDeleted = 0;

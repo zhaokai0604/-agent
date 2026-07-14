@@ -14,7 +14,8 @@ import java.util.Map;
 /**
  * 模型健康检查接口
  */
-@Tag(name = "Model")
+@Deprecated(since = "delivery-2026-07", forRemoval = false)
+@Tag(name = "Model", description = "非默认交付面：模型健康/reload 可探测，无默认 UI，见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/api/v1/model")
 public class ModelHealthController {

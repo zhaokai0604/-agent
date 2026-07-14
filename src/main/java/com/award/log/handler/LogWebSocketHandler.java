@@ -139,7 +139,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
     private List<String> collectRealLogs() {
         if (logCollectorManager != null) {
             try {
-                return logCollectorManager.collectAll();
+                return logCollectorManager.takeFanOut();
             } catch (Exception e) {
                 log.error("收集真实日志数据失败", e);
                 return new ArrayList<>();

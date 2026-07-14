@@ -31,18 +31,28 @@ class WriteToolResultSupportTest {
     }
 
     @Test
-    void confirmedRealWriteAcceptsLegacyExecuteShapes() {
+    void confirmedRealWriteAcceptsEvidenceBasedShapes() {
+        assertTrue(WriteToolResultSupport.isConfirmedRealWrite("""
+                {"success":true,"data":{"mode":"DELETE","filesDeleted":2}}
+                """));
+        assertTrue(WriteToolResultSupport.isConfirmedRealWrite("""
+                {"success":true,"data":{"mode":"EXECUTED","service":"nginx","success":true}}
+                """));
         assertTrue(WriteToolResultSupport.isConfirmedRealWrite("""
                 {"success":true,"data":{"filesDeleted":2}}
                 """));
         assertTrue(WriteToolResultSupport.isConfirmedRealWrite("""
-                {"success":true,"data":{"service":"nginx"}}
+                {"success":true,"data":{"service":"nginx","success":true}}
                 """));
-        assertTrue(WriteToolResultSupport.isConfirmedRealWrite("""
+        // 空成功信封 / 无证据 → 不认
+        assertFalse(WriteToolResultSupport.isConfirmedRealWrite("""
                 {"success":true}
                 """));
-        assertTrue(WriteToolResultSupport.isConfirmedRealWrite("""
+        assertFalse(WriteToolResultSupport.isConfirmedRealWrite("""
                 {"clean":true}
+                """));
+        assertFalse(WriteToolResultSupport.isConfirmedRealWrite("""
+                {"success":true,"data":{"mode":"DELETE","filesDeleted":0}}
                 """));
     }
 

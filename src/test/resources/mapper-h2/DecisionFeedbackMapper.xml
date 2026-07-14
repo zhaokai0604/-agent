@@ -3,9 +3,11 @@
 <mapper namespace="com.award.log.mapper.DecisionFeedbackMapper">
     <insert id="upsert" parameterType="com.award.log.model.DecisionFeedback" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO decision_feedback(decision_id, actual_alert, reviewer, remark, create_time,
-                                      log_content, log_level, log_template, model_confidence, is_trained)
+                                      log_content, log_level, log_template, model_confidence, is_trained,
+                                      error_rate_1m, error_1m, total_1m, interval_ms)
         VALUES(#{decisionId}, #{actualAlert}, #{reviewer}, #{remark}, NOW(),
-               #{logContent}, #{logLevel}, #{logTemplate}, #{modelConfidence}, #{isTrained})
+               #{logContent}, #{logLevel}, #{logTemplate}, #{modelConfidence}, #{isTrained},
+               #{errorRate1m}, #{error1m}, #{total1m}, #{intervalMs})
         ON DUPLICATE KEY UPDATE
           actual_alert = VALUES(actual_alert),
           reviewer = VALUES(reviewer),
@@ -15,16 +17,31 @@
           log_level = VALUES(log_level),
           log_template = VALUES(log_template),
           model_confidence = VALUES(model_confidence),
-          is_trained = VALUES(is_trained)
+          is_trained = VALUES(is_trained),
+          error_rate_1m = VALUES(error_rate_1m),
+          error_1m = VALUES(error_1m),
+          total_1m = VALUES(total_1m),
+          interval_ms = VALUES(interval_ms)
     </insert>
 
     <select id="selectUntrainedSamples" resultType="com.award.log.model.DecisionFeedback">
         SELECT id, decision_id, actual_alert, reviewer, remark, create_time,
-               log_content, log_level, log_template, model_confidence, is_trained
+               log_content, log_level, log_template, model_confidence, is_trained,
+               error_rate_1m, error_1m, total_1m, interval_ms
         FROM decision_feedback
         WHERE is_trained = 0 OR is_trained IS NULL
         ORDER BY create_time DESC
         LIMIT #{limit}
+    </select>
+
+    <select id="selectUntrainedSamplesPage" resultType="com.award.log.model.DecisionFeedback">
+        SELECT id, decision_id, actual_alert, reviewer, remark, create_time,
+               log_content, log_level, log_template, model_confidence, is_trained,
+               error_rate_1m, error_1m, total_1m, interval_ms
+        FROM decision_feedback
+        WHERE is_trained = 0 OR is_trained IS NULL
+        ORDER BY create_time DESC
+        LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <update id="markAsTrained">
@@ -40,5 +57,14 @@
         SELECT COUNT(*)
         FROM decision_feedback
         WHERE is_trained = 0 OR is_trained IS NULL
+    </select>
+
+    <select id="selectByDecisionId" resultType="com.award.log.model.DecisionFeedback">
+        SELECT id, decision_id, actual_alert, reviewer, remark, create_time,
+               log_content, log_level, log_template, model_confidence, is_trained,
+               error_rate_1m, error_1m, total_1m, interval_ms
+        FROM decision_feedback
+        WHERE decision_id = #{decisionId}
+        LIMIT 1
     </select>
 </mapper>

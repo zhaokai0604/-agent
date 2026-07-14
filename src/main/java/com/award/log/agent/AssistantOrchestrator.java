@@ -16,6 +16,7 @@ import com.award.log.mcp.tools.ServiceRestartTool;
 import com.award.log.mcp.tools.SystemLoadTool;
 import com.award.log.security.McpToolSurface;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.RiskLevel;
 import com.award.log.service.OpsAutoRemediationService;
 import com.award.log.util.OpsPathExtractSupport;
@@ -155,10 +156,9 @@ public class AssistantOrchestrator {
             return new RunResult(md, traceId);
         }
 
-        boolean forceExecute = opsIntentRouter.forceRemediate(userMessage);
+        boolean forceExecute = resolveForceExecute(userMessage);
         StringBuilder md = new StringBuilder();
         md.append("## 运维闭环报告\n\n");
-        md.append(OpsReportFormat.traceIdBlock(traceId));
 
         OpsWorkflow workflowHit = workflowRetriever.bestMatch(
                 "disk", List.of("DISK_PRESSURE"), userMessage);
@@ -196,9 +196,7 @@ public class AssistantOrchestrator {
             md.append(summarizeDiskAnalyze(analyzeJson)).append("\n\n");
 
             if (workflowHit != null && workflowRun != null) {
-                md.append("### AWM 工作流（入库回放）\n\n");
-                md.append(workflowHit.toMarkdownBrief()).append("\n\n");
-                md.append(workflowRun.toMarkdown()).append("\n\n");
+                md.append(buildWorkflowResultSummary(workflowRun)).append("\n\n");
             }
 
             double maxUse = extractMaxDiskUsePercent(diskOverview);
@@ -464,12 +462,17 @@ public class AssistantOrchestrator {
         int deleted = execData != null && execData.has("filesDeleted") ? execData.get("filesDeleted").asInt(0) : 0;
         long bytesFreed = execData != null && execData.has("bytesFreed") ? execData.get("bytesFreed").asLong(0) : 0;
         auditRecorder.addStep(steps, "execute", "CleanTemp deleted=" + deleted + " path=" + path);
+        if (deleted <= 0 && !(removeDirectory && execData != null && "DELETE".equals(execData.path("mode").asText())
+                && WriteToolResultSupport.isConfirmedRealWrite(exec))) {
+            md.append("- **未删除到文件**（路径下无匹配或无写权限），请勿视为已完成清理。\n\n");
+            return false;
+        }
         md.append("- **已执行删除：** ").append(deleted).append(" 项");
         if (bytesFreed > 0) {
             md.append("，约 **").append(String.format(Locale.ROOT, "%.1f", bytesFreed / (1024.0 * 1024.0))).append(" MiB**");
         }
         md.append("\n\n");
-        return deleted > 0 || (removeDirectory && execData != null && "DELETE".equals(execData.path("mode").asText()));
+        return true;
     }
 
     /** 未指定路径时：扫描全部盘符 Temp 白名单目录，列出垃圾并可选批量清理。 */
@@ -566,7 +569,7 @@ public class AssistantOrchestrator {
         if (forceExecute && anyExecuted) {
             md.append("- **已真实删除合计 **").append(totalDeleted).append("** 个文件**（见上表「已删」行）。\n\n");
         } else if (!forceExecute && total > 0) {
-            md.append("- 说 **「清理垃圾」** 或 **「直接删除」** 将立即清理上表「可自动删=是」的路径。\n\n");
+            md.append("- 说 **「确认执行」** 或 **「直接删除」** 将立即清理上表「可自动删=是」的路径。\n\n");
         } else if (forceExecute && !anyExecuted && total > 0) {
             md.append("- 扫描到 ").append(total).append(" 个可清理文件，但未能删除（演练模式未关 / 权限 / 文件占用）。\n\n");
         } else if (total == 0) {
@@ -585,16 +588,35 @@ public class AssistantOrchestrator {
             return new RunResult(buildReadOnlyReply(traceId), traceId);
         }
         if (opsAutoRemediationService == null) {
-            return new RunResult("## 巡检待办\n\n" + OpsReportFormat.traceIdBlock(traceId) + "自动修复服务未启用。", traceId);
+            return new RunResult("自动修复服务未启用。", traceId);
         }
 
         Map<String, Object> pending = opsAutoRemediationService.getPendingProposalView();
         if (!Boolean.TRUE.equals(pending.get("hasPending"))) {
-            String md = "## 巡检待办\n\n" + OpsReportFormat.traceIdBlock(traceId)
-                    + "当前 **无待确认的巡检方案**。可说「磁盘/空间/清理」触发新一轮闭环，或等待下次巡检。\n";
+            String md = "当前没有待执行方案。";
             auditRecorder.record(traceId, userMessage, intentRisk.name(), "NO_PENDING",
-                    "PatrolContinuation", false, "无待确认", steps, timeSource.currentTimeMillis() - t0);
+                    "PatrolContinuation", false, md, steps, timeSource.currentTimeMillis() - t0);
             return new RunResult(md, traceId);
+        }
+
+        if (!resolveForceExecute(userMessage)) {
+            String proposalId = String.valueOf(pending.get("proposalId"));
+            StringBuilder preview = new StringBuilder();
+            preview.append("## 巡检待确认方案\n\n");
+            preview.append("检测到待执行方案 `").append(proposalId).append("`。\n\n");
+            Object summary = pending.get("summary");
+            if (summary != null && !String.valueOf(summary).isBlank()) {
+                preview.append("- 方案摘要：").append(summary).append("\n");
+            }
+            preview.append("\n请回复 **「确认执行」** 后再落地写操作（点「继续处理」也会弹出确认）。\n");
+            auditRecorder.record(traceId, userMessage, intentRisk.name(), "PREVIEW",
+                    "PatrolContinuation", true, "await confirm", steps, timeSource.currentTimeMillis() - t0);
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("type", "orchestrate-result");
+            meta.put("traceId", traceId);
+            meta.put("securityOutcome", "PREVIEW");
+            meta.put("replyMode", "ORCHESTRATE");
+            return new RunResult(preview.toString(), traceId, meta);
         }
 
         String proposalId = String.valueOf(pending.get("proposalId"));
@@ -603,26 +625,70 @@ public class AssistantOrchestrator {
 
         Map<String, Object> exec = opsAutoRemediationService.confirmPendingFromAssistant(proposalId);
         boolean ok = Boolean.TRUE.equals(exec.get("success"));
-        auditRecorder.addStep(steps, "execute", truncate(String.valueOf(exec), 1200));
+        String resultSummary = String.valueOf(exec.getOrDefault("resultSummary", summarizeExecutionActions(exec.get("actions"))));
+        auditRecorder.addStep(steps, "execute", resultSummary);
         auditRecorder.addCot(steps, 4, "验证", ok ? "巡检方案已执行" : "执行失败");
 
         StringBuilder md = new StringBuilder();
-        md.append("## 巡检待办执行\n\n");
-        md.append(OpsReportFormat.traceIdBlock(traceId));
+        md.append("## 巡检执行结果\n\n");
+        md.append(ok ? "执行完成。" : "执行失败。").append(resultSummary).append("\n\n");
         md.append("- 方案 ID：`").append(proposalId).append("`\n");
-        md.append("- 摘要：").append(pending.getOrDefault("summary", "")).append("\n");
-        md.append("- 结果：**").append(ok ? "成功" : "失败").append("**\n\n");
-        if (exec.get("actions") != null) {
-            md.append("```json\n").append(truncate(String.valueOf(exec.get("actions")), 2000)).append("\n```\n");
+        Object summary = pending.get("summary");
+        if (summary != null && !String.valueOf(summary).isBlank()) {
+            md.append("- 原方案：").append(summary).append("\n");
         }
         if (!ok) {
             md.append("\n错误：").append(exec.getOrDefault("error", "未知")).append("\n");
         }
 
         auditRecorder.record(traceId, userMessage, intentRisk.name(), ok ? "EXECUTED" : "FAILED",
-                "PatrolContinuation", ok, md.substring(0, Math.min(400, md.length())), steps,
+                "PatrolContinuation", ok, resultSummary, steps,
                 timeSource.currentTimeMillis() - t0);
-        return new RunResult(md.toString(), traceId);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("type", "orchestrate-result");
+        meta.put("traceId", traceId);
+        meta.put("securityOutcome", ok ? "EXECUTED" : "FAILED");
+        meta.put("replyMode", "ORCHESTRATE");
+        meta.put("resultSummary", resultSummary);
+        return new RunResult(md.toString(), traceId, meta);
+    }
+
+    private static String summarizeExecutionActions(Object actions) {
+        if (!(actions instanceof List<?> list) || list.isEmpty()) {
+            return "未返回可展示的执行明细。";
+        }
+        int successCount = 0;
+        List<String> parts = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> action)) {
+                parts.add(String.valueOf(item));
+                continue;
+            }
+            boolean ok = Boolean.TRUE.equals(action.get("success"));
+            if (ok) {
+                successCount++;
+            }
+            Object tool = action.get("tool");
+            Object path = action.get("path");
+            parts.add(actionLabel(tool)
+                    + (path == null ? "" : " `" + path + "`")
+                    + (ok ? " 成功" : " 失败"));
+        }
+        return "已执行巡检修复动作 " + list.size() + " 个，成功 " + successCount + " 个。"
+                + truncate(String.join("；", parts), 900);
+    }
+
+    private static String actionLabel(Object tool) {
+        if (tool == null) {
+            return "处置动作";
+        }
+        return switch (String.valueOf(tool)) {
+            case "ServiceRestartTool" -> "服务重启";
+            case "CleanTempTool" -> "临时文件清理";
+            case "LogCleanupTool" -> "日志清理";
+            case "ProcessTool", "ProcessOpsTool" -> "进程处置";
+            default -> "处置动作";
+        };
     }
 
     private RunResult runCpuPressure(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
@@ -637,14 +703,13 @@ public class AssistantOrchestrator {
 
         StringBuilder md = new StringBuilder();
         md.append("## CPU / 负载闭环\n\n");
-        md.append(OpsReportFormat.traceIdBlock(traceId));
 
         OpsWorkflow workflowHit = workflowRetriever.bestMatch(
                 "cpu", List.of("CPU_HIGH"), userMessage);
 
         try {
             LinkedHashSet<String> toolsInvoked = new LinkedHashSet<>();
-            boolean forceExecute = opsIntentRouter.forceRemediate(userMessage);
+            boolean forceExecute = resolveForceExecute(userMessage);
             WorkflowExecutionService.WorkflowRunResult workflowRun = executeAwmWorkflow(
                     workflowHit, traceId, userMessage, surface, forceExecute, steps,
                     buildCpuWorkflowVariables(userMessage));
@@ -658,7 +723,8 @@ public class AssistantOrchestrator {
                 auditRecorder.addStep(steps, "perceive", truncate(loadJson, 800));
                 toolsInvoked.add("SystemLoadTool");
             }
-            md.append("### 感知\n\n已采集系统负载（`SystemLoadTool`）。\n\n");
+            md.append("### 当前负载\n\n");
+            md.append(summarizeSystemLoad(loadJson)).append("\n\n");
 
             String processJson = workflowRun != null
                     ? workflowRun.rawResultForTool("ProcessTool").orElse(null)
@@ -668,12 +734,10 @@ public class AssistantOrchestrator {
                 auditRecorder.addStep(steps, "perceive", truncate(processJson, 800));
                 toolsInvoked.add("ProcessTool");
             }
-            md.append("### 进程采样\n\n已通过 `ProcessTool` 列出高 CPU/内存进程（详见工具原始输出）。\n\n");
+            md.append(summarizeProcessPressure(processJson)).append("\n\n");
 
             if (workflowHit != null && workflowRun != null) {
-                md.append("### AWM 工作流（入库回放）\n\n");
-                md.append(workflowHit.toMarkdownBrief()).append("\n\n");
-                md.append(workflowRun.toMarkdown()).append("\n\n");
+                md.append(buildWorkflowResultSummary(workflowRun)).append("\n\n");
             }
 
             boolean wantRestart = userMessage.contains("重启") || userMessage.contains("restart");
@@ -750,8 +814,9 @@ public class AssistantOrchestrator {
     }
 
     private String buildReadOnlyReply(String traceId) {
-        return "## 只读模式\n\n" + OpsReportFormat.traceIdBlock(traceId)
-                + "> 当前会话为 **只读工具面**, 已跳过自动清理. 请先降低操作风险表述, 或说明仅做磁盘/日志 **分析**.\n";
+        return "## 只读模式\n\n"
+                + "当前会话为只读模式，本轮不会执行清理、重启、删除等写操作。"
+                + "请改成只做分析，或在需要真实处置时切换到可执行工具面。\n";
     }
 
     private String defaultLogRoot() {
@@ -871,10 +936,10 @@ public class AssistantOrchestrator {
         JsonNode data = parseToolData(analyzeJson);
         if (data == null) {
             if (!McpToolPayloadParser.isSuccessful(objectMapper, analyzeJson)) {
-                return "- **DiskAnalyzeTool 失败：** "
+                return "- **磁盘热点扫描失败：** "
                         + McpToolPayloadParser.errorMessage(objectMapper, analyzeJson);
             }
-            return "- DiskAnalyzeTool 未返回可解析数据";
+            return "- 磁盘热点扫描未返回可展示的数据。";
         }
         StringBuilder sb = new StringBuilder();
         JsonNode multi = data.get("multiDrive");
@@ -896,7 +961,7 @@ public class AssistantOrchestrator {
         if (hotspots != null) {
             return summarizeHotspotsBrief(hotspots);
         }
-        return "- 已完成 DiskAnalyzeTool 扫描（无热点数据）";
+        return "- 已完成磁盘热点扫描，未发现明显热点目录。";
     }
 
     private String summarizeHotspotsBrief(JsonNode hotspots) {
@@ -948,7 +1013,127 @@ public class AssistantOrchestrator {
             }
         } catch (Exception ignored) {
         }
-        return "- 已采集磁盘结果（见工具 JSON）";
+        return "- 已完成磁盘采集，但未提取到可展示的盘符和使用率。";
+    }
+
+    private String summarizeSystemLoad(String loadJson) {
+        JsonNode data = parseToolData(loadJson);
+        if (data == null) {
+            if (!McpToolPayloadParser.isSuccessful(objectMapper, loadJson)) {
+                return "- 负载采集失败：" + McpToolPayloadParser.errorMessage(objectMapper, loadJson);
+            }
+            return "- 已完成负载采集，但未返回可展示的指标。";
+        }
+        double cpu = firstDouble(data, -1, "cpuUsagePercent", "cpuPercent", "cpu", "systemCpuLoad");
+        double mem = firstDouble(data, -1, "memUsagePercent", "memoryUsagePercent", "memoryPercent", "mem");
+        double load1 = firstDouble(data, -1, "loadAverage1m", "load1", "systemLoadAverage");
+        StringBuilder sb = new StringBuilder();
+        sb.append("| 指标 | 当前值 |\n| --- | ---: |\n");
+        boolean hasAny = false;
+        if (cpu >= 0) {
+            sb.append("| CPU 使用率 | ").append(formatPercentValue(cpu)).append(" |\n");
+            hasAny = true;
+        }
+        if (mem >= 0) {
+            sb.append("| 内存使用率 | ").append(formatPercentValue(mem)).append(" |\n");
+            hasAny = true;
+        }
+        if (load1 >= 0) {
+            sb.append("| 1 分钟负载 | ").append(String.format(Locale.ROOT, "%.2f", load1)).append(" |\n");
+            hasAny = true;
+        }
+        if (!hasAny) {
+            return "- 已完成负载采集，未发现可展示的 CPU/内存百分比字段。";
+        }
+        return sb.toString().trim();
+    }
+
+    private String summarizeProcessPressure(String processJson) {
+        if (!McpToolPayloadParser.isSuccessful(objectMapper, processJson)) {
+            return "### 高占用进程\n\n- 进程采样失败："
+                    + McpToolPayloadParser.errorMessage(objectMapper, processJson);
+        }
+        JsonNode data = parseToolData(processJson);
+        JsonNode rows = data != null && data.isArray() ? data : (data == null ? null : data.path("processes"));
+        if (rows == null || !rows.isArray() || rows.isEmpty()) {
+            return "### 高占用进程\n\n- 未发现 CPU 或内存超过阈值的进程（当前阈值：CPU > 5%，内存 > 5%）。";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("### 高占用进程\n\n");
+        sb.append("当前高占用进程如下，已按 CPU / 内存压力排序：\n\n");
+        sb.append("| 进程 | PID | CPU | 内存 | 运行时长 | 状态 |\n");
+        sb.append("| --- | ---: | ---: | ---: | --- | --- |\n");
+        int limit = Math.min(8, rows.size());
+        boolean hasZombie = false;
+        for (int i = 0; i < limit; i++) {
+            JsonNode row = rows.get(i);
+            String state = text(row, "state", "-");
+            hasZombie |= state.toLowerCase(Locale.ROOT).contains("zombie");
+            sb.append("| `").append(escapeTableCell(truncate(firstNonBlank(
+                            text(row, "command", ""),
+                            text(row, "name", ""),
+                            text(row, "processName", ""),
+                            "-"), 72))).append("` | ")
+                    .append(escapeTableCell(text(row, "pid", "-"))).append(" | ")
+                    .append(formatProcessPercent(text(row, "cpu", text(row, "cpuPct", "")))).append(" | ")
+                    .append(formatProcessPercent(text(row, "mem", text(row, "memPct", "")))).append(" | ")
+                    .append(escapeTableCell(text(row, "etime", "-"))).append(" | ")
+                    .append(escapeTableCell(state)).append(" |\n");
+        }
+        if (rows.size() > limit) {
+            sb.append("\n- 其余 ").append(rows.size() - limit).append(" 个低优先级命中项已收进审计详情。");
+        }
+        if (hasZombie) {
+            sb.append("\n- 发现僵尸进程，请优先确认父进程状态；不要直接批量结束业务进程。");
+        } else {
+            sb.append("\n- 可先确认表中 PID 是否为业务进程；需要结束或重启时请明确 PID 或服务名。");
+        }
+        return sb.toString();
+    }
+
+    private String buildWorkflowResultSummary(WorkflowExecutionService.WorkflowRunResult workflowRun) {
+        if (workflowRun == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("### 执行结果\n\n");
+        if (workflowRun.failed()) {
+            sb.append("- 历史方案执行中断，已停止后续动作；具体失败步骤可在审计页查看。");
+            return sb.toString();
+        }
+        int ok = Math.max(workflowRun.successfulStepCount(), workflowRun.handled() ? 1 : 0);
+        if (workflowRun.anyExecuted()) {
+            sb.append("- 已按历史治理方案完成 ").append(ok).append(" 个步骤，其中包含真实执行动作。");
+        } else if (workflowRun.anyPreviewed()) {
+            sb.append("- 已生成 ").append(ok).append(" 个预览步骤，未做真实写操作。");
+        } else if (workflowRun.anyReadSucceeded()) {
+            sb.append("- 已完成 ").append(ok).append(" 个只读诊断步骤。");
+        } else {
+            sb.append("- 历史方案未形成可执行动作。");
+        }
+        List<String> highlights = workflowRun.stepResults() == null
+                ? List.of()
+                : workflowRun.stepResults().stream()
+                .filter(WorkflowExecutionService.StepResult::success)
+                .map(WorkflowExecutionService.StepResult::message)
+                .filter(s -> s != null && !s.isBlank())
+                .limit(3)
+                .toList();
+        if (!highlights.isEmpty()) {
+            sb.append("\n");
+            for (String item : highlights) {
+                sb.append("- ").append(truncate(item, 120)).append("\n");
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    private boolean resolveForceExecute(String userMessage) {
+        if (opsIntentRouter.forceRemediate(userMessage)) {
+            return true;
+        }
+        OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
+        return ctx != null && ctx.isUserConfirmedWrite();
     }
 
     private static String formatBytes(String raw) {
@@ -980,6 +1165,78 @@ public class AssistantOrchestrator {
             return data.get("deletableCount").asInt(0);
         }
         return data.has("filesFound") ? data.get("filesFound").asInt(0) : 0;
+    }
+
+    private static double firstDouble(JsonNode node, double fallback, String... names) {
+        if (node == null || names == null) {
+            return fallback;
+        }
+        for (String name : names) {
+            JsonNode value = node.path(name);
+            if (value.isMissingNode() || value.isNull()) {
+                continue;
+            }
+            if (value.isNumber()) {
+                return value.asDouble();
+            }
+            String text = value.asText("");
+            if (text.isBlank()) {
+                continue;
+            }
+            try {
+                return Double.parseDouble(text.replace("%", "").trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private static String formatPercentValue(double value) {
+        return String.format(Locale.ROOT, "%.1f%%", value);
+    }
+
+    private static String formatProcessPercent(String raw) {
+        if (raw == null || raw.isBlank() || "n/a".equalsIgnoreCase(raw.trim())) {
+            return "未采集";
+        }
+        String cleaned = raw.trim();
+        if (cleaned.endsWith("%")) {
+            return escapeTableCell(cleaned);
+        }
+        try {
+            return String.format(Locale.ROOT, "%.1f%%", Double.parseDouble(cleaned));
+        } catch (NumberFormatException e) {
+            return escapeTableCell(cleaned);
+        }
+    }
+
+    private static String text(JsonNode node, String field, String fallback) {
+        if (node == null || field == null) {
+            return fallback;
+        }
+        String value = node.path(field).asText("");
+        return value.isBlank() ? fallback : value;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String escapeTableCell(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\r", " ")
+                .replace("\n", " ")
+                .replace("|", "\\|");
     }
 
     private static String truncate(String s, int max) {

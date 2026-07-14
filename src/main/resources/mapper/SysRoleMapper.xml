@@ -26,10 +26,10 @@
         SELECT COUNT(*) FROM sys_role
     </select>
 
-    <!-- 插入角色 -->
+    <!-- 插入角色（列以 schema.sql 为准：role_desc，无 update_time） -->
     <insert id="insert" parameterType="com.award.log.model.SysRole" useGeneratedKeys="true" keyProperty="roleId">
-        INSERT INTO sys_role (role_name, description, create_time, update_time)
-        VALUES (#{roleName}, #{description}, NOW(), NOW())
+        INSERT INTO sys_role (role_name, role_desc, create_time)
+        VALUES (#{roleName}, #{roleDesc}, NOW())
     </insert>
 
     <!-- 更新角色信息 -->
@@ -37,8 +37,7 @@
         UPDATE sys_role
         SET
             role_name = #{roleName},
-            description = #{description},
-            update_time = NOW()
+            role_desc = #{roleDesc}
         WHERE role_id = #{roleId}
     </update>
 

@@ -46,8 +46,8 @@
             <if test="email != null">
                 email = #{email},
             </if>
-            <if test="wechat_userid != null">
-                wechat_userid = #{wechat_userid},
+            <if test="wechatUserid != null">
+                wechat_userid = #{wechatUserid},
             </if>
             update_time = NOW()
         </set>

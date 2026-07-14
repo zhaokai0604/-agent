@@ -13,8 +13,8 @@
         <div>
           <div class="dialog-header__title">{{ displayName }}</div>
           <div class="dialog-header__meta">
-            <span class="status-chip" :class="payload.success ? 'ok' : 'fail'">
-              {{ payload.success ? '执行成功' : '执行失败' }}
+            <span class="status-chip" :class="statusChipClass">
+              {{ statusLabel }}
             </span>
             <span v-if="payload.duration" class="meta-duration">{{ payload.duration }} ms</span>
           </div>
@@ -66,15 +66,51 @@ const viewPayload = computed(() =>
   payload.value?.raw != null ? payloadForStructuredView(payload.value.raw) : null
 )
 
+const statusLabel = computed(() => {
+  const p = payload.value
+  if (!p) return '执行失败'
+  if (p.writeMismatch) return '写意图未落地'
+  const mode = String(p.mode || '').toUpperCase()
+  if ((mode === 'DRY-RUN' || mode === 'PREVIEW') && p.success) return '预览成功'
+  if (mode === 'SCAN' && p.success) return '扫描完成'
+  if (mode === 'NOOP' && p.success) return '无文件可删'
+  if ((mode === 'DELETE' || mode === 'EXECUTED') && p.success) return '写操作已落地'
+  if (p.success) return '调用成功'
+  return '执行失败'
+})
+
+const statusChipClass = computed(() => {
+  const p = payload.value
+  if (!p) return 'fail'
+  if (p.writeMismatch) return 'warn'
+  const mode = String(p.mode || '').toUpperCase()
+  if ((mode === 'DRY-RUN' || mode === 'PREVIEW' || mode === 'SCAN' || mode === 'NOOP') && p.success) return 'preview'
+  if (p.success) return 'ok'
+  return 'fail'
+})
+
+function pickMode(raw) {
+  if (!raw || typeof raw !== 'object') return ''
+  if (typeof raw.mode === 'string') return raw.mode
+  const data = raw.data
+  if (data && typeof data === 'object' && typeof data.mode === 'string') return data.mode
+  return ''
+}
+
 function open(result) {
   if (!result) return
   showTrace.value = result.showTrace !== false
+  const raw = result.raw ?? result.fullResult ?? result
   payload.value = {
     toolName: result.toolName,
     success: result.success === true,
     duration: result.duration || 0,
     traceId: result.traceId || result.raw?.traceId || result.raw?.trace_id || '',
-    raw: result.raw ?? result.fullResult ?? result
+    raw,
+    mode: result.mode || pickMode(raw),
+    writeMismatch:
+      result.writeMismatch === true ||
+      raw?.writeMismatch === true
   }
   visible.value = true
 }
@@ -146,6 +182,16 @@ defineExpose({ open })
 .status-chip.ok {
   background: rgba(34, 197, 94, 0.12);
   color: #15803d;
+}
+
+.status-chip.preview {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.status-chip.warn {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
 }
 
 .status-chip.fail {

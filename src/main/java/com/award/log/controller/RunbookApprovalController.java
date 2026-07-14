@@ -3,6 +3,7 @@ package com.award.log.controller;
 import com.award.log.common.Result;
 import com.award.log.security.RequestUserResolver;
 import com.award.log.service.impl.RunbookApprovalService;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +16,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
+@Deprecated(since = "delivery-2026-07", forRemoval = false)
+@Tag(name = "Runbook Approval", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/api/runbook")
 public class RunbookApprovalController {

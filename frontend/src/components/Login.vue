@@ -234,7 +234,7 @@
     class="forgot-password-dialog"
   >
     <p class="forgot-password-hint">
-      出于安全考虑，密码无法自助重置。请联系系统管理员处理，或在登录后于「个人中心 → 账号安全」修改密码。
+      请联系管理员重置密码。出于安全考虑，登录页不提供自助重置；登录后可在「个人中心 → 账号安全」修改密码。
     </p>
     <template #footer>
       <div class="dialog-footer">
@@ -252,7 +252,7 @@
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Check, Close, View, Hide, ArrowRight } from '@element-plus/icons-vue'
-import { login, register, checkUserExists } from '../api'
+import { login, register } from '../api'
 import UserServiceAgreement from './UserServiceAgreement.vue'
 
 const agreementVisible = ref(false)
@@ -269,13 +269,11 @@ const emit = defineEmits(['login-success'])
 // 响应式数据
 const isRegister = ref(false)
 const showForgotPassword = ref(false)
-const isResetting = ref(false)
 
 // 密码显示/隐藏状态
 const showLoginPassword = ref(false)
 const showRegisterPassword = ref(false)
 const showRegisterRepwd = ref(false)
-const showForgotPasswordInput = ref(false)
 
 // 登录表单数据
 const loginForm = reactive({
@@ -290,33 +288,6 @@ const loginForm = reactive({
     timer: null // 存储自动隐藏定时器
   },
   pwdTip: {
-    show: false,
-    error: false,
-    success: false,
-    text: ''
-  },
-  strengthClass: ['', '', ''] // 密码强度条样式
-})
-
-// 忘记密码表单数据
-const forgotForm = reactive({
-  username: '',
-  newPassword: '',
-  confirmPassword: '',
-  accountTip: {
-    show: false,
-    error: false,
-    success: false,
-    text: '',
-    timer: null
-  },
-  pwdTip: {
-    show: false,
-    error: false,
-    success: false,
-    text: ''
-  },
-  confirmTip: {
     show: false,
     error: false,
     success: false,
@@ -366,35 +337,9 @@ const toggleRegisterRepwd = () => {
   showRegisterRepwd.value = !showRegisterRepwd.value
 }
 
-const toggleForgotPassword = () => {
-  showForgotPasswordInput.value = !showForgotPasswordInput.value
-}
-
-// 验证确认密码
-const validateConfirmPassword = () => {
-  const confirmPassword = forgotForm.confirmPassword.trim()
-  
-  forgotForm.confirmTip.show = false
-  forgotForm.confirmTip.error = false
-  forgotForm.confirmTip.success = false
-  forgotForm.confirmTip.text = ''
-  
-  if (confirmPassword === '') return
-  
-  if (confirmPassword !== forgotForm.newPassword) {
-    forgotForm.confirmTip.show = true
-    forgotForm.confirmTip.error = true
-    forgotForm.confirmTip.text = '两次输入的密码不一致'
-  } else {
-    forgotForm.confirmTip.show = true
-    forgotForm.confirmTip.success = true
-    forgotForm.confirmTip.text = '两次输入的密码一致'
-  }
-}
-
 // 验证账号（取消长度限制，仅限制不能包含中文，正确提示2.5秒自动消失）
 const validateAccount = (type) => {
-  const form = type === 'login' ? loginForm : (type === 'forgot' ? forgotForm : registerForm)
+  const form = type === 'login' ? loginForm : registerForm
   const account = form.username.trim()
   
   // 清除之前的自动隐藏定时器，避免重复触发
@@ -431,8 +376,8 @@ const validateAccount = (type) => {
 
 // 验证密码（8位以上，需包含数字、英文、特殊字符中至少两类）
 const validatePassword = (type) => {
-  const form = type === 'login' ? loginForm : (type === 'forgot' ? forgotForm : registerForm)
-  const password = type === 'forgot' ? form.newPassword.trim() : form.password.trim()
+  const form = type === 'login' ? loginForm : registerForm
+  const password = form.password.trim()
   
   form.pwdTip.show = false
   form.pwdTip.error = false
@@ -620,96 +565,6 @@ const handleRegister = async () => {
   } catch (error) {
     console.error('注册失败:', error)
     ElMessage.error('注册失败，请稍后重试')
-  }
-}
-
-// 忘记密码处理
-const handleResetPassword = async () => {
-  validateAccount('forgot')
-  validatePassword('forgot')
-  validateConfirmPassword()
-  
-  if (forgotForm.username.trim() === '') {
-    ElMessage.error('请输入账号')
-    return
-  }
-  if (forgotForm.newPassword.trim() === '') {
-    ElMessage.error('请设置新密码')
-    return
-  }
-  if (forgotForm.confirmPassword.trim() === '') {
-    ElMessage.error('请确认新密码')
-    return
-  }
-  if (forgotForm.accountTip.error || forgotForm.pwdTip.error || forgotForm.confirmTip.error) {
-    ElMessage.error('表单填写有误，请检查')
-    return
-  }
-  
-  try {
-    isResetting.value = true
-    
-    console.log('开始重置密码流程')
-    console.log('用户名:', forgotForm.username)
-    
-    // 检查用户是否存在
-    console.log('检查用户是否存在...')
-    const userExists = await checkUserExists({
-      username: forgotForm.username
-    })
-    
-    console.log('用户存在检查结果:', userExists)
-    
-    if (!userExists) {
-      ElMessage.error('用户不存在，请检查账号')
-      return
-    }
-    
-    // 调用重置密码 API
-    console.log('调用重置密码 API...')
-    const success = await resetPassword({
-      username: forgotForm.username,
-      newPassword: forgotForm.newPassword
-    })
-    
-    console.log('重置密码结果:', success)
-    
-    if (success) {
-      ElMessage.success('密码重置成功！')
-      showForgotPassword.value = false
-      
-      // 清空表单
-      forgotForm.username = ''
-      forgotForm.newPassword = ''
-      forgotForm.confirmPassword = ''
-      forgotForm.accountTip = {
-        show: false,
-        error: false,
-        success: false,
-        text: '',
-        timer: null
-      }
-      forgotForm.pwdTip = {
-        show: false,
-        error: false,
-        success: false,
-        text: ''
-      }
-      forgotForm.confirmTip = {
-        show: false,
-        error: false,
-        success: false,
-        text: ''
-      }
-      forgotForm.strengthClass = ['', '', '']
-    } else {
-      ElMessage.error('密码重置失败，请稍后重试')
-    }
-  } catch (error) {
-    console.error('重置密码失败:', error)
-    ElMessage.error('重置密码失败，请稍后重试')
-  } finally {
-    isResetting.value = false
   }
 }
 </script>

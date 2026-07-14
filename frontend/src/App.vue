@@ -134,7 +134,7 @@
             <div v-if="!isAgentWorkspace" class="toolbar-actions">
               <RuntimeModeBar compact />
 
-              <el-tooltip placement="bottom" content="快捷键：1 对话 · 2 工具 · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 仪表盘 · 8 效果 · 9 配置">
+              <el-tooltip placement="bottom" content="快捷键：1 对话 · 2 工具 · 3 审计 · 4 AWM · 5 日志 · 6 历史 · 7 仪表盘 · 8 效果 · 9 配置">
 
                 <el-button text circle size="small" :icon="QuestionFilled" aria-label="快捷键说明" />
 
@@ -287,6 +287,10 @@ import {
 
   TrendCharts,
 
+  Collection,
+
+  EditPen,
+
   User
 
 } from '@element-plus/icons-vue'
@@ -302,7 +306,8 @@ import RuntimeModeBar from './components/RuntimeModeBar.vue'
 import OpsChatInterface from './components/OpsChatInterface.vue'
 import AgentSkillsPage from './components/agent/AgentSkillsPage.vue'
 
-import { logout } from './api'
+import { ElMessage } from 'element-plus'
+import { logout, getUserInfo } from './api'
 import { useAgentSession } from './composables/useAgentSession'
 
 const {
@@ -349,6 +354,10 @@ const EnvironmentStatus = defineTabAsyncComponent(() => import('./components/Env
 
 const OpsLiveWall = defineTabAsyncComponent(() => import('./components/OpsLiveWall.vue'))
 
+const OpsTraceCenter = defineTabAsyncComponent(() => import('./components/OpsTraceCenter.vue'))
+
+const DecisionFeedbackCenter = defineTabAsyncComponent(() => import('./components/DecisionFeedbackCenter.vue'))
+
 
 
 const isLoggedIn = ref(false)
@@ -385,7 +394,11 @@ const tabConfig = {
 
   'ops-audit-trace': { label: '统一审计中心', component: AuditCenter, icon: List },
 
+  'ops-trace': { label: 'AWM 记忆与链路', component: OpsTraceCenter, icon: Collection },
+
   'ops-effect': { label: '运维效果评分', component: OpsEffectDashboard, icon: TrendCharts },
+
+  'decision-feedback': { label: '决策反馈', component: DecisionFeedbackCenter, icon: EditPen },
 
   'environment-status': { label: '环境状态', component: EnvironmentStatus, icon: Platform },
 
@@ -411,9 +424,11 @@ const defaultTab = 'ops-chat'
 
 const NAV_GROUP_ORDER = [
 
-  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'agent-skills', 'mcp-tools', 'audit', 'ops-effect', 'environment-status', 'ops-live-wall'] },
+  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'agent-skills', 'mcp-tools', 'audit', 'ops-trace', 'ops-effect', 'decision-feedback', 'environment-status', 'ops-live-wall'] },
 
-  { title: '日志与分析', keys: ['analysis', 'history', 'dashboard', 'knowledge'] }
+  { title: '日志与分析', keys: ['analysis', 'history', 'dashboard', 'knowledge'] },
+
+  { title: '账号与配置', keys: ['system-config', 'profile-center'] }
 
 ]
 
@@ -453,7 +468,7 @@ const shortcutTabMap = {
 
   '3': 'audit',
 
-  '4': 'ops-audit-trace',
+  '4': 'ops-trace',
 
   '5': 'analysis',
 
@@ -511,6 +526,26 @@ function syncUserState(userData = {}) {
 
 
 
+async function validateSession() {
+  try {
+    const data = await getUserInfo()
+    if (data) {
+      syncUserState(data)
+      try {
+        const raw = localStorage.getItem('user')
+        const prev = raw ? JSON.parse(raw) : {}
+        localStorage.setItem('user', JSON.stringify({ ...prev, ...data }))
+      } catch {
+        // ignore localStorage sync errors
+      }
+    }
+  } catch {
+    localStorage.removeItem('user')
+    isLoggedIn.value = false
+    ElMessage.warning('会话已失效，请重新登录')
+  }
+}
+
 function checkLoginStatus() {
 
   const rawUser = localStorage.getItem('user')
@@ -527,6 +562,7 @@ function checkLoginStatus() {
 
     const userData = JSON.parse(rawUser)
 
+    // 先乐观放行首屏，再异步探针校验会话
     isLoggedIn.value = true
 
     syncUserState(userData)
@@ -536,6 +572,8 @@ function checkLoginStatus() {
       activeTab.value = defaultTab
 
     }
+
+    validateSession()
 
   } catch {
 
@@ -717,7 +755,13 @@ function handleViewTask(taskId) {
 
   activeTab.value = 'analysis'
 
-  callComponentMethod('loadTask', [taskId])
+  nextTick(() => {
+
+    callComponentMethod('loadTask', [taskId])
+
+    targetTaskId.value = ''
+
+  })
 
 }
 
@@ -729,6 +773,8 @@ function handleOpsNavigateTab(event) {
 
   const section = event?.detail?.section
 
+  const traceId = event?.detail?.traceId
+
   if (tab && tabConfig[tab]) {
 
     activeTab.value = tab
@@ -736,6 +782,12 @@ function handleOpsNavigateTab(event) {
     if (section && tab === 'system-config') {
 
       callComponentMethod('focusSection', [section])
+
+    }
+
+    if (traceId && (tab === 'audit' || tab === 'ops-audit-trace' || tab === 'ops-trace')) {
+
+      callComponentMethod('openTrace', [traceId])
 
     }
 

@@ -1,9 +1,8 @@
 package com.award.log.config;
 
-import com.award.log.handler.LogWebSocketHandler;
 import com.award.log.handler.PerformanceWebSocketHandler;
 import com.award.log.security.WebSocketAuthHandshakeInterceptor;
-import org.springframework.context.annotation.Bean;
+import com.award.log.websocket.LogStreamWebSocketHandler;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
@@ -15,19 +14,17 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     private final WebSocketAuthHandshakeInterceptor wsAuthInterceptor;
     private final PerformanceWebSocketHandler performanceWebSocketHandler;
+    private final LogStreamWebSocketHandler logStreamWebSocketHandler;
     private final AppCorsProperties corsProperties;
 
     public WebSocketConfig(WebSocketAuthHandshakeInterceptor wsAuthInterceptor,
                            PerformanceWebSocketHandler performanceWebSocketHandler,
+                           LogStreamWebSocketHandler logStreamWebSocketHandler,
                            AppCorsProperties corsProperties) {
         this.wsAuthInterceptor = wsAuthInterceptor;
         this.performanceWebSocketHandler = performanceWebSocketHandler;
+        this.logStreamWebSocketHandler = logStreamWebSocketHandler;
         this.corsProperties = corsProperties;
-    }
-
-    @Bean
-    public LogWebSocketHandler logWebSocketHandler() {
-        return new LogWebSocketHandler();
     }
 
     @Override
@@ -36,7 +33,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
         registry.addHandler(performanceWebSocketHandler, "/ws/performance")
                 .addInterceptors(wsAuthInterceptor)
                 .setAllowedOriginPatterns(allowedOrigins);
-        registry.addHandler(logWebSocketHandler(), "/ws/logs")
+        registry.addHandler(logStreamWebSocketHandler, "/ws/logs")
                 .addInterceptors(wsAuthInterceptor)
                 .setAllowedOriginPatterns(allowedOrigins);
     }

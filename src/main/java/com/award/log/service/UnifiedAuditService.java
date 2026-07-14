@@ -86,6 +86,7 @@ public class UnifiedAuditService {
         detail.put("raw", row);
         detail.put("steps", row.getOrDefault("steps", List.of()));
         detail.put("resultSummary", row.get("resultSummary"));
+        detail.put("effectSummary", row.get("effectSummary"));
         return detail;
     }
 
@@ -129,6 +130,9 @@ public class UnifiedAuditService {
         event.put("durationMs", number(row.get("duration_ms")).longValue());
         event.put("userInput", method + " " + path);
         event.put("operatorUserId", stringValue(row.get("user_id")));
+        event.put("remoteIp", stringValue(row.get("remote_ip")));
+        event.put("httpStatus", status);
+        event.put("userRole", stringValue(row.get("user_role")));
         event.put("sourceTable", "ai_audit_log");
         return event;
     }
@@ -159,6 +163,7 @@ public class UnifiedAuditService {
         event.put("toolName", stringValue(row.get("toolName")));
         event.put("summary", firstNonBlank(stringValue(row.get("resultSummary")), targetName));
         event.put("resultSummary", row.get("resultSummary"));
+        event.put("effectSummary", row.get("effectSummary"));
         event.put("createdAt", toIso(row.get("createdAt")));
         event.put("executionOk", Boolean.TRUE.equals(row.get("executionOk")));
         event.put("durationMs", number(row.get("durationMs")).longValue());

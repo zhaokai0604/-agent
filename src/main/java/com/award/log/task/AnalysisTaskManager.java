@@ -18,7 +18,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -36,6 +39,12 @@ public class AnalysisTaskManager {
 
     @Value("${log.analysis.detail-batch-size:1000}")
     private int detailBatchSize;
+
+    @Value("${log.analysis.report-anomaly-limit:200}")
+    private int reportAnomalyLimit;
+
+    @Value("${log.analysis.export-reload-limit:100000}")
+    private int exportReloadLimit;
 
     public PageResult<TaskInfo> getTasksPage(int pageNum, int pageSize) {
         return getTasksPage(pageNum, pageSize, null, null, null, null);
@@ -131,6 +140,13 @@ public class AnalysisTaskManager {
     }
 
     public void updateProgress(String taskId, int progress, String step) {
+        LogAnalysisTask existing = taskMapper.selectById(taskId);
+        if (existing != null) {
+            String status = existing.getStatus();
+            if ("COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status)) {
+                return;
+            }
+        }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setProgress(progress);
@@ -145,7 +161,11 @@ public class AnalysisTaskManager {
         task.setTaskId(taskId);
         task.setProgress(100);
         task.setStatus("COMPLETED");
-        task.setCurrentStep("Analysis completed");
+        if (summary != null && summary.isLineCapApplied()) {
+            task.setCurrentStep("Analysis completed (truncated, skipped " + summary.getLinesSkipped() + " lines)");
+        } else {
+            task.setCurrentStep("Analysis completed");
+        }
         if (summary != null) {
             task.setTotalLogs(summary.getTotalLogs());
             task.setAnomalyCount(summary.getAnomalyCount());
@@ -158,12 +178,16 @@ public class AnalysisTaskManager {
             return;
         }
         int batchSize = Math.max(100, detailBatchSize);
-        List<LogAnalysisDetail> details = result.stream()
-                .map(entity -> convertDetailToEntity(taskId, entity))
-                .collect(Collectors.toList());
-        for (int i = 0; i < details.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, details.size());
-            detailMapper.batchInsert(details.subList(i, end));
+        List<LogAnalysisDetail> batch = new ArrayList<>(batchSize);
+        for (EnhancedLogParseResultEntity entity : result) {
+            batch.add(convertDetailToEntity(taskId, entity));
+            if (batch.size() >= batchSize) {
+                detailMapper.batchInsert(batch);
+                batch.clear();
+            }
+        }
+        if (!batch.isEmpty()) {
+            detailMapper.batchInsert(batch);
         }
     }
 
@@ -175,6 +199,10 @@ public class AnalysisTaskManager {
     }
 
     public void failTask(String taskId, String errorMsg) {
+        if (isTerminalDbStatus(taskId)) {
+            log.warn("[任务状态] 忽略失败写入，任务已终态: {}", taskId);
+            return;
+        }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setStatus("FAILED");
@@ -182,7 +210,25 @@ public class AnalysisTaskManager {
         taskMapper.updateById(task);
     }
 
+    /** 用户取消：DB 写 CANCELLED，禁止覆盖 COMPLETED/FAILED */
+    public void cancelTask(String taskId, String message) {
+        if (isTerminalDbStatus(taskId)) {
+            log.warn("[任务状态] 忽略取消，任务已终态: {}", taskId);
+            return;
+        }
+        LogAnalysisTask task = new LogAnalysisTask();
+        task.setTaskId(taskId);
+        task.setStatus("CANCELLED");
+        task.setErrorMsg(message != null ? message : "任务被用户取消");
+        task.setCurrentStep("Cancelled by user");
+        taskMapper.updateById(task);
+    }
+
     public void pauseTask(String taskId) {
+        if (isTerminalDbStatus(taskId)) {
+            log.warn("[任务状态] 忽略暂停，任务已终态: {}", taskId);
+            return;
+        }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setStatus("PAUSED");
@@ -191,11 +237,34 @@ public class AnalysisTaskManager {
     }
 
     public void resumeTask(String taskId) {
+        LogAnalysisTask existing = taskMapper.selectById(taskId);
+        if (existing == null) {
+            return;
+        }
+        String st = existing.getStatus();
+        if ("COMPLETED".equals(st) || "FAILED".equals(st) || "CANCELLED".equals(st)) {
+            log.warn("[任务状态] 忽略恢复，任务已终态: {} status={}", taskId, st);
+            return;
+        }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setStatus("PROCESSING");
         task.setCurrentStep("Task resumed");
         taskMapper.updateById(task);
+    }
+
+    public boolean isTerminalDbStatus(String taskId) {
+        LogAnalysisTask existing = taskMapper.selectById(taskId);
+        if (existing == null || existing.getStatus() == null) {
+            return false;
+        }
+        String st = existing.getStatus();
+        return "COMPLETED".equals(st) || "FAILED".equals(st) || "CANCELLED".equals(st);
+    }
+
+    public String getDbStatus(String taskId) {
+        LogAnalysisTask existing = taskMapper.selectById(taskId);
+        return existing == null ? null : existing.getStatus();
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -242,11 +311,85 @@ public class AnalysisTaskManager {
 
     private TaskInfo buildTaskInfo(LogAnalysisTask task) {
         List<EnhancedLogParseResultEntity> results = null;
+        TaskInfo.TaskSummary extraSummaryBits = null;
         if ("COMPLETED".equals(task.getStatus())) {
-            List<LogAnalysisDetail> details = detailMapper.selectByTaskId(task.getTaskId());
-            results = details.stream().map(this::convertDetailToDto).collect(Collectors.toList());
+            int limit = Math.max(20, reportAnomalyLimit);
+            List<LogAnalysisDetail> anomalies = detailMapper.selectAnomaliesByTaskId(task.getTaskId(), limit);
+            results = anomalies.stream().map(this::convertDetailToDto).collect(Collectors.toList());
+            long detailTotal = detailMapper.countByTaskId(task.getTaskId());
+            extraSummaryBits = new TaskInfo.TaskSummary();
+            extraSummaryBits.setDetailTotal(detailTotal);
+            extraSummaryBits.setResultReturned(results.size());
+            extraSummaryBits.setResultTruncated(detailTotal > results.size());
+            Map<String, Integer> severityCounts = new LinkedHashMap<>();
+            List<Map<String, Object>> dist = detailMapper.selectSeverityDistributionByTaskId(task.getTaskId());
+            if (dist != null) {
+                for (Map<String, Object> row : dist) {
+                    if (row == null) continue;
+                    Object sev = row.get("severity");
+                    if (sev == null) {
+                        sev = row.get("SEVERITY");
+                    }
+                    Object cnt = row.get("cnt");
+                    if (cnt == null) {
+                        cnt = row.get("CNT");
+                    }
+                    if (sev != null && cnt != null) {
+                        severityCounts.put(String.valueOf(sev), ((Number) cnt).intValue());
+                    }
+                }
+            }
+            extraSummaryBits.setSeverityCounts(severityCounts);
         }
-        return convertToDto(task, results);
+        TaskInfo info = convertToDto(task, results);
+        if (extraSummaryBits != null && info.getSummary() != null) {
+            info.getSummary().setDetailTotal(extraSummaryBits.getDetailTotal());
+            info.getSummary().setResultReturned(extraSummaryBits.getResultReturned());
+            info.getSummary().setResultTruncated(extraSummaryBits.isResultTruncated());
+            info.getSummary().setSeverityCounts(extraSummaryBits.getSeverityCounts());
+        }
+        if (info.getSummary() != null && task.getCurrentStep() != null
+                && task.getCurrentStep().contains("truncated")) {
+            info.getSummary().setLineCapApplied(true);
+            // skipped N lines
+            try {
+                String step = task.getCurrentStep();
+                int idx = step.indexOf("skipped ");
+                if (idx >= 0) {
+                    String rest = step.substring(idx + 8).trim();
+                    int end = 0;
+                    while (end < rest.length() && Character.isDigit(rest.charAt(end))) end++;
+                    if (end > 0) {
+                        info.getSummary().setLinesSkipped(Integer.parseInt(rest.substring(0, end)));
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return info;
+    }
+
+    /** 分页拉取任务明细（前端大数据场景） */
+    public PageResult<EnhancedLogParseResultEntity> getTaskDetailsPage(String taskId, int pageNum, int pageSize,
+                                                                       boolean anomalyOnly) {
+        int safePage = Math.max(1, pageNum);
+        int safeSize = Math.min(Math.max(1, pageSize), 200);
+        int offset = (safePage - 1) * safeSize;
+        long total = anomalyOnly
+                ? detailMapper.countAnomaliesByTaskId(taskId)
+                : detailMapper.countByTaskId(taskId);
+        List<LogAnalysisDetail> page = detailMapper.selectByTaskIdPage(taskId, offset, safeSize, anomalyOnly);
+        PageResult<EnhancedLogParseResultEntity> result = new PageResult<>();
+        result.setList(page.stream().map(this::convertDetailToDto).collect(Collectors.toList()));
+        result.setTotal(total);
+        return result;
+    }
+
+    /** 导出产物缺失时，从 DB 有限重载明细（禁止无界） */
+    public List<EnhancedLogParseResultEntity> loadDetailsForExport(String taskId) {
+        int limit = Math.max(1000, exportReloadLimit);
+        List<LogAnalysisDetail> details = detailMapper.selectByTaskIdPage(taskId, 0, limit, false);
+        return details.stream().map(this::convertDetailToDto).collect(Collectors.toList());
     }
 
     private static String blankToNull(String value) {

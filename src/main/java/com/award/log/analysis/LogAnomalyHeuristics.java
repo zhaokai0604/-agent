@@ -179,27 +179,23 @@ public final class LogAnomalyHeuristics {
 
             res.setAnomalyScore(Math.min(1.0, finalScore));
 
+            // 综合分只抬升异常标记，绝不抹掉关键词/频次等前期已认定的异常
             if (severity == LogSeverityLevel.FATAL_LEVEL || severity == LogSeverityLevel.ERROR_LEVEL) {
-                if (finalScore > 0.65 && !res.isAnomaly()) {
+                if (finalScore > 0.65) {
                     res.setAnomaly(true);
                 }
             } else if (severity == LogSeverityLevel.WARNING_LEVEL) {
-                if (finalScore > 0.85 && reasonCount >= 2 && !res.isAnomaly()) {
+                if (finalScore > 0.85 && reasonCount >= 2) {
                     res.setAnomaly(true);
-                } else {
-                    res.setAnomaly(false);
                 }
             } else {
                 boolean hasSeriousReason = res.getAnomalyReasons().stream()
                         .anyMatch(reason -> reason.contains("致命") || reason.contains("内存溢出") || reason.contains("认证失败"));
 
-                if (finalScore > 0.95 && hasSeriousReason && !res.isAnomaly()) {
+                if (finalScore > 0.95 && hasSeriousReason) {
                     res.setAnomaly(true);
-                } else {
-                    res.setAnomaly(false);
-                    if (severity == LogSeverityLevel.DEBUG_LEVEL) {
-                        res.getAnomalyReasons().clear();
-                    }
+                } else if (severity == LogSeverityLevel.DEBUG_LEVEL && !res.isAnomaly()) {
+                    res.getAnomalyReasons().clear();
                 }
             }
         }

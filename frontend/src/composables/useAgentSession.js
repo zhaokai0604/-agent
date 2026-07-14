@@ -3,11 +3,13 @@ import { ref, watch } from 'vue'
 const STORAGE_KEY = 'threshcore-agent-sessions-v2'
 const MAX_SESSIONS = 24
 const MAX_MESSAGES = 80
+const PERSIST_DEBOUNCE_MS = 800
 
 const sessions = ref([])
 const activeSessionId = ref('')
 const messages = ref([])
 let storeLoaded = false
+let persistTimer = null
 
 function deriveTitle(msgs) {
   const first = (msgs || []).find(m => m.role === 'user' && m.content)
@@ -16,21 +18,43 @@ function deriveTitle(msgs) {
   return text.length > 28 ? `${text.slice(0, 28)}…` : text
 }
 
-function persist() {
+function trimSessionMessages(session) {
+  if (!session || !Array.isArray(session.messages)) return
+  if (session.messages.length > MAX_MESSAGES) {
+    session.messages.splice(0, session.messages.length - MAX_MESSAGES)
+  }
+}
+
+function persistNow() {
   try {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         activeId: activeSessionId.value,
-        sessions: sessions.value.slice(0, MAX_SESSIONS).map(s => ({
-          ...s,
-          messages: (s.messages || []).slice(-MAX_MESSAGES)
-        }))
+        sessions: sessions.value.slice(0, MAX_SESSIONS).map(s => {
+          trimSessionMessages(s)
+          return {
+            ...s,
+            messages: (s.messages || []).slice(-MAX_MESSAGES)
+          }
+        })
       })
     )
   } catch {
     /* quota */
   }
+}
+
+function schedulePersist() {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    persistNow()
+  }, PERSIST_DEBOUNCE_MS)
+}
+
+function persist() {
+  schedulePersist()
 }
 
 function activeSession() {
@@ -40,9 +64,10 @@ function activeSession() {
 function touchActiveSession() {
   const session = activeSession()
   if (!session) return
+  trimSessionMessages(session)
   session.updatedAt = Date.now()
   session.title = deriveTitle(session.messages)
-  persist()
+  schedulePersist()
 }
 
 function syncMessagesFromActive() {
@@ -54,6 +79,7 @@ function syncMessagesFromActive() {
   if (!Array.isArray(session.messages)) {
     session.messages = []
   }
+  trimSessionMessages(session)
   messages.value = session.messages
 }
 
@@ -67,7 +93,7 @@ function loadFromStorage() {
       id: s.id || `s-${Date.now()}`,
       title: s.title || '新对话',
       updatedAt: s.updatedAt || Date.now(),
-      messages: Array.isArray(s.messages) ? s.messages : []
+      messages: Array.isArray(s.messages) ? s.messages.slice(-MAX_MESSAGES) : []
     }))
     activeSessionId.value = data.activeId || sessions.value[0].id
     syncMessagesFromActive()
@@ -84,7 +110,7 @@ function ensureDefaultSession() {
     sessions.value = [session]
     activeSessionId.value = id
     messages.value = session.messages
-    persist()
+    persistNow()
     return
   }
   if (!activeSessionId.value || !sessions.value.some(s => s.id === activeSessionId.value)) {
@@ -131,7 +157,7 @@ export function useAgentSession() {
     }
     activeSessionId.value = id
     messages.value = session.messages
-    persist()
+    persistNow()
     return id
   }
 
@@ -140,7 +166,7 @@ export function useAgentSession() {
     touchActiveSession()
     activeSessionId.value = id
     syncMessagesFromActive()
-    persist()
+    persistNow()
   }
 
   function deleteSession(id) {
@@ -155,13 +181,14 @@ export function useAgentSession() {
         syncMessagesFromActive()
       }
     }
-    persist()
+    persistNow()
   }
 
   function clearSession() {
     if (messages.value) {
       messages.value.splice(0, messages.value.length)
     }
+    persistNow()
   }
 
   return {

@@ -200,15 +200,15 @@ function buildToolDefinitions(platformInfo) {
     { name: 'CleanTempTool', description: '临时目录清理（写操作需确认）', params: [
       param('path', '路径', p.tempPath, '白名单目录'),
       param('days', '早于天数', '0', '0=含今日；子目录删除建议0'),
-      param('dryRun', '演练模式', 'false', 'false 时需 confirmDelete=true'),
-      param('confirmDelete', '确认删除', 'true', '真实删除时使用'),
+      param('dryRun', '演练模式', 'true', 'false 时需 confirmDelete=true'),
+      param('confirmDelete', '确认删除', 'false', '真实删除时使用'),
       param('removeDirectory', '删除整个子目录', 'false', 'Temp 白名单子路径时可 true')
     ] },
     { name: 'LogCleanupTool', description: '日志目录旧文件清理（写操作需确认）', params: [
       param('path', '日志路径', p.logPath, '白名单目录'),
       param('days', '早于天数', '30', '正整数'),
-      param('dryRun', '演练模式', 'false', 'false 时需 confirmDelete=true'),
-      param('confirmDelete', '确认删除', 'true', '真实删除时使用')
+      param('dryRun', '演练模式', 'true', 'false 时需 confirmDelete=true'),
+      param('confirmDelete', '确认删除', 'false', '真实删除时使用')
     ] },
     { name: 'ServiceRestartTool', description: '白名单服务重启，默认预览', params: [
       param('serviceName', '服务单元', p.win ? 'W32Time' : 'nginx', '需在 allowlist 中'),
@@ -273,16 +273,16 @@ function buildToolDefinitions(platformInfo) {
       param('rootPath', '扫描目录', p.hotspotPath, 'hotspots/analyze 时'),
       param('path', '清理路径', p.tempPath, 'clean-temp 时'),
       numParam('days', '早于天数', '0', 'clean-temp 时'),
-      boolParam('dryRun', '演练模式', 'false', 'clean-temp 时使用'),
-      boolParam('confirmDelete', '确认删除', 'true', '真实删除时使用')
+      boolParam('dryRun', '演练模式', 'true', 'clean-temp 时使用'),
+      boolParam('confirmDelete', '确认删除', 'false', '真实删除时使用')
     ] },
     { name: 'LogOpsTool', description: '日志组合工具', params: [
       selectParam('operation', '操作', 'analyze', ['analyze', 'cleanup'], 'analyze | cleanup'),
       param('logPath', '日志路径', p.logPath, 'analyze 时'),
       param('path', '清理路径', p.logPath, 'cleanup 时'),
       numParam('days', '早于天数', '30', 'cleanup 时'),
-      boolParam('dryRun', '演练模式', 'false', 'cleanup 时使用'),
-      boolParam('confirmDelete', '确认删除', 'true', '真实删除时使用')
+      boolParam('dryRun', '演练模式', 'true', 'cleanup 时使用'),
+      boolParam('confirmDelete', '确认删除', 'false', '真实删除时使用')
     ] },
     { name: 'ServiceOpsTool', description: '服务组合工具', params: [
       param('operation', '操作', 'failed', 'failed | status | restart'),

@@ -1,5 +1,13 @@
+<!-- 遗留页，未挂入主导航；能力已并入统一审计/态势。如需启用请在 App.vue 注册。 -->
 <template>
   <div :class="embedded ? 'audit-pane' : 'ops-page'">
+    <el-alert
+      type="warning"
+      :closable="false"
+      show-icon
+      title="遗留页，未挂入主导航；能力已并入统一审计/态势。如需启用请在 App.vue 注册。"
+      style="margin-bottom: 12px;"
+    />
     <OpsPageHeader
       v-if="!embedded"
       title="访问记录"

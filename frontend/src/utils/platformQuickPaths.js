@@ -36,10 +36,9 @@ export function buildWelcomeQuickChips(platformInfo) {
   const p = resolveOpsPaths(platformInfo)
   return [
     { label: '全面检查', icon: 'DataAnalysis', cmd: '帮我全面检查系统状态，发现问题并给出修复计划' },
-    { label: '磁盘检查', icon: 'Coin', cmd: '检查磁盘使用情况' },
-    { label: '系统负载', icon: 'TrendCharts', cmd: '查看系统负载' },
-    { label: '最近日志', icon: 'Document', cmd: p.journalCmd },
-    { label: '临时清理预览', icon: 'Delete', cmd: `清理 7 天前的临时文件（路径 ${p.tempPath}）` },
-    { label: '网络诊断', icon: 'Link', cmd: '检查网络连通性' }
+    { label: '查磁盘', icon: 'Coin', cmd: '检查磁盘使用情况' },
+    { label: '查负载', icon: 'TrendCharts', cmd: '查看系统负载和占用最高的进程' },
+    { label: '看日志', icon: 'Document', cmd: p.journalCmd },
+    { label: '清理预览', icon: 'Delete', cmd: `预览清理 7 天前的临时文件（路径 ${p.tempPath}）` }
   ]
 }

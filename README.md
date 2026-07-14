@@ -8,11 +8,11 @@
 | 前端技术栈 | Vue 3、Vite 4、Element Plus、ECharts、markdown-it |
 | 默认端口 | 业务 **8088**（Context Path `/award-log`）；可选管理端口 **8089**（默认关闭）；前端开发 **3000** |
 | Context Path | `/award-log` |
-| 数据库 | MariaDB 10.11+ 默认，兼容 MySQL 8 |
+| 数据库 | MariaDB 10.11+ / MySQL 8 双驱动；主配置默认 MariaDB，本地模板默认 MySQL 8 |
 | 当前规模 | 后端 **398** 个 Java 主代码文件、**44** 个 Controller、约 **191** 个 REST 映射；**26** 个 MCP 工具；**171** 个测试类、**646** 个 `@Test` |
 | 代码量（口径见下） | 仓库文本合计约 **14.5 万行**；自研业务代码约 **8.2 万行**（不含 `miniprogram_npm` 打包 JS） |
 | 质量门禁 | `mvn verify` 全绿；JaCoCo 指令覆盖率 **≥60%**（`pom.xml` 门禁 `0.60`）；分支覆盖率约 **39%**（无门禁） |
-| 文档版本 | **2026-07-06** |
+| 文档版本 | **2026-07-09** |
 | 当前状态 | 已具备日志分析、MCP 工具执行、Agent 编排、巡检闭环、AWM 记忆、安全审计、知识库 RAG、HIDS/NIDS/PIDS 信号接入能力；**dev / prod-kylin 默认单端口 8088** |
 
 **版权声明**：本软件为陕西机电职业技术学院 ThreshCore 团队竞赛参赛作品，版权归项目团队所有。未经授权，不得公开发布、开源或用于竞赛以外的商业用途。详见根目录 [`版权声明与使用限制声明.md`](./版权声明与使用限制声明.md)。
@@ -105,6 +105,7 @@
 | 新机 Jar+Dist 速查 | [`部署指南.md`](./部署指南.md) | 麒麟目标机只部署预构建产物（2026-07 实测） |
 | 麒麟 Jar+Dist 速查 | [`docs/deployment/麒麟Jar+Dist部署速查.md`](./docs/deployment/麒麟Jar+Dist部署速查.md) | 与根目录部署指南互补的速查版 |
 | 麒麟上线检查清单 | [`docs/deployment/麒麟V11-LoongArch生产上线检查清单.md`](./docs/deployment/麒麟V11-LoongArch生产上线检查清单.md) | 麒麟 / LoongArch 生产验收 |
+| 交付 API 白名单 | [`docs/deployment/交付API白名单.md`](./docs/deployment/交付API白名单.md) | 演示必须接通 vs 仅 API / 扩展面 |
 | 远程运维 SSH | [`docs/deployment/ssh-remote-ops.md`](./docs/deployment/ssh-remote-ops.md) | 生产环境 SSH 运维说明 |
 | 生产配置示例 | `docs/deployment/prod-config-example.yml` | 生产配置模板参考 |
 | Agent UI 改版说明 | [`frontend/AGENT_UI_REDESIGN.md`](./frontend/AGENT_UI_REDESIGN.md) | Agent 页面改版说明 |
@@ -125,10 +126,10 @@
 
 | 能力 | 说明 | 入口 |
 |------|------|------|
-| Agent 对话 | 中文自然语言运维，Playbook、工具调用、RAG | 快捷键 **1** / `ops-chat` |
+| Agent 对话 | 中文自然语言运维结论，Playbook、工具调用、RAG | 快捷键 **1** / `ops-chat` |
 | MCP 工具控制台 | 26 个白名单工具，搜索、参数表单、确认执行 | 快捷键 **2** / `mcp-tools` |
-| 执行审计 | HTTP 访问轨迹、AI/MCP 执行记录 | 快捷键 **3** / `audit` |
-| 运维链路审计 | 六步 CoT、AWM / Reflexion | 快捷键 **4** / `ops-audit-trace` |
+| 执行审计 | HTTP 访问轨迹、AI/MCP 执行记录、原始工具结果 | 快捷键 **3** / `audit` |
+| 运维链路审计 | 六步 CoT、traceId、执行证据、AWM / Reflexion | 快捷键 **4** / `ops-audit-trace` |
 | 日志分析 | 上传、Drain 模板、AI 诊断 | 快捷键 **5** / `analysis` |
 | 任务记录 | 历史诊断任务 | 快捷键 **6** / `history` |
 | 日志分析仪表盘 | 统计趋势 | 快捷键 **7** / `dashboard` |
@@ -144,6 +145,7 @@
 - Agent 走的是“可控执行”而不是“自由生成 shell”
 - 写操作默认预览，风险达阈值需要显式确认口令 `确认执行`
 - MCP 工具通过统一调度器、统一审计、统一风险分流
+- Agent 页面面向运维人员直接给自然语言结论、影响和处置结果；traceId、工具原始返回、执行参数保留在审计页
 - 巡检、自动修复和 LLM 对话是并存能力；自动化主链路已收敛为巡检 + 自动修复，历史自主运维命名仅作兼容入口
 - AWM 只沉淀成功套路，Reflexion 只沉淀安全拦截教训
 - Windows 本地开发与麒麟 / LoongArch 生产场景都有专门兼容配置
@@ -222,8 +224,8 @@ Starting ProtocolHandler ["http-nio-8088"]
 | Maven | 3.8+ |
 | Node.js | 18+ |
 | npm | 随 Node.js |
-| MariaDB | 10.11+（生产/默认） |
-| MySQL | 8.0+（兼容可选，Windows 本地联调也可用） |
+| MariaDB | 10.11+（主配置默认、生产推荐） |
+| MySQL | 8.0+（本地模板默认，Windows 联调可直接使用） |
 | 可选 Qdrant | 本地 Docker 或 Cloud |
 
 ### 1. 准备数据库
@@ -244,7 +246,7 @@ mariadb -u root -p log_analysis < src/main/resources/schema.sql
 
 **旧库升级**：若表是早期版本缺少 `user_id` 等列，可重新导入 `schema.sql` 到新库，或依赖启动时 `LogAnalysisTaskSchemaService` 等 `*SchemaService` 自动 `ALTER` 补列（需 DDL 权限）。否则访问 `/log/history` 可能报 500（`Unknown column 'user_id'`）。
 
-#### Windows 本地使用 MySQL 8（兼容可选）
+#### Windows 本地使用 MySQL 8（本地模板默认）
 
 在 `application-local.yml` 中覆盖（示例）：
 
@@ -257,7 +259,7 @@ spring:
     password: "你的密码"
 ```
 
-主配置 `application.yml` 默认已切到 MariaDB；仅在你继续使用 MySQL 8 时，才需要在 local 中覆盖驱动和 URL。
+主配置 `application.yml` 保持 MariaDB 默认；`application-local.example.yml` 已给出 MySQL 8 覆盖。现场可按数据库实际情况在 `application-local.yml` 或环境变量中切换 `DB_DRIVER`、`DB_URL`，不要把本地账号密码或模型密钥提交到仓库。
 
 ### 2. 配置本地敏感参数
 
@@ -315,9 +317,10 @@ npm run dev
 2. 如需管理员能力，在数据库中把该用户 `role` 改为 `1`
 3. 打开环境状态页面确认 DB、AI、MCP、组件快照正常
 4. 在工具控制台执行只读工具，如磁盘/进程/负载探测
-5. 在 Agent 页面输入 `磁盘满了`、`CPU占用过高` 或 `一键巡检`
-6. 查看 `运维链路审计` 与 `AWM` 是否有结果写入
-7. 发布或答辩前执行 `mvn verify`，确认 JaCoCo 门禁与集成测试通过
+5. 在 Agent 页面输入 `磁盘满了`、`CPU占用过高`、`查高占用进程` 或 `一键巡检`
+6. 确认 Agent 回复直接给自然语言结果，不把后端原始 JSON、工具 payload 或 trace 块原样贴到对话区
+7. 查看 `运维链路审计` 与 `AWM` 是否有 traceId、执行证据和结果写入
+8. 发布或答辩前执行 `mvn verify`，确认 JaCoCo 门禁与集成测试通过
 
 ---
 
@@ -613,11 +616,13 @@ flowchart TB
 统一由 `OpsReportFormat` 管理，主要章节通常包括：
 
 - `结论`
-- `追踪信息`
 - `环境感知`
 - `问题诊断`
 - `自动处置`
 - `验证`
+- `后续建议`
+
+Agent 对话正文只展示运维人员能直接理解的自然语言结果，例如高占用进程、风险原因、已处理项和下一步建议。traceId、工具原始返回、执行参数、调度步骤等证据性信息进入 `ops_audit_trace`、AI 审计或导出报告，不在普通对话回复中整块罗列。
 
 ---
 
@@ -757,6 +762,8 @@ AWM 会被注入到：
 项目里很多结果不是直接返回原始 JSON，而是会被整理成适合前端展示和对外演示的 Markdown。  
 这部分格式需要稳定，否则 Agent 页面、链路审计、导出和答辩展示都会出现视觉不一致。
 
+前台回复和审计明细要分层：Agent 对话区负责给人能直接执行的结论，审计页负责保留 trace、工具参数、原始返回和链路证据。
+
 ### 统一来源
 
 核心由以下模块共同约束：
@@ -771,7 +778,7 @@ AWM 会被注入到：
 | 输出类型 | 说明 |
 |----------|------|
 | Playbook 报告 | `AssistantOrchestrator`、`AutonomousOpsOrchestrator` |
-| Agent 对话正文 | `OpsChatInterface` 中的 Markdown 渲染 |
+| Agent 对话正文 | `OpsChatInterface` 中的 Markdown 渲染，面向运维人员输出结论和处理结果 |
 | MCP 人类可读摘要 | 工具结果转译 |
 | 审计链路详情 | 步骤与结果摘要 |
 | 导出报告 | 看板、链路、表格导出 |
@@ -786,6 +793,8 @@ AWM 会被注入到：
 | 路径 / 命令 / 服务名 | 用反引号包裹 |
 | 装饰线 | 避免无意义重复分隔线 |
 | 备注 | 用引用块 `>`，避免正文里混杂提示语 |
+| Agent 对话 | 不直接粘贴后端 JSON、工具 payload、trace 块；用中文说明结果、原因、影响和下一步 |
+| 审计详情 | 可以展示 traceId、步骤、参数、原始证据和执行耗时，供复盘与追责 |
 
 ---
 
@@ -1140,7 +1149,7 @@ npm run build
 |------|------|
 | `SPRING_PROFILES_ACTIVE` | 激活配置，如 `dev`、`prod-kylin`、`test-kylin` |
 | `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | 数据库连接 |
-| `DB_DRIVER` | 默认 MariaDB 10.11，可兼容切回 MySQL 8 |
+| `DB_DRIVER` | MariaDB / MySQL 驱动切换；主配置默认 MariaDB，本地模板示例为 MySQL 8 |
 | `AI_API_KEY` | 模型 API Key |
 | `AI_BASE_URL` | OpenAI 兼容接口基址 |
 | `ELASTIC_ENABLED` | 是否启用 Elasticsearch |
@@ -1244,7 +1253,7 @@ PROD_BUILD=1 bash scripts/deploy/deploy.sh
 - 前端：`dist + Nginx`；构建前配置 `VITE_AWARD_LOG_*` 双 Base URL
 - 对外统一入口：Nginx `:80/:443`
 - **dev / prod-kylin** 默认均仅 **8088**（`APP_MANAGEMENT_ENABLED=false`）
-- 数据库默认 **MariaDB 10.11**；本地 Docker：`docker compose up -d mariadb`
+- 数据库支持 **MariaDB 10.11 / MySQL 8** 双驱动；主配置默认 MariaDB，本地模板默认 MySQL 8；本地 Docker：`docker compose up -d mariadb`
 
 ### 参考文件
 
@@ -1682,6 +1691,7 @@ mvn verify
 | 意图识别与编排 | `OpsIntentRouter` Playbook + `AssistantOrchestrator` / `AutonomousOpsOrchestrator` |
 | 安全护栏 | `McpInvocationSecurityGate`、风险评分、路径策略、写操作二次确认、`WriteExecutionCoordinator` |
 | 审计留痕 | `AssistantAuditRecorder`、`OpsAuditTraceService` 六步链路 trace |
+| 结果表达 | Agent 回复直接讲自然语言结论；traceId、原始工具结果和链路证据在审计页展示 |
 | 经验沉淀 | AWM 成功工作流 + Reflexion 失败教训 |
 
 答辩建议：**选 2～3 条固定话术现场演示**（磁盘满 / CPU 高 / 一键巡检），重点讲「为什么不是开放 shell」和「拦截 + 确认 + 审计」闭环，避免铺陈全部 26 个工具。
@@ -1703,9 +1713,9 @@ mvn verify
 | 2 | 安全自检 | 四层护栏真实生效 |
 | 3 | 运维效果评分 | 不只是“能做”，而且“有效果” |
 | 4 | 日志分析仪表盘 | 回到赛题主线 |
-| 5 | Agent 对话 | 中文运维、可控编排 |
+| 5 | Agent 对话 | 中文运维、自然语言结果、可控编排 |
 | 6 | MCP 工具控制台 | 非对话路径下也同样受控 |
-| 7 | 运维链路审计 | 六步审计、traceId、AWM 高亮 |
+| 7 | 运维链路审计 | 六步审计、traceId、原始证据、AWM 高亮 |
 | 8 | 记忆层 | 成功沉淀与失败教训 |
 
 ### 建议使用的话术

@@ -123,7 +123,8 @@ class AssistantOrchestratorTest {
         AssistantOrchestrator.RunResult result = orchestrator.run("cleanup disk", McpToolSurface.READ_ONLY, RiskLevel.MEDIUM);
 
         assertEquals("trace-assistant-1", result.traceId());
-        assertTrue(result.markdown().contains("trace"));
+        assertTrue(result.markdown().contains("只读模式"));
+        assertFalse(result.markdown().contains("Trace"));
         verify(diskTool, never()).checkDiskUsage();
         verify(auditRecorder).record(eq("trace-assistant-1"), eq("cleanup disk"), eq("MEDIUM"),
                 eq("READ_ONLY_SURFACE"), eq("AssistantOrchestrator"), eq(false), anyString(), anyList(), anyLong());
@@ -149,7 +150,9 @@ class AssistantOrchestratorTest {
 
         AssistantOrchestrator.RunResult result = orchestrator.run("cleanup disk", McpToolSurface.FULL, RiskLevel.MEDIUM);
 
-        assertTrue(result.markdown().contains("AWM"));
+        assertTrue(result.markdown().contains("执行结果"));
+        assertTrue(result.markdown().contains("历史治理方案"));
+        assertFalse(result.markdown().contains("Trace"));
         verify(workflowRetriever, never()).recordHit(workflow);
         verify(cleanTempTool, never()).cleanTempFiles(anyString(), anyInt(), anyBoolean(), anyBoolean(), anyBoolean());
         verify(logCleanupTool, never()).cleanupOldLogs(anyString(), anyInt(), anyBoolean(), anyBoolean());
@@ -189,7 +192,8 @@ class AssistantOrchestratorTest {
 
         AssistantOrchestrator.RunResult result = orchestrator.run("cleanup logs", McpToolSurface.FULL, RiskLevel.MEDIUM);
 
-        assertTrue(result.markdown().contains("AWM"));
+        assertTrue(result.markdown().contains("历史方案未形成可执行动作"));
+        assertFalse(result.markdown().contains("Trace"));
         verify(logCleanupTool).cleanupOldLogs("/var/log", 30, true, false);
         verify(logCleanupTool).cleanupOldLogs("/var/log", 30, false, true);
     }
@@ -302,10 +306,18 @@ class AssistantOrchestratorTest {
         when(opsIntentRouter.forceRemediate("cpu 过高")).thenReturn(false);
         when(workflowRetriever.bestMatch("cpu", List.of("CPU_HIGH"), "cpu 过高")).thenReturn(null);
         when(systemLoadTool.checkSystemLoad()).thenReturn("{\"success\":true,\"data\":{\"cpuUsagePercent\":95.0}}");
-        when(processTool.listProcesses(5.0, 5.0)).thenReturn("{\"success\":true,\"data\":[]}");
+        when(processTool.listProcesses(5.0, 5.0)).thenReturn("""
+                {"success":true,"data":"[{\\\"user\\\":\\\"root\\\",\\\"pid\\\":\\\"1234\\\",\\\"cpu\\\":\\\"87.5\\\",\\\"mem\\\":\\\"12.3\\\",\\\"etime\\\":\\\"01:02\\\",\\\"command\\\":\\\"java -jar app.jar\\\",\\\"state\\\":\\\"running\\\"}]"}
+                """);
 
         AssistantOrchestrator.RunResult result = orchestrator.run("cpu 过高", McpToolSurface.FULL, RiskLevel.MEDIUM);
 
+        assertTrue(result.markdown().contains("java -jar app.jar"));
+        assertTrue(result.markdown().contains("1234"));
+        assertTrue(result.markdown().contains("87.5%"));
+        assertTrue(result.markdown().contains("12.3%"));
+        assertFalse(result.markdown().contains("详见工具原始输出"));
+        assertFalse(result.markdown().contains("Trace"));
         assertTrue(result.markdown().contains("agent.service-restart.allowlist") || result.markdown().contains("重启"));
         verify(serviceRestartTool, never()).restartService(anyString(), anyBoolean(), anyBoolean());
     }
@@ -318,7 +330,8 @@ class AssistantOrchestratorTest {
 
         AssistantOrchestrator.RunResult result = orchestrator.run("继续巡检", McpToolSurface.FULL, RiskLevel.LOW);
 
-        assertTrue(result.markdown().contains("待确认") || result.markdown().contains("无"));
+        assertEquals("当前没有待执行方案。", result.markdown());
+        assertFalse(result.markdown().contains("Trace"));
         verify(opsAutoRemediationService, never()).confirmPendingFromAssistant(anyString());
     }
 
@@ -332,11 +345,14 @@ class AssistantOrchestratorTest {
                 "summary", "restart nginx"));
         when(opsAutoRemediationService.confirmPendingFromAssistant("p-1")).thenReturn(Map.of(
                 "success", true,
-                "actions", List.of("restart nginx")));
+                "resultSummary", "已执行巡检修复动作 1 个，成功 1 个。服务重启 `nginx` 执行成功。",
+                "actions", List.of(Map.of("tool", "ServiceRestartTool", "path", "nginx", "success", true))));
 
         AssistantOrchestrator.RunResult result = orchestrator.run("继续巡检", McpToolSurface.FULL, RiskLevel.LOW);
 
         assertTrue(result.markdown().contains("p-1"));
+        assertTrue(result.markdown().contains("服务重启 `nginx` 执行成功"));
+        assertFalse(result.markdown().contains("```json"));
         verify(opsAutoRemediationService).confirmPendingFromAssistant("p-1");
     }
 }

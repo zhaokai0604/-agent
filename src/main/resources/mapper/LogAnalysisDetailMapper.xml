@@ -27,6 +27,46 @@
         where task_id = #{taskId,jdbcType=VARCHAR}
     </select>
 
+    <select id="countByTaskId" resultType="long">
+        select count(*) from log_analysis_detail
+        where task_id = #{taskId,jdbcType=VARCHAR}
+    </select>
+
+    <select id="countAnomaliesByTaskId" resultType="long">
+        select count(*) from log_analysis_detail
+        where task_id = #{taskId,jdbcType=VARCHAR}
+          and is_anomaly = 1
+    </select>
+
+    <select id="selectAnomaliesByTaskId" resultMap="BaseResultMap">
+        select
+        <include refid="Base_Column_List" />
+        from log_analysis_detail
+        where task_id = #{taskId,jdbcType=VARCHAR}
+          and is_anomaly = 1
+        order by anomaly_score desc, id asc
+        limit #{limit}
+    </select>
+
+    <select id="selectByTaskIdPage" resultMap="BaseResultMap">
+        select
+        <include refid="Base_Column_List" />
+        from log_analysis_detail
+        where task_id = #{taskId,jdbcType=VARCHAR}
+        <if test="anomalyOnly != null and anomalyOnly">
+          and is_anomaly = 1
+        </if>
+        order by id asc
+        limit #{limit} offset #{offset}
+    </select>
+
+    <select id="selectSeverityDistributionByTaskId" resultType="map">
+        select severity as severity, count(*) as cnt
+        from log_analysis_detail
+        where task_id = #{taskId,jdbcType=VARCHAR}
+        group by severity
+    </select>
+
     <insert id="insert" parameterType="com.award.log.model.LogAnalysisDetail" useGeneratedKeys="true" keyProperty="id">
         insert into log_analysis_detail
         <trim prefix="(" suffix=")" suffixOverrides=",">

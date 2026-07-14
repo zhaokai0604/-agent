@@ -72,7 +72,7 @@ public class UserProfileController {
             return Result.error("请求体不能为空");
         }
         String email = normalizeNullable(payload.getEmail());
-        String wechatUserid = normalizeNullable(payload.getWechat_userid());
+        String wechatUserid = normalizeNullable(payload.getWechatUserid());
         if (email != null && !SIMPLE_EMAIL.matcher(email).matches()) {
             return Result.error("邮箱格式不正确");
         }

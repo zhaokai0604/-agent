@@ -52,7 +52,7 @@ export function applyMcpWriteConfirmParams(toolName, parameters, userMessage) {
   } else if ((toolName === 'DockerTool' || toolName === 'ContainerOpsTool') && op === 'stop') {
     p.dryRun = false
     p.confirmStop = true
-  } else if (toolName === 'ProcessOpsTool' || (toolName === 'ProcessTool' && ['kill', 'terminate', 'stop'].includes(op))) {
+  } else if ((toolName === 'ProcessOpsTool' || toolName === 'ProcessTool') && ['kill', 'terminate', 'stop'].includes(op)) {
     p.dryRun = false
     p.confirmKill = true
   } else if (toolName === 'SystemdTool' && op === 'restart') {

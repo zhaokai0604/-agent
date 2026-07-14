@@ -349,12 +349,15 @@ const resetParams = () => {
 }
 
 const presentResult = (result) => {
+  const full = result.fullResult ?? result.raw
   resultDialogRef.value?.open({
     toolName: result.toolName,
     success: result.success,
     duration: result.duration,
-    traceId: result.traceId || result.fullResult?.traceId,
-    raw: result.fullResult ?? result.raw
+    traceId: result.traceId || full?.traceId,
+    writeMismatch: full?.writeMismatch === true || result.writeMismatch === true,
+    mode: full?.data?.mode || full?.mode || result.mode,
+    raw: full
   })
 }
 

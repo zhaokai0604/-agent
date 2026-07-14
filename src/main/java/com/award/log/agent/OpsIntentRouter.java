@@ -44,13 +44,16 @@ public class OpsIntentRouter {
 
     private static final Pattern GENERAL_OPS_CHECK = Pattern.compile(
             "(检查|排查|诊断|体检|巡检|看看|分析).*(系统|服务器|主机|本机|机器|环境|状况)|"
-                    + "(系统|服务器|主机|本机|环境).*(检查|排查|诊断|健康|状态|怎么样|如何|正常)|"
+                    + "(系统|服务器|主机|本机|电脑|环境).*(检查|排查|诊断|体检|健康|状态|怎么样|如何|正常)|"
                     + "健康检查|运维检查|全面检查|帮我运维|系统状态|检查本机|"
-                    + "(帮我|请).*(管理|整理|运维).*(电脑|本机)|运维管家|电脑管家|系统管家|帮我管理电脑|帮我运维",
+                    + "(帮我|请).*(检查|排查|诊断|体检|看看|管理|整理|运维).*(电脑|本机|系统)|"
+                    + "(检查|排查|诊断|体检|看看).*(电脑|本机|系统)|"
+                    + "运维管家|电脑管家|系统管家|帮我管理电脑|帮我检查电脑|帮我运维",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private static final Pattern EXECUTE_FOLLOWUP = Pattern.compile(
-            "(执行清理|按预览执行|真实删除|确认执行|开始清理|执行删除|执行修复|立即清理|直接删除|立即删除|马上删除|删掉|删了)",
+            "(执行清理|按预览执行|真实删除|确认执行|开始清理|执行删除|执行修复|立即清理|直接删除|立即删除|马上删除|"
+                    + "删掉|删了|确认删除|真实重启|立即重启|执行处置|立即执行)",
             Pattern.CASE_INSENSITIVE);
 
     /** 用户明确只要预览、不要删除 */
@@ -63,9 +66,10 @@ public class OpsIntentRouter {
             "(删除|删掉|清除|移除)\\s*[「\"']?(/[\\w\\-.]+|[A-Za-z]:[/\\\\])",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
-    /** 明确要动手清理（非纯诊断），默认直接执行白名单内 Temp，不再强制二次确认。 */
+    /** 明确二次确认/强执行口令：才允许跳过「仅预览」默认。 */
     private static final Pattern DIRECT_CLEANUP_EXECUTE = Pattern.compile(
-            "清理.*垃圾|删除.*垃圾|帮我清理|帮我删|清理磁盘|清理临时|释放.*空间|清垃圾|删垃圾|扫.*删",
+            "清理.*垃圾.*确认|确认.*清理.*垃圾|直接清理|立刻清理|马上清理|立即清理|真实清理|"
+                    + "清垃圾并执行|删垃圾并执行|直接删|马上删",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     public enum Playbook {
@@ -102,6 +106,20 @@ public class OpsIntentRouter {
         return Playbook.NONE;
     }
 
+    public Playbook resolveFromContext(
+            String userMessage,
+            java.util.List<com.award.log.service.impl.UnifiedAssistantService.ChatTurn> history) {
+        Playbook direct = resolve(userMessage);
+        if (direct != Playbook.NONE) {
+            return direct;
+        }
+        if (!AssistantIntentSignals.isOpsProceed(userMessage, history)
+                && !AssistantIntentSignals.isComputerManagementIntent(userMessage, history)) {
+            return Playbook.NONE;
+        }
+        return resolve(AssistantIntentSignals.recentConversationText(userMessage, history, 8));
+    }
+
     public boolean shouldOrchestrate(String userMessage) {
         return resolve(userMessage) != Playbook.NONE;
     }
@@ -112,8 +130,7 @@ public class OpsIntentRouter {
         if (shouldOrchestrate(userMessage)) {
             return true;
         }
-        String combined = AssistantIntentSignals.recentConversationText(userMessage, history, 8);
-        return shouldOrchestrate(combined);
+        return resolveFromContext(userMessage, history) != Playbook.NONE;
     }
 
     public boolean forceRemediate(String userMessage) {
@@ -128,9 +145,7 @@ public class OpsIntentRouter {
                 || DIRECT_CLEANUP_EXECUTE.matcher(userMessage).find()) {
             return true;
         }
-        // 「清理/删除/释放 + 垃圾|临时|空间」类诉求：默认真删（仍限 Temp 白名单 + 门禁）
-        return CLEANUP_INTENT.matcher(userMessage).find()
-                && !Pattern.compile("(检查|看看|分析|诊断|怎么样|如何)", Pattern.CASE_INSENSITIVE)
-                .matcher(userMessage).find();
+        // 「帮我清理」等仅表达意图：默认仍走预览，须「确认执行」或工具台二次确认后才真写
+        return false;
     }
 }

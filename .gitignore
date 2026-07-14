@@ -80,6 +80,8 @@ application-prod.properties
 
 # 本机 QQ 邮箱授权码等（由 application-local.example.yml 复制改名，切勿提交）
 src/main/resources/application-local.yml
+application-local.yml
+config/application-local.yml
 
 # 运行时/本地数据
 logs/

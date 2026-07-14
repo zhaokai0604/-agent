@@ -8,6 +8,10 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AssistantReplyPlannerTest {
@@ -100,6 +104,21 @@ class AssistantReplyPlannerTest {
     }
 
     @Test
+    void ackWithPatrolContextShouldRouteToOrchestrateWhenEnabled() {
+        var history = List.of(
+                new UnifiedAssistantService.ChatTurn("user", "帮我检查电脑"),
+                new UnifiedAssistantService.ChatTurn("assistant", "可以，我会先做全面巡检。")
+        );
+        OpsRuntimeService runtime = mock(OpsRuntimeService.class);
+        when(runtime.shouldOrchestrateFromContext(anyString(), any())).thenReturn(true);
+
+        var plan = planner.plan("可以的", history, true, false, true, runtime);
+
+        assertEquals(AssistantReplyMode.ORCHESTRATE, plan.mode());
+        assertTrue(plan.useToolAgentPath());
+    }
+
+    @Test
     void bareAckWithoutOpsContextStaysChitchatOrConversation() {
         var history = List.of(
                 new UnifiedAssistantService.ChatTurn("user", "你好"),
@@ -129,6 +148,17 @@ class AssistantReplyPlannerTest {
     void manageComputerWithPatrolKeywordsRoutesToToolAgent() {
         var plan = planner.plan("帮我运维管家，全面检查本机", null, true, false, true, null);
         assertEquals(AssistantReplyMode.TOOL_AGENT, plan.mode());
+        assertTrue(plan.useToolAgentPath());
+    }
+
+    @Test
+    void directComputerHealthCheckShouldRouteToOrchestrateWhenEnabled() {
+        OpsRuntimeService runtime = mock(OpsRuntimeService.class);
+        when(runtime.shouldOrchestrate(anyString())).thenReturn(true);
+
+        var plan = planner.plan("帮我检查电脑", null, true, false, true, runtime);
+
+        assertEquals(AssistantReplyMode.ORCHESTRATE, plan.mode());
         assertTrue(plan.useToolAgentPath());
     }
 }

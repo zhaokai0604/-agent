@@ -207,7 +207,16 @@ public final class SystemBootstrapSupport {
 
     private static List<String> defaultInspectRoots(boolean windows) {
         if (windows) {
-            return List.of("C:/Windows/Logs", "C:/Windows/System32/winevt/Logs");
+            return List.of(
+                    "logs",
+                    "C:/Windows/Logs",
+                    "C:/Windows/System32/winevt/Logs",
+                    "C:/Users/Administrator/AppData/Local/Temp",
+                    "C:/Windows/Temp",
+                    "C:/Temp",
+                    "D:/Temp",
+                    "E:/Temp",
+                    "F:/Temp");
         }
         return List.of("/var/log", "/var/log/journal");
     }
@@ -215,10 +224,19 @@ public final class SystemBootstrapSupport {
     private static List<String> defaultReadPrefixes(boolean windows) {
         if (windows) {
             return List.of(
+                    "logs",
                     "C:/Windows/Logs",
                     "C:/Windows/System32/winevt/Logs",
                     "C:/inetpub/logs",
-                    "C:/ProgramData/logs");
+                    "C:/ProgramData/logs",
+                    "C:/ProgramData/Microsoft/Windows/WER/ReportArchive",
+                    "C:/ProgramData/Microsoft/Windows/WER/ReportQueue",
+                    "C:/Users/Administrator/AppData/Local/Temp",
+                    "C:/Windows/Temp",
+                    "C:/Temp",
+                    "D:/Temp",
+                    "E:/Temp",
+                    "F:/Temp");
         }
         return List.of(
                 "/var/log",
@@ -230,14 +248,25 @@ public final class SystemBootstrapSupport {
 
     private static List<String> defaultCleanRoots(boolean windows) {
         if (windows) {
-            return List.of("C:/Users/Administrator/AppData/Local/Temp", "C:/Temp");
+            return List.of(
+                    "C:/Users/Administrator/AppData/Local/Temp",
+                    "C:/Windows/Temp",
+                    "C:/Temp",
+                    "D:/Temp",
+                    "E:/Temp",
+                    "F:/Temp");
         }
         return List.of("/tmp", "/var/tmp", "/var/cache");
     }
 
     private static List<String> defaultLogCleanupRoots(boolean windows) {
         if (windows) {
-            return List.of("C:/Windows/Logs", "C:/Windows/System32/winevt/Logs", "C:/inetpub/logs");
+            return List.of(
+                    "logs",
+                    "C:/Windows/Logs",
+                    "C:/Windows/System32/winevt/Logs",
+                    "C:/inetpub/logs",
+                    "C:/ProgramData/logs");
         }
         return List.of("/var/log", "/var/log/journal");
     }

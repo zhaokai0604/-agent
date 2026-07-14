@@ -25,17 +25,22 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class FileLogCollector implements LogCollector {
 
+    private static final int DEFAULT_BUFFER_MAX_LINES = 8000;
+
     private final String filePath;
     private final String name;
     private final Set<String> includeExtensions;
     private final Set<String> excludeDirectories;
     private final int maxDepth;
     private final int pollIntervalMs;
+    private final int bufferMaxLines;
+    private final boolean startAtEof;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ExecutorService executorService;
     private final List<String> collectedLogs;
     private final Map<String, Long> fileReadPositions = new ConcurrentHashMap<>();
     private final Map<WatchKey, Path> watchKeyPathMap = new ConcurrentHashMap<>();
+    private long droppedLines;
 
     public FileLogCollector(String filePath, String name) {
         this(filePath, name,
@@ -44,15 +49,24 @@ public class FileLogCollector implements LogCollector {
     }
 
     public FileLogCollector(String filePath, String name, String includeExtensions, String excludeDirectories) {
-        this(filePath, name, includeExtensions, excludeDirectories, 4, 5000);
+        this(filePath, name, includeExtensions, excludeDirectories, 4, 5000,
+                DEFAULT_BUFFER_MAX_LINES, true);
     }
 
     public FileLogCollector(String filePath, String name, String includeExtensions, String excludeDirectories,
                             int maxDepth, int pollIntervalMs) {
+        this(filePath, name, includeExtensions, excludeDirectories, maxDepth, pollIntervalMs,
+                DEFAULT_BUFFER_MAX_LINES, true);
+    }
+
+    public FileLogCollector(String filePath, String name, String includeExtensions, String excludeDirectories,
+                            int maxDepth, int pollIntervalMs, int bufferMaxLines, boolean startAtEof) {
         this.filePath = filePath;
         this.name = name;
         this.maxDepth = Math.max(1, maxDepth);
         this.pollIntervalMs = Math.max(1000, pollIntervalMs);
+        this.bufferMaxLines = Math.max(100, bufferMaxLines);
+        this.startAtEof = startAtEof;
         this.executorService = Executors.newSingleThreadExecutor();
         this.collectedLogs = new ArrayList<>();
         this.includeExtensions = parseCsvToLowercaseSet(includeExtensions);
@@ -110,7 +124,11 @@ public class FileLogCollector implements LogCollector {
     private void watchDirectoryRecursively(Path scanRoot) {
         this.root = scanRoot;
         try (WatchService watchService = FileSystems.getDefault().newWatchService()) {
-            collectFromDirectory(scanRoot, 0);
+            if (startAtEof) {
+                seedEofPositions(scanRoot, 0);
+            } else {
+                collectFromDirectory(scanRoot, 0);
+            }
             registerAllDirectories(scanRoot, watchService, 0);
             while (running.get()) {
                 WatchKey key = watchService.poll(pollIntervalMs, TimeUnit.MILLISECONDS);
@@ -127,6 +145,13 @@ public class FileLogCollector implements LogCollector {
 
     private void fallbackDirectoryPolling(Path scanRoot) {
         this.root = scanRoot;
+        if (startAtEof && fileReadPositions.isEmpty()) {
+            try {
+                seedEofPositions(scanRoot, 0);
+            } catch (Exception e) {
+                log.debug("[文件日志采集器] EOF 种子失败: {}", e.getMessage());
+            }
+        }
         while (running.get()) {
             try {
                 collectFromDirectory(scanRoot, 0);
@@ -139,6 +164,14 @@ public class FileLogCollector implements LogCollector {
     }
 
     private void pollSingleFile(Path file) {
+        if (startAtEof && !fileReadPositions.containsKey(file.toAbsolutePath().toString())) {
+            try {
+                long len = Files.size(file);
+                fileReadPositions.put(file.toAbsolutePath().toString(), len);
+            } catch (Exception e) {
+                log.debug("[文件日志采集器] 单文件 EOF 种子失败: {}", e.getMessage());
+            }
+        }
         while (running.get()) {
             try {
                 collectFromFile(file);
@@ -227,21 +260,67 @@ public class FileLogCollector implements LogCollector {
     private void collectFromFile(Path path) throws IOException {
         String fileName = path.toAbsolutePath().toString();
         long lastReadPosition = fileReadPositions.getOrDefault(fileName, 0L);
-        
+        int linesThisTick = 0;
+        final int maxPerTick = 2000;
+
         try (RandomAccessFile file = new RandomAccessFile(path.toFile(), "r")) {
             if (lastReadPosition > file.length()) {
-                // 处理日志滚动/截断场景
                 lastReadPosition = 0L;
             }
             file.seek(lastReadPosition);
-            String line;
-            while ((line = file.readLine()) != null) {
-                synchronized (collectedLogs) {
-                    collectedLogs.add(line);
+            while (true) {
+                long mark = file.getFilePointer();
+                String line = file.readLine();
+                if (line == null) {
+                    fileReadPositions.put(fileName, file.getFilePointer());
+                    break;
+                }
+                if (!appendBufferedLine(line)) {
+                    // 缓冲满：位点停在本行之前，下一轮再读，避免永久丢行
+                    fileReadPositions.put(fileName, mark);
+                    break;
+                }
+                linesThisTick++;
+                fileReadPositions.put(fileName, file.getFilePointer());
+                if (linesThisTick >= maxPerTick) {
+                    break;
                 }
             }
-            long newPosition = file.getFilePointer();
-            fileReadPositions.put(fileName, newPosition);
+        }
+    }
+
+    private boolean appendBufferedLine(String line) {
+        synchronized (collectedLogs) {
+            if (collectedLogs.size() >= bufferMaxLines) {
+                droppedLines++;
+                if (droppedLines == 1 || droppedLines % 1000 == 0) {
+                    log.warn("[文件日志采集器] 缓冲已满 ({}), 已丢弃 {} 行，请检查调度排水",
+                            bufferMaxLines, droppedLines);
+                }
+                return false;
+            }
+            collectedLogs.add(line);
+            return true;
+        }
+    }
+
+    /** 启动种子：把已有日志文件位点推到 EOF，只跟增量。 */
+    private void seedEofPositions(Path directory, int depth) throws IOException {
+        if (!isAllowedDirectory(directory) || depth >= maxDepth) {
+            return;
+        }
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+            for (Path entry : stream) {
+                try {
+                    if (Files.isDirectory(entry)) {
+                        seedEofPositions(entry, depth + 1);
+                    } else if (Files.isRegularFile(entry) && isLogFile(entry)) {
+                        fileReadPositions.put(entry.toAbsolutePath().toString(), Files.size(entry));
+                    }
+                } catch (Exception e) {
+                    log.debug("[文件日志采集器] EOF 种子跳过: {}", entry, e);
+                }
+            }
         }
     }
 

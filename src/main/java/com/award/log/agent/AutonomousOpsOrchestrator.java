@@ -254,7 +254,6 @@ public class AutonomousOpsOrchestrator {
         report.put("readOnlySurface", surface == McpToolSurface.READ_ONLY);
 
         StringBuilder md = new StringBuilder("## Autonomous Ops Report\n\n");
-        md.append(OpsReportFormat.traceIdBlock(traceId));
 
         if (surface == McpToolSurface.READ_ONLY) {
             forceRemediate = false;
@@ -550,18 +549,47 @@ public class AutonomousOpsOrchestrator {
                     ? new LinkedHashSet<>(context.kinds())
                     : Set.of();
             return new AwmExecutionSummary(
-                    List.of("**AWM**\n" + run.toMarkdown()),
+                    List.of(buildAwmExecutionMessage(run)),
                     coveredKinds,
                     run.anyExecuted() ? 1 : 0,
                     run.anyPreviewed() ? 1 : 0,
                     0);
         }
         return new AwmExecutionSummary(
-                List.of("**AWM preview**\n" + run.toMarkdown()),
+                List.of("- 历史处置方案未形成可执行动作，已转入当前环境的内置处置逻辑。"),
                 Set.of(),
                 0,
                 0,
                 1);
+    }
+
+    private static String buildAwmExecutionMessage(WorkflowExecutionService.WorkflowRunResult run) {
+        if (run == null) {
+            return "- 未命中历史处置方案。";
+        }
+        int ok = Math.max(run.successfulStepCount(), run.handled() ? 1 : 0);
+        StringBuilder sb = new StringBuilder("- 已复用历史处置经验，完成 ");
+        sb.append(ok).append(" 个步骤");
+        if (run.anyExecuted()) {
+            sb.append("，包含真实执行动作");
+        } else if (run.anyPreviewed()) {
+            sb.append("，本轮只生成预览，未做真实写操作");
+        } else if (run.anyReadSucceeded()) {
+            sb.append("，本轮只做只读诊断");
+        }
+        sb.append("。");
+        if (run.stepResults() != null) {
+            List<String> highlights = run.stepResults().stream()
+                    .filter(WorkflowExecutionService.StepResult::success)
+                    .map(WorkflowExecutionService.StepResult::message)
+                    .filter(msg -> msg != null && !msg.isBlank())
+                    .limit(2)
+                    .toList();
+            if (!highlights.isEmpty()) {
+                sb.append("关键结果：").append(String.join("；", highlights)).append("。");
+            }
+        }
+        return sb.toString();
     }
 
     private Map<String, Object> buildAwmVariables(String domain,
@@ -911,15 +939,12 @@ public class AutonomousOpsOrchestrator {
         }
         AwmContext context = resolveAwmContext(findings);
         List<OpsWorkflow> workflows = workflowRetriever.retrieve(context.domain(), context.kinds(), userMessage, 2);
-        if (workflows.isEmpty()) {
+        if (workflows == null || workflows.isEmpty()) {
             return;
         }
-        md.append(OpsReportFormat.awmSectionHeader());
         for (OpsWorkflow workflow : workflows) {
             auditRecorder.addStep(steps, "workflow", "matched workflow=" + workflow.workflowId());
-            md.append(workflow.toMarkdownBrief()).append("\n\n");
         }
-        md.append(OpsReportFormat.awmSectionFooter());
     }
 
     private record Finding(String severity, String title, String detail, String kind) {

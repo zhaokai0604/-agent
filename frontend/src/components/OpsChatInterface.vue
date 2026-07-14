@@ -1,5 +1,17 @@
 ﻿<template>
   <div class="ops-page ops-chat-container ops-chat-container--agent">
+    <div v-if="systemPressureAlert" class="system-pressure-banner agent-chat-column" :class="`system-pressure-banner--${systemPressureAlert.level}`">
+      <div class="system-pressure-main">
+        <el-icon><WarningFilled /></el-icon>
+        <div class="system-pressure-text">
+          <strong>{{ systemPressureAlert.title }}</strong>
+          <span>{{ systemPressureAlert.detail }}</span>
+        </div>
+      </div>
+      <el-button type="warning" plain size="small" @click="sendQuickCommand(systemPressureAlert.command)">
+        查进程
+      </el-button>
+    </div>
     <div v-if="patrolPending?.hasPending" class="patrol-pending-banner agent-chat-column">
       <div class="patrol-pending-text">
         <strong>巡检待处理</strong>
@@ -120,7 +132,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, ArrowDown } from '@element-plus/icons-vue'
+import { Loading, ArrowDown, WarningFilled } from '@element-plus/icons-vue'
 import AgentWelcome from './agent/AgentWelcome.vue'
 import AgentComposer from './agent/AgentComposer.vue'
 import AgentQuickBar from './agent/AgentQuickBar.vue'
@@ -129,7 +141,8 @@ import { useComposerRouteHint } from '../composables/useComposerRouteHint'
 import { useAgentSession } from '../composables/useAgentSession'
 import {
   assistantChatStream,
-  getPatrolRemediationPending
+  getPatrolRemediationPending,
+  getPerformanceData
 } from '../api'
 import { generateHumanReadableResponse } from '../utils/mcpHumanReadable'
 import { mcpToolDisplayName, extractToolsUsedFromText } from '../utils/mcpToolsMeta'
@@ -160,7 +173,9 @@ const patrolContinueLoading = ref(false)
 const listeningVoice = ref(false)
 const confirmPlanIndex = ref(-1)
 const skipRemediationConfirm = ref(false)
+const performanceSnapshot = ref({ cpuUsage: null, memoryUsage: null })
 let speechRecognition = null
+// 性能快照仅挂载时取一次；持续刷新交给顶栏 TopPerformanceBar / WS
 
 const chatTurns = computed(() => {
   const turns = []
@@ -188,23 +203,96 @@ const streamStatusLabel = computed(() => {
   return '正在思考…'
 })
 
+const systemPressureAlert = computed(() => {
+  const cpu = Number(performanceSnapshot.value.cpuUsage)
+  const mem = Number(performanceSnapshot.value.memoryUsage)
+  const cpuHigh = !Number.isNaN(cpu) && cpu >= 85
+  const memHigh = !Number.isNaN(mem) && mem >= 80
+  if (!cpuHigh && !memHigh) return null
+  const bits = []
+  if (cpuHigh) bits.push(`CPU ${cpu.toFixed(1)}%`)
+  if (memHigh) bits.push(`内存 ${mem.toFixed(1)}%`)
+  const critical = cpu >= 92 || mem >= 90
+  return {
+    level: critical ? 'critical' : 'warn',
+    title: critical ? '本机资源高压' : '本机资源偏高',
+    detail: `${bits.join('，')}，建议优先定位高占用进程。`,
+    command: 'CPU或内存占用过高，帮我查一下高占用进程'
+  }
+})
+
+const nowTime = () => new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+
+function pushAssistantNotice (content) {
+  messages.value.push({
+    role: 'assistant',
+    content,
+    timestamp: nowTime()
+  })
+  scrollToBottom()
+}
+
+function applyPatrolPendingState (data) {
+  patrolPending.value = data && typeof data === 'object' ? data : { hasPending: false }
+}
+
 const refreshPatrolPending = async () => {
   try {
-    const data = await getPatrolRemediationPending()
-    patrolPending.value = data && typeof data === 'object' ? data : { hasPending: false }
+    const data = await getPatrolRemediationPending({ silent: true })
+    applyPatrolPendingState(data)
   } catch {
     patrolPending.value = { hasPending: false }
+  }
+}
+
+const refreshPerformanceSnapshot = async () => {
+  try {
+    const data = await getPerformanceData({ silent: true })
+    performanceSnapshot.value = {
+      cpuUsage: data?.cpuUsage ?? null,
+      memoryUsage: data?.memoryUsage ?? null
+    }
+  } catch {
+    /* keep previous snapshot */
   }
 }
 
 const continuePatrolPending = async () => {
   patrolContinueLoading.value = true
   try {
-    await sendQuickCommand('继续处理巡检待办')
     await refreshPatrolPending()
+    if (!patrolPending.value?.hasPending) {
+      pushAssistantNotice('当前没有待执行方案。')
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        '将按巡检待办在白名单与策略范围内执行写操作。是否确认落地？',
+        '确认继续处理巡检',
+        {
+          type: 'warning',
+          confirmButtonText: '确认执行',
+          cancelButtonText: '取消',
+          closeOnClickModal: false
+        }
+      )
+    } catch {
+      return
+    }
+    skipRemediationConfirm.value = true
+    try {
+      await sendQuickCommand('确认执行')
+    } finally {
+      skipRemediationConfirm.value = false
+    }
   } finally {
+    await refreshPatrolPending()
     patrolContinueLoading.value = false
   }
+}
+
+function handlePatrolPendingEvent (event) {
+  applyPatrolPendingState(event?.detail)
 }
 
 let patrolPollTimer = null
@@ -212,7 +300,9 @@ let patrolPollTimer = null
 onMounted(() => {
   loadSession()
   refreshPatrolPending()
+  refreshPerformanceSnapshot()
   patrolPollTimer = setInterval(refreshPatrolPending, 120000)
+  window.addEventListener('ops-patrol-pending-change', handlePatrolPendingEvent)
 })
 
 const clearAttachment = () => {
@@ -359,6 +449,9 @@ function applySseToAssistant (assistantIdx, payload) {
       msg.meta = { ...(msg.meta || {}), ...meta }
       if (Array.isArray(meta.ragHits)) msg.ragHits = meta.ragHits
       if (meta.writeConfirmed) msg.writeConfirmed = true
+      if (meta.securityOutcome === 'EXECUTED' || meta.toolAgentOutcome === 'EXECUTED') {
+        msg.writeConfirmed = true
+      }
     },
     onEvent: (event) => {
       const msg = messages.value[assistantIdx]
@@ -377,6 +470,9 @@ function applySseToAssistant (assistantIdx, payload) {
             awmWorkflowId: event.awmWorkflowId,
             awmWorkflowTitle: event.awmWorkflowTitle
           } : {})
+        }
+        if (event.securityOutcome === 'EXECUTED') {
+          msg.writeConfirmed = true
         }
       }
     },
@@ -400,7 +496,7 @@ function finalizeAssistantMessage (assistantIdx) {
       .replace(/^追踪\s*ID[：:]\s*`?[a-f0-9-]{8,}`?\s*\n?/gim, '')
   }
   if (!msg.ragHits?.length && msg.meta?.ragHits?.length) msg.ragHits = msg.meta.ragHits
-  if (msg.meta?.writeConfirmed) msg.writeConfirmed = true
+  if (msg.meta?.writeConfirmed || msg.meta?.securityOutcome === 'EXECUTED') msg.writeConfirmed = true
   if (!msg.writeConfirmed && hasActionableRemediationPlan(msg.content)) {
     msg.remediationPlan = parseRemediationPlan(msg.content)
   }
@@ -437,6 +533,11 @@ const confirmPlanFromMessage = async (index) => {
   confirmPlanIndex.value = index
   try {
     await confirmRemediationDialog()
+    const prior = messages.value[index]
+    if (prior) {
+      prior.writeConfirmed = true
+      prior.meta = { ...(prior.meta || {}), writeConfirmed: true }
+    }
     skipRemediationConfirm.value = true
     inputMessage.value = '确认执行'
     await handleSend()
@@ -527,8 +628,12 @@ const runNaturalLanguageStream = async (message) => {
   } catch (e) {
     if (isGenerationCancelled(token) || e?.name === 'AbortError') return
     console.error('自然语言对话失败', e)
-    messages.value[assistantIdx].content =
-      '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
+    const errHint =
+      '\n\n—\n连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
+    const existing = (messages.value[assistantIdx].content || '').trim()
+    messages.value[assistantIdx].content = existing
+      ? existing + errHint
+      : '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
   } finally {
     if (!isGenerationCancelled(token)) {
       streaming.value = false
@@ -602,7 +707,7 @@ const handleSend = async () => {
 
 const sendQuickCommand = (command) => {
   inputMessage.value = command
-  handleSend()
+  return handleSend()
 }
 
 function applyPrefill(text) {
@@ -616,6 +721,7 @@ onUnmounted(() => {
   if (patrolPollTimer) {
     clearInterval(patrolPollTimer)
   }
+  window.removeEventListener('ops-patrol-pending-change', handlePatrolPendingEvent)
   if (speechRecognition) {
     try {
       speechRecognition.stop()
@@ -778,6 +884,53 @@ defineExpose({ applyPrefill, clearChat })
   max-width: 100%;
 }
 
+.system-pressure-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px auto;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.system-pressure-banner--critical {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.system-pressure-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.system-pressure-main .el-icon {
+  flex-shrink: 0;
+  font-size: 18px;
+}
+
+.system-pressure-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.system-pressure-text span {
+  color: inherit;
+  opacity: 0.82;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-stream-status {
   padding: 4px 0 8px;
 }
@@ -796,4 +949,3 @@ defineExpose({ applyPrefill, clearChat })
 }
 
 </style>
-

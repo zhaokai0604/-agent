@@ -90,8 +90,8 @@ public class LogCleanupTool extends AbstractCommandExecutor {
             if (result.output() == null || result.output().isBlank()) {
                 long duration = System.currentTimeMillis() - startTime;
                 String data = String.format(
-                        "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"message\":\"没有符合条件的陈旧日志文件\"}",
-                        isDryRun ? "DRY-RUN" : "DELETE", jsonEscape(targetPath), targetDays);
+                        "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"message\":\"没有符合条件的陈旧日志文件\"}",
+                        isDryRun ? "DRY-RUN" : "NOOP", jsonEscape(targetPath), targetDays);
                 return buildSuccessResponse(data, duration, false);
             }
 
@@ -171,8 +171,8 @@ public class LogCleanupTool extends AbstractCommandExecutor {
         if (fileList.isEmpty()) {
             long duration = System.currentTimeMillis() - startTime;
             String data = String.format(
-                    "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"platform\":\"windows\"}",
-                    isDryRun ? "DRY-RUN" : "DELETE", jsonEscape(targetPath), targetDays);
+                    "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"platform\":\"windows\"}",
+                    isDryRun ? "DRY-RUN" : "NOOP", jsonEscape(targetPath), targetDays);
             return buildSuccessResponse(data, duration, false);
         }
         LogSafetyClassifier.FilterResult filtered = logSafetyClassifier.filterDeletable(fileList);

@@ -1,6 +1,9 @@
 package com.award.log.agent;
 
+import com.award.log.service.impl.UnifiedAssistantService;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,7 +42,21 @@ class OpsIntentRouterTest {
     void generalHealthCheckRoutesAutonomous() {
         assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("帮我全面检查系统状态"));
         assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("检查一下本机环境是否正常"));
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("帮我检查电脑"));
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("电脑体检一下"));
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("看看电脑状态是否正常"));
         assertTrue(router.shouldOrchestrate("健康检查"));
+    }
+
+    @Test
+    void contextualResolveUsesHistoryOnlyForOpsFollowup() {
+        var history = List.of(
+                new UnifiedAssistantService.ChatTurn("user", "帮我全面检查系统状态"),
+                new UnifiedAssistantService.ChatTurn("assistant", "巡检完成")
+        );
+        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolveFromContext("可以的", history));
+        assertEquals(OpsIntentRouter.Playbook.NONE, router.resolveFromContext("总结一下", history));
+        assertFalse(router.shouldOrchestrateFromContext("总结一下", history));
     }
 
     @Test
@@ -55,10 +72,14 @@ class OpsIntentRouterTest {
 
     @Test
     void forceRemediateOnDirectCleanupPhrases() {
-        assertTrue(router.forceRemediate("清理垃圾"));
-        assertTrue(router.forceRemediate("帮我清理磁盘临时文件"));
+        assertTrue(router.forceRemediate("确认执行"));
+        assertTrue(router.forceRemediate("直接删除"));
         assertTrue(router.forceRemediate("删除 C:\\Users\\Administrator\\AppData\\Local\\Temp\\foo"));
-        assertTrue(router.forceRemediate("磁盘满了清理临时"));
+        assertTrue(router.forceRemediate("立即清理"));
+        // 「帮我清理」仅表意图，须二次确认后才真写
+        assertFalse(router.forceRemediate("清理垃圾"));
+        assertFalse(router.forceRemediate("帮我清理磁盘临时文件"));
+        assertFalse(router.forceRemediate("磁盘满了清理临时"));
     }
 
     @Test

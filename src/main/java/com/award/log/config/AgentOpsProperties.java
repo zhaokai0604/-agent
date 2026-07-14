@@ -101,18 +101,31 @@ public class AgentOpsProperties {
                 "C:/inetpub/logs",
                 "C:/ProgramData/logs",
                 "C:/ProgramData/Microsoft/Windows/WER/ReportArchive",
-                "C:/ProgramData/Microsoft/Windows/WER/ReportQueue"
+                "C:/ProgramData/Microsoft/Windows/WER/ReportQueue",
+                "C:/Users/Administrator/AppData/Local/Temp",
+                "C:/Windows/Temp",
+                "C:/Temp",
+                "D:/Temp",
+                "E:/Temp",
+                "F:/Temp",
+                "logs"
         );
 
         private List<String> windowsCleanRoots = list(
-                "C:/Temp"
+                "C:/Users/Administrator/AppData/Local/Temp",
+                "C:/Windows/Temp",
+                "C:/Temp",
+                "D:/Temp",
+                "E:/Temp",
+                "F:/Temp"
         );
 
         private List<String> windowsLogCleanupRoots = list(
                 "C:/Windows/Logs",
                 "C:/Windows/System32/winevt/Logs",
                 "C:/inetpub/logs",
-                "C:/ProgramData/logs"
+                "C:/ProgramData/logs",
+                "logs"
         );
 
         private List<String> windowsConfigPrefixes = list(

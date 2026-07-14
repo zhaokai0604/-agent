@@ -125,18 +125,53 @@ public class StorageStrategyServiceImpl implements StorageStrategyService {
 
     @Override
     public int archiveLogs(StorageLevel fromLevel, StorageLevel toLevel, LocalDateTime beforeTime) {
-        log.info("[存储策略] 执行日志归档: {} -> {}, 归档时间点: {}", fromLevel.getName(), toLevel.getName(), beforeTime);
-        int archivedCount = 0;
-
-        try {
-            // 这里需要实现从一个存储级别到另一个存储级别的归档逻辑
-            // 由于实现复杂度较高，这里只提供框架
-            log.info("[存储策略] 归档完成，成功归档 {} 条日志", archivedCount);
-        } catch (Exception e) {
-            log.error("[存储策略] 归档日志失败", e);
+        Path fromDir = Paths.get(dirForLevel(fromLevel));
+        Path toDir = Paths.get(dirForLevel(toLevel));
+        if (!Files.isDirectory(fromDir)) {
+            log.warn("[存储策略] 归档源目录不存在: {}", fromDir);
+            return 0;
         }
+        try {
+            Files.createDirectories(toDir);
+        } catch (IOException e) {
+            log.error("[存储策略] 创建归档目标目录失败: {}", toDir, e);
+            return 0;
+        }
+        int moved = 0;
+        java.time.Instant cutoff = beforeTime.atZone(java.time.ZoneId.systemDefault()).toInstant();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(fromDir)) {
+            for (Path path : stream) {
+                if (!Files.isRegularFile(path)) {
+                    continue;
+                }
+                try {
+                    java.nio.file.attribute.FileTime ft = Files.getLastModifiedTime(path);
+                    if (ft.toInstant().isBefore(cutoff)) {
+                        Path target = toDir.resolve(path.getFileName());
+                        if (Files.exists(target)) {
+                            target = toDir.resolve(System.currentTimeMillis() + "_" + path.getFileName());
+                        }
+                        Files.move(path, target, StandardCopyOption.REPLACE_EXISTING);
+                        moved++;
+                    }
+                } catch (Exception e) {
+                    log.warn("[存储策略] 归档移动失败: {} -> {}: {}", path, toDir, e.getMessage());
+                }
+            }
+        } catch (IOException e) {
+            log.error("[存储策略] 归档扫描失败 {} -> {}", fromLevel, toLevel, e);
+        }
+        log.info("[存储策略] 归档完成 {} -> {} before={}，搬迁 {} 个文件",
+                fromLevel.getName(), toLevel.getName(), beforeTime, moved);
+        return moved;
+    }
 
-        return archivedCount;
+    private String dirForLevel(StorageLevel level) {
+        return switch (level) {
+            case HOT -> HOT_DIR;
+            case WARM -> WARM_DIR;
+            case COLD -> COLD_DIR;
+        };
     }
 
     @Override
@@ -177,20 +212,17 @@ public class StorageStrategyServiceImpl implements StorageStrategyService {
         log.info("[存储策略] 执行定时归档任务");
 
         LocalDateTime now = LocalDateTime.now();
-        
-        // 热数据 -> 温数据
+
         LocalDateTime hotToWarmTime = now.minusDays(StorageLevel.HOT.getRetentionDays());
-        archiveLogs(StorageLevel.HOT, StorageLevel.WARM, hotToWarmTime);
+        int hotMoved = archiveLogs(StorageLevel.HOT, StorageLevel.WARM, hotToWarmTime);
 
-        // 温数据 -> 冷数据
         LocalDateTime warmToColdTime = now.minusDays(StorageLevel.WARM.getRetentionDays());
-        archiveLogs(StorageLevel.WARM, StorageLevel.COLD, warmToColdTime);
+        int warmMoved = archiveLogs(StorageLevel.WARM, StorageLevel.COLD, warmToColdTime);
 
-        // 清理冷数据
         LocalDateTime coldCleanupTime = now.minusDays(StorageLevel.COLD.getRetentionDays());
-        cleanupExpiredLogs(StorageLevel.COLD, coldCleanupTime);
+        int cleaned = cleanupExpiredLogs(StorageLevel.COLD, coldCleanupTime);
 
-        log.info("[存储策略] 定时归档任务执行完成");
+        log.info("[存储策略] 定时归档结束：热→温 {}，温→冷 {}，冷清理 {}", hotMoved, warmMoved, cleaned);
     }
 
     @Override

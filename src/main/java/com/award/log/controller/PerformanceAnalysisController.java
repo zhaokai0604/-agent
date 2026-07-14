@@ -23,7 +23,8 @@ import java.util.Map;
  * 提供性能数据的记录、查询和分析功能
  */
 @Slf4j
-@Tag(name = "PerformanceAnalysis")
+@Deprecated(since = "delivery-2026-07", forRemoval = false)
+@Tag(name = "PerformanceAnalysis", description = "非默认交付面：扩展细接口；演示统计用 /admin/statistics/performance，见 docs/deployment/交付API白名单.md")
 @RestController
 @RequestMapping("/api/performance")
 public class PerformanceAnalysisController {

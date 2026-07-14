@@ -200,6 +200,15 @@ CREATE TABLE IF NOT EXISTS `decision_feedback` (
   `reviewer` varchar(64) DEFAULT NULL,
   `remark` varchar(500) DEFAULT NULL,
   `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+  `log_content` text DEFAULT NULL,
+  `log_level` varchar(32) DEFAULT NULL,
+  `log_template` varchar(255) DEFAULT NULL,
+  `model_confidence` double DEFAULT NULL,
+  `is_trained` tinyint(1) DEFAULT '0',
+  `error_rate_1m` double DEFAULT NULL,
+  `error_1m` double DEFAULT NULL,
+  `total_1m` double DEFAULT NULL,
+  `interval_ms` double DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_decision_feedback` (`decision_id`)
 );

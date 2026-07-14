@@ -523,10 +523,12 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
             if (info != null && info.has("result")) {
                 int existing = info.path("result").path("config").path("params").path("vectors").path("size").asInt(-1);
                 if (existing > 0 && existing != dim) {
-                    log.warn("[知识库] 向量维度不匹配（{} vs {}），重建集合 {}", existing, dim, collectionName);
-                    deleteJson("/collections/" + collectionName);
-                    collectionReady = null;
-                    createCollectionOnce(dim);
+                    log.error("[知识库] 向量维度不匹配（集合={} vs 配置={}），拒绝自动删除集合 {}。"
+                                    + "请手工迁移或更换集合名后再启动。",
+                            existing, dim, collectionName);
+                    collectionReady = false;
+                    throw new IllegalStateException("知识库向量维度不匹配（" + existing + " vs " + dim
+                            + "），已禁止自动删集合以避免数据丢失");
                 } else {
                     collectionReady = true;
                     collectionProbeAtMs = System.currentTimeMillis();

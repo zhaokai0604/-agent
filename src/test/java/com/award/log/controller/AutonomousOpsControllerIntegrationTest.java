@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -70,10 +71,17 @@ class AutonomousOpsControllerIntegrationTest {
                 "alarmTotal24h", 3));
         when(opsAutoRemediationService.getLastSummary()).thenReturn(new LinkedHashMap<>(Map.of(
                 "traceId", "trace-ops-1",
-                "actions", List.of(Map.of("toolName", "CleanTempTool")))));
+                "status", "EXECUTED_WITH_PENDING",
+                "successCount", 1,
+                "pendingCount", 1,
+                "actions", List.of(Map.of("toolName", "CleanTempTool", "success", true)))));
         when(opsAutoRemediationService.getPendingProposalView("system")).thenReturn(new LinkedHashMap<>(Map.of(
                 "hasPending", true,
+                "steps", List.of(Map.of("kind", "RESTART_SERVICE")),
                 "summary", "restart nginx after review")));
+        when(opsAutoRemediationService.getRemediationCoverage()).thenReturn(List.of(Map.of(
+                "code", "disk",
+                "remediation", Map.of("lane", "MIXED"))));
 
         mockMvc.perform(post("/api/ops/autonomous/run")
                         .param("readOnly", "true")
@@ -84,8 +92,11 @@ class AutonomousOpsControllerIntegrationTest {
                 .andExpect(jsonPath("$.data.traceId").value("trace-ops-1"))
                 .andExpect(jsonPath("$.data.report.findings[0].type").value("DISK_PRESSURE"))
                 .andExpect(jsonPath("$.data.report.pending.hasPending").value(true))
-                .andExpect(jsonPath("$.data.markdown", containsString("Pending confirmation exists")))
-                .andExpect(jsonPath("$.data.markdown", containsString("trace-ops-1")));
+                .andExpect(jsonPath("$.data.report.coverage[0].remediation.lane").value("MIXED"))
+                .andExpect(jsonPath("$.data.markdown", containsString("已自动执行，仍有待确认")))
+                .andExpect(jsonPath("$.data.markdown", containsString("策略车道")))
+                .andExpect(jsonPath("$.data.markdown", containsString("存在待确认的后续处置")))
+                .andExpect(jsonPath("$.data.markdown", not(containsString("trace-ops-1"))));
 
         verify(opsPatrolService).runPatrolCycle();
         verifyNoInteractions(assistantOrchestrator);

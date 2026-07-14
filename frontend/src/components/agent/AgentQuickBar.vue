@@ -1,6 +1,6 @@
 <template>
   <div v-if="visible" class="agent-quick-bar">
-    <span class="agent-quick-bar__label">Agent 快捷</span>
+    <span class="agent-quick-bar__label">常用</span>
     <button
       v-for="item in actions"
       :key="item.cmd"
@@ -24,12 +24,12 @@ const props = defineProps({
 
 defineEmits(['select'])
 
+/** 只保留能真实落到工具链、答辩常演示的短指令；去掉空口号与过窄场景 */
 const actions = [
-  { label: '运维管家', cmd: '帮我运维管家，扫描磁盘和热点目录' },
-  { label: '直接扫描磁盘', cmd: '直接扫描磁盘占用和热点目录' },
-  { label: '整理照片文件', cmd: 'C盘空间不够，合照要保留，帮我扫描分析一下' },
   { label: '一键巡检', cmd: '一键巡检本机健康状态' },
-  { label: '查 CPU/进程', cmd: 'CPU占用过高，看看什么进程' },
+  { label: '查磁盘', cmd: '检查磁盘使用情况并扫描占用热点' },
+  { label: '查负载进程', cmd: '查看系统负载和占用最高的进程' },
+  { label: '看最近日志', cmd: '分析最近的系统日志' },
   { label: '确认执行', cmd: '确认执行' }
 ]
 

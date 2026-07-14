@@ -32,9 +32,9 @@ app:
 spring:
   application:
     name: award-log
-  # 任意 active profile 都会合并本机 application-local.yml（QQ 授权码等，文件已在 .gitignore）
+  # 任意 active profile 都会合并本机 application-local.yml（DB/AI 密钥等，文件已在 .gitignore）
   config:
-    import: optional:classpath:application-local.yml
+    import: optional:classpath:application-local.yml,optional:file:./application-local.yml,optional:file:./config/application-local.yml
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
     # 麒麟 V11 + LoongArch 生产：prod-kylin = prod + kylin（安全校验 + 路径/命令探测）
@@ -54,10 +54,20 @@ spring:
       matching-strategy: ant_path_matcher
   servlet:
     multipart:
-      max-file-size: 200MB
-      max-request-size: 200MB
+      # 过大文件会在分析链路全量进堆；交付默认收紧，麒麟可用 env 再放宽
+      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:50MB}
+      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:50MB}
+
+  # 避免默认单线程调度池被巡检/训练堵住采集排水
+  task:
+    scheduling:
+      pool:
+        size: ${SPRING_TASK_SCHEDULING_POOL_SIZE:4}
+      shutdown:
+        await-termination: true
+        await-termination-period: 30s
   
-  # Database：MariaDB 10.6+（jdbc:mariadb + org.mariadb.jdbc.Driver）
+  # Database：MariaDB/MySQL 双驱动；默认 MariaDB，MySQL 用 application-local.yml 或 DB_DRIVER/DB_URL 切换
   datasource:
     driver-class-name: ${DB_DRIVER:org.mariadb.jdbc.Driver}
     url: ${DB_URL:jdbc:mariadb://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
@@ -75,7 +85,7 @@ spring:
       jedis:
         pool:
           max-active: 8
-          max-wait: -1
+          max-wait: 3000
           max-idle: 8
           min-idle: 0
 
@@ -136,7 +146,7 @@ spring:
       buffer-memory: 33554432
       linger: 1
     listener:
-      type: batch
+      type: single
       concurrency: 3
     template:
       default-topic: raw-logs
@@ -146,6 +156,12 @@ log:
   analysis:
     max-concurrent-tasks: ${LOG_ANALYSIS_MAX_CONCURRENT:4}
     detail-batch-size: ${LOG_ANALYSIS_DETAIL_BATCH:1000}
+    # 单次分析最大读取行数，超出截断并在报告中标注（大数据防 OOM）
+    max-lines: ${LOG_ANALYSIS_MAX_LINES:300000}
+    # 报告默认只返回异常抽样，全量走 /details 分页
+    report-anomaly-limit: ${LOG_ANALYSIS_REPORT_ANOMALY_LIMIT:200}
+    # 重新生成 CSV/HTML 时从 DB 拉取的上限
+    export-reload-limit: ${LOG_ANALYSIS_EXPORT_RELOAD_LIMIT:100000}
   elasticsearch:
     async:
       enabled: ${LOG_ES_ASYNC_ENABLED:true}
@@ -185,6 +201,10 @@ log:
       source-id: file-watcher
       dispatch-enabled: true
       dispatch-interval-ms: 5000
+      # 单采集器内存缓冲硬上限（行），超额丢弃防止调度卡住时 OOM
+      buffer-max-lines: ${LOG_COLLECTOR_BUFFER_MAX_LINES:8000}
+      # 启动时从文件末尾跟读，不回放历史全文
+      start-at-eof: ${LOG_COLLECTOR_START_AT_EOF:true}
     stream:
       error-rate-threshold: 0.30
       min-sample-size: 20
@@ -409,8 +429,11 @@ ops:
     history-retention-days: ${OPS_PATROL_HISTORY_RETENTION_DAYS:30}
     history-cleanup-cron: ${OPS_PATROL_HISTORY_CLEANUP_CRON:0 15 4 * * ?}
     disk-hotspot-top-n: ${OPS_PATROL_DISK_HOTSPOT_N:5}
-    disk-hotspot-max-depth: ${OPS_PATROL_DISK_HOTSPOT_DEPTH:3}
-    disk-hotspot-visit-budget: ${OPS_PATROL_DISK_HOTSPOT_BUDGET:12000}
+    disk-hotspot-max-depth: ${OPS_PATROL_DISK_HOTSPOT_DEPTH:2}
+    disk-hotspot-visit-budget: ${OPS_PATROL_DISK_HOTSPOT_BUDGET:2500}
+    disk-hotspot-child-limit: ${OPS_PATROL_DISK_HOTSPOT_CHILD_LIMIT:120}
+    disk-hotspot-cache-ms: ${OPS_PATROL_DISK_HOTSPOT_CACHE_MS:120000}
+    disk-hotspot-command-timeout-ms: ${OPS_PATROL_DISK_HOTSPOT_TIMEOUT_MS:8000}
     error-alarm-min: ${OPS_PATROL_ERROR_ALARM_MIN:3}
     anomaly-min-delta: ${OPS_PATROL_ANOMALY_MIN_DELTA:5}
     anomaly-baseline-ema-alpha: ${OPS_PATROL_ANOMALY_EMA:0.35}

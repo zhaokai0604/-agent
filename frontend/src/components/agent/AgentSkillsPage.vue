@@ -147,7 +147,9 @@ async function executeNow(tool) {
       success: data.success,
       duration: data.duration || 0,
       traceId: data.traceId,
-      raw: data.resultSummary ?? data.data ?? data
+      writeMismatch: data.writeMismatch === true,
+      mode: typeof data?.data?.mode === 'string' ? data.data.mode : data.mode,
+      raw: data
     })
   } finally {
     executing.value = null

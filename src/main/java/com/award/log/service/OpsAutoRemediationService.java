@@ -284,6 +284,7 @@ public class OpsAutoRemediationService {
             }
             if (System.currentTimeMillis() > pendingExpiresAtMs) {
                 clearPendingLocked();
+                broadcastPendingCleared(LocalDateTime.now().format(TS), "EXPIRED");
                 return Map.of("success", false, "error", "方案已过期，请等待下一轮巡检");
             }
             if (pendingClaimedBy == null) {
@@ -301,23 +302,60 @@ public class OpsAutoRemediationService {
             clearPendingLocked();
         }
         if (stepsCopy.isEmpty()) {
+            broadcastPendingCleared(LocalDateTime.now().format(TS), "EMPTY_PLAN");
             return Map.of("success", false, "error", "方案中无可执行步骤");
         }
         String ts = LocalDateTime.now().format(TS);
         Map<String, Object> exec = executeSteps(stepsCopy, ts, digestCopy, findingsCountSnap, "USER_CONFIRMED");
         armCooldownsForSteps(stepsCopy, System.currentTimeMillis());
-        exec.put("success", true);
+        boolean allOk = true;
+        int okCount = 0;
+        int total = 0;
+        Object actionsObj = exec.get("actions");
+        if (actionsObj instanceof List<?> actions) {
+            total = actions.size();
+            for (Object item : actions) {
+                if (item instanceof Map<?, ?> action) {
+                    if (Boolean.TRUE.equals(action.get("success"))) {
+                        okCount++;
+                    } else {
+                        allOk = false;
+                    }
+                }
+            }
+            if (total == 0) {
+                allOk = false;
+            }
+        } else {
+            allOk = Boolean.TRUE.equals(exec.get("success"));
+        }
+        exec.put("success", allOk);
+        exec.put("successCount", okCount);
+        exec.put("actionCount", total);
         exec.put("source", "USER_CONFIRMED");
+        if (allOk) {
+            broadcastPendingCleared(ts, "CONFIRMED_EXECUTED");
+        } else {
+            broadcastPendingCleared(ts, okCount > 0 ? "CONFIRMED_PARTIAL" : "CONFIRMED_FAILED");
+        }
         return exec;
     }
 
     public void afterPatrol(Map<String, Object> correlation, List<Map<String, Object>> findings) {
+        String ts = LocalDateTime.now().format(TS);
+        int findingsCount = findings == null ? 0 : findings.size();
         if (!enabled) {
             lastRemediationCoverage = List.of();
+            clearPendingProposalAndBroadcast(ts, "DISABLED");
+            finalizePatrolState(ts, -1.0, findingsCount, 0, 0,
+                    "DISABLED", "DISABLED", "自动修复已关闭。");
             return;
         }
         if (correlation == null || correlation.isEmpty()) {
             lastRemediationCoverage = List.of();
+            clearPendingProposalAndBroadcast(ts, "INVALID_CORRELATION");
+            finalizePatrolState(ts, -1.0, findingsCount, 0, 0,
+                    "PATROL", "INVALID_CORRELATION", "本轮巡检缺少关联指标，未生成写类修复计划。");
             return;
         }
 
@@ -336,17 +374,23 @@ public class OpsAutoRemediationService {
         lastRemediationCoverage = buildRemediationCoverage(findings, planSteps, hybridSplit, mode, diskMetricsOk);
 
         if (!diskMetricsOk) {
+            clearPendingProposalAndBroadcast(ts, "INVALID_METRICS");
+            finalizePatrolState(ts, disk, findingsCount, planSteps.size(), 0,
+                    mode, "INVALID_METRICS", "磁盘使用率指标异常或未采集，未执行自动修复。");
             return;
         }
 
         if (planSteps.isEmpty()) {
+            clearPendingProposalAndBroadcast(ts, "NO_ACTION");
+            finalizePatrolState(ts, disk, findingsCount, 0, 0,
+                    mode, "NO_ACTION", "本轮没有匹配到可编排的自动修复步骤。");
             return;
         }
 
-        String ts = LocalDateTime.now().format(TS);
-
         if (MODE_CONFIRM_FIRST.equals(mode)) {
             offerPendingIfNeeded(planSteps, correlation, findings, disk, cpu, mem, codes, ts, "", "");
+            finalizePatrolState(ts, disk, findingsCount, planSteps.size(), planSteps.size(),
+                    mode, "PENDING_CONFIRMATION", "CONFIRM_FIRST 模式下，本轮修复步骤已进入待确认。");
             return;
         }
 
@@ -355,12 +399,15 @@ public class OpsAutoRemediationService {
                 hybridSplit = splitByPatrolRisk(planSteps);
             }
             int autoCount = 0;
+            boolean autoSkippedByCooldown = false;
             if (!hybridSplit.low().isEmpty()) {
                 long now = System.currentTimeMillis();
                 if (cooldownAllows(hybridSplit.low(), now)) {
                     executeSteps(hybridSplit.low(), ts, correlation, findings == null ? 0 : findings.size(), "HYBRID_AUTO");
                     armCooldownsForSteps(hybridSplit.low(), now);
                     autoCount = hybridSplit.low().size();
+                } else {
+                    autoSkippedByCooldown = true;
                 }
             }
             if (!hybridSplit.high().isEmpty()) {
@@ -369,21 +416,90 @@ public class OpsAutoRemediationService {
                         : "";
                 String fpSuffix = "|H:" + highStepsSignature(hybridSplit.high());
                 offerPendingIfNeeded(hybridSplit.high(), correlation, findings, disk, cpu, mem, codes, ts, prefix, fpSuffix);
+                if (autoCount > 0) {
+                    markPendingOnLastSummary(hybridSplit.high().size());
+                } else {
+                    String reason = autoSkippedByCooldown
+                            ? "高风险步骤已进入待确认；低风险步骤仍在冷却期，未重复执行。"
+                            : "高风险步骤已进入待确认，需确认后执行。";
+                    finalizePatrolState(ts, disk, findingsCount, planSteps.size(), hybridSplit.high().size(),
+                            mode, "PENDING_CONFIRMATION", reason);
+                }
+                return;
             }
+            if (autoCount > 0) {
+                return;
+            }
+            if (autoSkippedByCooldown) {
+                finalizePatrolState(ts, disk, findingsCount, planSteps.size(), 0,
+                        mode, "SKIPPED_COOLDOWN", "低风险自动修复步骤仍在冷却期，未重复执行。");
+                return;
+            }
+            finalizePatrolState(ts, disk, findingsCount, planSteps.size(), 0,
+                    mode, "MANUAL_REVIEW", "本轮步骤未被安全门或治理策略放入自动/待确认车道。");
             return;
         }
 
         // IMMEDIATE：按更严条件过滤后再执行，并应用冷却
         List<Map<String, Object>> toRun = filterStepsForImmediate(planSteps, disk, cpu, codes);
         if (toRun.isEmpty()) {
+            finalizePatrolState(ts, disk, findingsCount, planSteps.size(), 0,
+                    mode, "NO_IMMEDIATE_ACTION", "IMMEDIATE 模式下未满足立即执行条件。");
             return;
         }
         long now = System.currentTimeMillis();
         if (!cooldownAllows(toRun, now)) {
+            finalizePatrolState(ts, disk, findingsCount, toRun.size(), 0,
+                    mode, "SKIPPED_COOLDOWN", "立即执行步骤仍在冷却期，未重复执行。");
             return;
         }
         executeSteps(toRun, ts, correlation, findings == null ? 0 : findings.size(), "IMMEDIATE");
         armCooldownsForSteps(toRun, now);
+    }
+
+    private boolean clearPendingProposal() {
+        synchronized (pendingLock) {
+            boolean hadPending = pendingProposalId != null;
+            clearPendingLocked();
+            return hadPending;
+        }
+    }
+
+    private void clearPendingProposalAndBroadcast(String ts, String reason) {
+        if (clearPendingProposal()) {
+            broadcastPendingCleared(ts, reason);
+        }
+    }
+
+    private void finalizePatrolState(String ts,
+                                     double disk,
+                                     int findingsCount,
+                                     int plannedCount,
+                                     int pendingCount,
+                                     String source,
+                                     String status,
+                                     String reason) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("timestamp", ts);
+        summary.put("diskUsagePct", disk);
+        summary.put("findingsCount", findingsCount);
+        summary.put("plannedCount", plannedCount);
+        summary.put("pendingCount", pendingCount);
+        summary.put("actions", List.of());
+        summary.put("source", source);
+        summary.put("status", status);
+        summary.put("reason", reason);
+        lastSummary = summary;
+    }
+
+    private void markPendingOnLastSummary(int pendingCount) {
+        if (pendingCount <= 0 || lastSummary == null || lastSummary.isEmpty()) {
+            return;
+        }
+        Map<String, Object> summary = new LinkedHashMap<>(lastSummary);
+        summary.put("pendingCount", pendingCount);
+        summary.put("status", "EXECUTED_WITH_PENDING");
+        lastSummary = summary;
     }
 
     private void offerPendingIfNeeded(
@@ -740,18 +856,30 @@ public class OpsAutoRemediationService {
             }
         }
         double disk = correlation == null ? -1.0 : asDouble(correlation.get("diskUsagePct"));
-        persistExecutionAudit(traceId, steps, correlation, findingsCount, source, actions, startTime);
-        finalizeSummary(ts, disk, findingsCount, actions, source, traceId);
+        String resultSummary = summarizeActions(actions);
+        persistExecutionAudit(traceId, steps, correlation, findingsCount, source, actions, resultSummary, startTime);
+        finalizeSummary(ts, disk, findingsCount, actions, source, traceId, resultSummary);
         broadcastRemediationDone(ts, lastSummary);
         Map<String, Object> res = new LinkedHashMap<>();
         res.put("timestamp", ts);
         res.put("traceId", traceId);
         res.put("actions", actions);
+        res.put("resultSummary", resultSummary);
         return res;
     }
 
     private void finalizeSummary(String ts, double disk, int findingsCount,
-                                 Object actions, String source, String traceId) {
+                                  Object actions, String source, String traceId, String resultSummary) {
+        int actionCount = 0;
+        int successCount = 0;
+        if (actions instanceof List<?> list) {
+            actionCount = list.size();
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> action && Boolean.TRUE.equals(action.get("success"))) {
+                    successCount++;
+                }
+            }
+        }
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("timestamp", ts);
         summary.put("diskUsagePct", disk);
@@ -759,6 +887,11 @@ public class OpsAutoRemediationService {
         summary.put("actions", actions);
         summary.put("source", source);
         summary.put("traceId", traceId);
+        summary.put("resultSummary", resultSummary);
+        summary.put("status", actionCount == successCount ? "EXECUTED" : "EXECUTION_PARTIAL");
+        summary.put("executedCount", actionCount);
+        summary.put("successCount", successCount);
+        summary.put("pendingCount", 0);
         lastSummary = summary;
     }
 
@@ -769,13 +902,14 @@ public class OpsAutoRemediationService {
             int findingsCount,
             String source,
             List<Map<String, Object>> actions,
+            String resultSummary,
             long startTime) {
         List<Map<String, Object>> traceSteps = new ArrayList<>();
         traceSteps.add(TraceService.cotStep(1, "接收", "接收巡检修复执行请求，source=" + source));
         traceSteps.add(TraceService.cotStep(2, "感知", "关联快照: " + truncate(String.valueOf(correlation), 1200)));
         traceSteps.add(TraceService.cotStep(3, "推理",
                 "计划步骤数=" + (planSteps == null ? 0 : planSteps.size()) + "，findingsCount=" + findingsCount));
-        traceSteps.add(TraceService.cotStep(4, "执行", summarizeActions(actions)));
+        traceSteps.add(TraceService.cotStep(4, "执行", resultSummary));
         traceSteps.add(TraceService.step("plan", truncate(String.valueOf(planSteps), 2000)));
         traceSteps.add(TraceService.step("actions", truncate(String.valueOf(actions), 2000)));
 
@@ -789,7 +923,7 @@ public class OpsAutoRemediationService {
                 securityOutcome,
                 "PatrolRemediation",
                 allOk,
-                summarizeActions(actions),
+                resultSummary,
                 traceSteps,
                 System.currentTimeMillis() - startTime,
                 currentRequester(),
@@ -816,13 +950,128 @@ public class OpsAutoRemediationService {
     }
 
     private static String summarizeActions(List<Map<String, Object>> actions) {
+        if (actions == null || actions.isEmpty()) {
+            return "本次没有执行任何修复动作。";
+        }
         int successCount = 0;
+        List<String> detail = new ArrayList<>();
         for (Map<String, Object> action : actions) {
             if (Boolean.TRUE.equals(action.get("success"))) {
                 successCount++;
             }
+            detail.add(summarizeAction(action));
         }
-        return "actions=" + actions.size() + ", success=" + successCount + ", detail=" + truncate(String.valueOf(actions), 1200);
+        int failedCount = actions.size() - successCount;
+        StringBuilder sb = new StringBuilder();
+        sb.append("已执行巡检修复动作 ").append(actions.size()).append(" 个，成功 ")
+                .append(successCount).append(" 个");
+        if (failedCount > 0) {
+            sb.append("，失败 ").append(failedCount).append(" 个");
+        }
+        sb.append("。");
+        if (!detail.isEmpty()) {
+            sb.append(String.join("；", detail));
+            sb.append("。");
+        }
+        return truncate(sb.toString(), 1200);
+    }
+
+    private static String summarizeAction(Map<String, Object> action) {
+        if (action == null || action.isEmpty()) {
+            return "未知动作未返回结果";
+        }
+        String tool = String.valueOf(action.getOrDefault("tool", "未知工具"));
+        String target = String.valueOf(action.getOrDefault("path", ""));
+        boolean ok = Boolean.TRUE.equals(action.get("success"));
+        String detail = String.valueOf(action.getOrDefault("detail", ""));
+        StringBuilder sb = new StringBuilder();
+        sb.append(toolDisplayName(tool));
+        if (!target.isBlank() && !"null".equalsIgnoreCase(target)) {
+            sb.append(" `").append(target).append("`");
+        }
+        sb.append(ok ? " 执行成功" : " 执行失败");
+        String effect = actionEffect(detail);
+        if (!effect.isBlank()) {
+            sb.append("，").append(effect);
+        } else if (!ok && !detail.isBlank() && !"null".equalsIgnoreCase(detail)) {
+            sb.append("，原因：").append(truncate(detail, 160));
+        }
+        return sb.toString();
+    }
+
+    private static String toolDisplayName(String tool) {
+        return switch (tool) {
+            case "CleanTempTool" -> "临时文件清理";
+            case "LogCleanupTool" -> "日志裁剪";
+            case "ServiceRestartTool" -> "服务重启";
+            default -> tool == null || tool.isBlank() ? "未知工具" : tool;
+        };
+    }
+
+    private static String actionEffect(String detail) {
+        if (detail == null || detail.isBlank() || "null".equalsIgnoreCase(detail)) {
+            return "";
+        }
+        try {
+            JsonNode root = new ObjectMapper().readTree(detail);
+            JsonNode data = root.path("data");
+            if (data.isMissingNode() && root.has("result")) {
+                data = root.path("result");
+            }
+            if (data.isTextual()) {
+                data = new ObjectMapper().readTree(data.asText());
+            }
+            if (data.isObject()) {
+                int deleted = data.path("filesDeleted").asInt(-1);
+                int found = data.path("filesFound").asInt(-1);
+                int protectedSkipped = data.path("protectedSkipped").asInt(0);
+                long bytesFreed = data.path("bytesFreed").asLong(-1);
+                StringBuilder sb = new StringBuilder();
+                if (deleted >= 0) {
+                    sb.append("删除 ").append(deleted).append(" 个文件");
+                } else if (found >= 0) {
+                    sb.append("扫描到 ").append(found).append(" 个文件");
+                }
+                if (bytesFreed > 0) {
+                    if (sb.length() > 0) {
+                        sb.append("，");
+                    }
+                    sb.append("释放约 ").append(formatBytes(bytesFreed));
+                }
+                if (protectedSkipped > 0) {
+                    if (sb.length() > 0) {
+                        sb.append("，");
+                    }
+                    sb.append("跳过受保护文件 ").append(protectedSkipped).append(" 个");
+                }
+                String message = data.path("message").asText("");
+                if (sb.length() == 0 && !message.isBlank()) {
+                    sb.append(message);
+                }
+                return truncate(sb.toString(), 180);
+            }
+        } catch (Exception ignored) {
+            // fall back below
+        }
+        if (detail.length() <= 180 && !detail.startsWith("{") && !detail.startsWith("[")) {
+            return detail;
+        }
+        return "";
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        double kib = bytes / 1024.0;
+        if (kib < 1024) {
+            return String.format(Locale.ROOT, "%.1f KiB", kib);
+        }
+        double mib = kib / 1024.0;
+        if (mib < 1024) {
+            return String.format(Locale.ROOT, "%.1f MiB", mib);
+        }
+        return String.format(Locale.ROOT, "%.1f GiB", mib / 1024.0);
     }
 
     private void broadcastRemediationDone(String ts, Map<String, Object> summary) {
@@ -833,6 +1082,15 @@ public class OpsAutoRemediationService {
         envelope.put("channel", "patrol_remediation");
         envelope.put("timestamp", ts);
         envelope.put("remediation", summary);
+        broadcastJson(envelope);
+    }
+
+    private void broadcastPendingCleared(String ts, String reason) {
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("channel", "patrol_remediation_pending");
+        envelope.put("timestamp", ts);
+        envelope.put("hasPending", false);
+        envelope.put("reason", reason);
         broadcastJson(envelope);
     }
 
