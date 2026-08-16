@@ -1,27 +1,5 @@
 ﻿<template>
   <div class="ops-page ops-chat-container ops-chat-container--agent">
-    <div v-if="systemPressureAlert" class="system-pressure-banner agent-chat-column" :class="`system-pressure-banner--${systemPressureAlert.level}`">
-      <div class="system-pressure-main">
-        <el-icon><WarningFilled /></el-icon>
-        <div class="system-pressure-text">
-          <strong>{{ systemPressureAlert.title }}</strong>
-          <span>{{ systemPressureAlert.detail }}</span>
-        </div>
-      </div>
-      <el-button type="warning" plain size="small" @click="sendQuickCommand(systemPressureAlert.command)">
-        查进程
-      </el-button>
-    </div>
-    <div v-if="patrolPending?.hasPending" class="patrol-pending-banner agent-chat-column">
-      <div class="patrol-pending-text">
-        <strong>巡检待处理</strong>
-        <span class="patrol-summary">{{ patrolPending.summary || '有待确认修复步骤' }}</span>
-      </div>
-      <el-button type="primary" size="small" :loading="patrolContinueLoading" @click="continuePatrolPending">
-        继续处理
-      </el-button>
-    </div>
-
     <div class="chat-messages" ref="messagesContainer" @scroll="onMessagesScroll">
       <div v-if="messages.length === 0" class="agent-chat-column">
         <AgentWelcome
@@ -54,15 +32,28 @@
             </div>
 
             <template v-else>
+              <div
+                v-if="loading && streaming && index === messages.length - 1"
+                class="agent-think-panel"
+                :class="{ 'is-live': loading && streaming && index === messages.length - 1 }"
+              >
+                <div class="agent-think-panel__title">
+                  <el-icon v-if="loading && streaming && index === messages.length - 1" class="is-loading"><Loading /></el-icon>
+                  <span>{{ loading && streaming && index === messages.length - 1 ? '处理中' : '处理过程' }}</span>
+                </div>
+                <p class="agent-think-panel__hint">{{ streamStatusLabel }}</p>
+              </div>
               <AssistantProse
                 v-if="msg.content"
                 :content="msg.content"
                 :streaming="loading && streaming && index === messages.length - 1"
               />
               <RemediationPlanCard
-                v-if="msg.remediationPlan && !msg.writeConfirmed"
+                v-if="msg.remediationPlan && msg.planReady !== false && !msg.writeConfirmed"
                 :plan="msg.remediationPlan"
                 :loading="loading && confirmPlanIndex === index"
+                :observe-only="msg.awaitingConfirm && msg.writeToolsMounted === false"
+                :pending-write-tools="msg.pendingWriteTools || []"
                 @confirm="confirmPlanFromMessage(index)"
               />
               <AssistantEvidenceBar
@@ -72,9 +63,15 @@
                 :security-outcome="msg.meta?.securityOutcome || msg.streamEvent?.securityOutcome"
                 :awm-workflow-id="msg.meta?.awmWorkflowId || msg.streamEvent?.awmWorkflowId"
                 :awm-workflow-title="msg.meta?.awmWorkflowTitle || msg.streamEvent?.awmWorkflowTitle"
-                :trace-id="msg.traceId || msg.streamEvent?.traceId"
+                :memory-applied="msg.meta?.executionState?.memoryApplied ?? msg.streamEvent?.executionState?.memoryApplied ?? null"
+                :feedback-recorded="msg.meta?.executionState?.feedbackRecorded ?? msg.streamEvent?.executionState?.feedbackRecorded ?? null"
                 @open-knowledge="openKnowledge"
               />
+              <div v-if="contextUsage(msg)" class="assistant-context-usage">
+                <span class="assistant-context-usage__label">上下文</span>
+                <span>{{ formatContextUsage(contextUsage(msg)) }}</span>
+                <span class="assistant-context-usage__model">{{ contextUsage(msg).model || 'default' }}</span>
+              </div>
             </template>
           </div>
         </section>
@@ -109,8 +106,27 @@
       <AgentQuickBar
         v-if="messages.length > 0"
         :loading="loading"
+        :patrol-pending="!!patrolPending?.hasPending"
         @select="sendQuickCommand"
+        @patrol="continuePatrolPending"
       />
+      <div class="agent-model-switcher">
+        <span class="agent-model-switcher__label">模型</span>
+        <el-select
+          v-model="selectedModelProfile"
+          size="small"
+          class="agent-model-switcher__select"
+          :disabled="loading"
+          aria-label="选择模型"
+        >
+          <el-option
+            v-for="item in modelProfileOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </div>
       <AgentComposer
         v-model="inputMessage"
         :loading="loading"
@@ -132,7 +148,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, ArrowDown, WarningFilled } from '@element-plus/icons-vue'
+import { Loading, ArrowDown } from '@element-plus/icons-vue'
 import AgentWelcome from './agent/AgentWelcome.vue'
 import AgentComposer from './agent/AgentComposer.vue'
 import AgentQuickBar from './agent/AgentQuickBar.vue'
@@ -141,27 +157,42 @@ import { useComposerRouteHint } from '../composables/useComposerRouteHint'
 import { useAgentSession } from '../composables/useAgentSession'
 import {
   assistantChatStream,
+  captureOpsFailureInsight,
   getPatrolRemediationPending,
-  getPerformanceData
+  getAssistantModels
 } from '../api'
 import { generateHumanReadableResponse } from '../utils/mcpHumanReadable'
 import { mcpToolDisplayName, extractToolsUsedFromText } from '../utils/mcpToolsMeta'
 import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
-import { isWorkbenchHighRiskMessage, workbenchHighRiskBlockMarkdown } from '../utils/opsIntentSafety'
+import {
+  isWorkbenchHighRiskMessage,
+  classifyWorkbenchBlockCode,
+  workbenchHighRiskBlockMarkdown
+} from '../utils/opsIntentSafety'
 import {
   userDeclinesTools,
   userConfirmedRemediation
 } from '../utils/opsMissionIntent'
 import RemediationPlanCard from './RemediationPlanCard.vue'
 import AssistantEvidenceBar from './AssistantEvidenceBar.vue'
-import { parseRemediationPlan, hasActionableRemediationPlan } from '../utils/remediationPlan'
-import { handleAssistantSsePayload } from '../utils/assistantSseMeta'
+import {
+  parseRemediationPlan,
+  hasActionableRemediationPlan,
+  hasNoActionableFinding,
+  isRemediationToolPlan
+} from '../utils/remediationPlan'
+import { handleAssistantSsePayload, securityOutcomeLabel } from '../utils/assistantSseMeta'
 
 const { messages, loadSession, clearSession } = useAgentSession()
 const inputMessage = ref('')
 const routeHint = useComposerRouteHint(inputMessage)
 const loading = ref(false)
 const streaming = ref(false)
+const selectedModelProfile = ref('AUTO')
+const modelProfileOptions = ref([
+  { value: 'AUTO', label: 'AUTO' },
+  { value: 'default', label: '默认模型' }
+])
 const showScrollDown = ref(false)
 let generationToken = 0
 let streamAbortController = null
@@ -173,9 +204,7 @@ const patrolContinueLoading = ref(false)
 const listeningVoice = ref(false)
 const confirmPlanIndex = ref(-1)
 const skipRemediationConfirm = ref(false)
-const performanceSnapshot = ref({ cpuUsage: null, memoryUsage: null })
 let speechRecognition = null
-// 性能快照仅挂载时取一次；持续刷新交给顶栏 TopPerformanceBar / WS
 
 const chatTurns = computed(() => {
   const turns = []
@@ -198,29 +227,10 @@ const chatTurns = computed(() => {
 const streamStatusLabel = computed(() => {
   const last = messages.value[messages.value.length - 1]
   const mode = last?.meta?.replyMode || last?.streamEvent?.replyMode
-  if (mode === 'ORCHESTRATE') return '正在全面巡检…'
-  if (mode === 'TOOL_AGENT') return '正在调用运维工具采集数据…'
-  return '正在思考…'
+  if (mode === 'ORCHESTRATE') return '正在整理任务上下文…'
+  if (mode === 'TOOL_AGENT') return '正在调用运维工具…'
+  return '正在分析你的问题…'
 })
-
-const systemPressureAlert = computed(() => {
-  const cpu = Number(performanceSnapshot.value.cpuUsage)
-  const mem = Number(performanceSnapshot.value.memoryUsage)
-  const cpuHigh = !Number.isNaN(cpu) && cpu >= 85
-  const memHigh = !Number.isNaN(mem) && mem >= 80
-  if (!cpuHigh && !memHigh) return null
-  const bits = []
-  if (cpuHigh) bits.push(`CPU ${cpu.toFixed(1)}%`)
-  if (memHigh) bits.push(`内存 ${mem.toFixed(1)}%`)
-  const critical = cpu >= 92 || mem >= 90
-  return {
-    level: critical ? 'critical' : 'warn',
-    title: critical ? '本机资源高压' : '本机资源偏高',
-    detail: `${bits.join('，')}，建议优先定位高占用进程。`,
-    command: 'CPU或内存占用过高，帮我查一下高占用进程'
-  }
-})
-
 const nowTime = () => new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
 function pushAssistantNotice (content) {
@@ -242,18 +252,6 @@ const refreshPatrolPending = async () => {
     applyPatrolPendingState(data)
   } catch {
     patrolPending.value = { hasPending: false }
-  }
-}
-
-const refreshPerformanceSnapshot = async () => {
-  try {
-    const data = await getPerformanceData({ silent: true })
-    performanceSnapshot.value = {
-      cpuUsage: data?.cpuUsage ?? null,
-      memoryUsage: data?.memoryUsage ?? null
-    }
-  } catch {
-    /* keep previous snapshot */
   }
 }
 
@@ -281,7 +279,8 @@ const continuePatrolPending = async () => {
     }
     skipRemediationConfirm.value = true
     try {
-      await sendQuickCommand('确认执行')
+      // 必须带巡检续办口令，避免单独「确认执行」被误判为磁盘清理剧本
+      await sendQuickCommand('继续处理巡检待办，确认执行')
     } finally {
       skipRemediationConfirm.value = false
     }
@@ -299,11 +298,30 @@ let patrolPollTimer = null
 
 onMounted(() => {
   loadSession()
+  loadModelProfiles()
   refreshPatrolPending()
-  refreshPerformanceSnapshot()
   patrolPollTimer = setInterval(refreshPatrolPending, 120000)
   window.addEventListener('ops-patrol-pending-change', handlePatrolPendingEvent)
 })
+
+async function loadModelProfiles () {
+  try {
+    const snapshot = await getAssistantModels()
+    const configured = Array.isArray(snapshot?.profiles)
+      ? snapshot.profiles.filter(item => item?.enabled && item?.configured)
+      : []
+    modelProfileOptions.value = [
+      { value: 'AUTO', label: 'AUTO' },
+      { value: 'default', label: snapshot?.defaultModel ? `默认 · ${snapshot.defaultModel}` : '默认模型' },
+      ...configured.map(item => ({
+        value: item.name,
+        label: `${item.name} · ${item.model || '兼容模型'}`
+      }))
+    ]
+  } catch {
+    // Model switching is optional; keep AUTO/default when the status endpoint is unavailable.
+  }
+}
 
 const clearAttachment = () => {
   pendingAttachment.value = null
@@ -441,6 +459,14 @@ const buildConversationHistory = (priorMessages) => {
   return out.slice(-24)
 }
 
+function buildDraftMessage(rawInput) {
+  const base = typeof rawInput === 'string' ? rawInput.trim() : String(rawInput || '').trim()
+  if (pendingAttachment.value) {
+    return `${base}\n\n> 附件: ${pendingAttachment.value.name}\n${pendingAttachment.value.text}`.trim()
+  }
+  return base
+}
+
 function applySseToAssistant (assistantIdx, payload) {
   handleAssistantSsePayload(payload, {
     onMeta: (meta) => {
@@ -449,14 +475,61 @@ function applySseToAssistant (assistantIdx, payload) {
       msg.meta = { ...(msg.meta || {}), ...meta }
       if (Array.isArray(meta.ragHits)) msg.ragHits = meta.ragHits
       if (meta.writeConfirmed) msg.writeConfirmed = true
+      if (meta.awaitingConfirm != null) msg.awaitingConfirm = !!meta.awaitingConfirm
+      if (meta.planPhase) msg.planPhase = meta.planPhase
+      if (Array.isArray(meta.plannedTools)) msg.plannedTools = meta.plannedTools
+      if (Array.isArray(meta.pendingWriteTools)) msg.pendingWriteTools = meta.pendingWriteTools
+      if (Array.isArray(meta.observeTools)) msg.observeTools = meta.observeTools
+      if (meta.writeToolsMounted != null) msg.writeToolsMounted = !!meta.writeToolsMounted
       if (meta.securityOutcome === 'EXECUTED' || meta.toolAgentOutcome === 'EXECUTED') {
         msg.writeConfirmed = true
+        msg.awaitingConfirm = false
       }
     },
     onEvent: (event) => {
       const msg = messages.value[assistantIdx]
       if (!msg || !event) return
       msg.streamEvent = event
+      if (event.contextUsage) {
+        msg.contextUsage = event.contextUsage
+      }
+      if (event.type === 'progress' || (event.phase && event.type !== 'tool-plan')) {
+        if (!Array.isArray(msg.thinkSteps)) msg.thinkSteps = []
+        const title = event.title || event.message || event.phase
+        if (title) {
+          const last = msg.thinkSteps[msg.thinkSteps.length - 1]
+          if (!last || last.title !== title) {
+            msg.thinkSteps.push({ phase: event.phase || 'step', title: String(title) })
+          }
+        }
+      }
+      if (event.type === 'tool-plan') {
+        // A tool-plan event is only a candidate. Wait for the final result before
+        // showing a confirmation card; patrol may find no remediation at all.
+        msg.planReady = false
+        msg.plannedTools = Array.isArray(event.tools) ? event.tools : []
+        msg.planItems = Array.isArray(event.items) ? event.items : []
+        msg.planPhase = event.planPhase || msg.planPhase
+        if (Array.isArray(event.pendingWriteTools)) msg.pendingWriteTools = event.pendingWriteTools
+        if (Array.isArray(event.observeTools)) msg.observeTools = event.observeTools
+        if (event.awaitingConfirm != null) msg.awaitingConfirm = !!event.awaitingConfirm
+        if (event.writeToolsMounted != null) msg.writeToolsMounted = !!event.writeToolsMounted
+        if (!Array.isArray(msg.thinkSteps)) msg.thinkSteps = []
+        const remediationPlan = isRemediationToolPlan(event)
+        const planTitle = remediationPlan
+          ? (event.writeConfirmed ? '计划已确认' : '已生成处置方案')
+          : '已生成诊断计划'
+        msg.thinkSteps.push({ phase: 'plan', title: planTitle })
+        if (!msg.writeConfirmed && remediationPlan) {
+          msg.remediationPlan = {
+            title: event.planPhase === 'EXECUTE' ? '执行方案' : '处置方案',
+            summary: msg.planItems.length
+              ? `已生成 ${msg.planItems.length} 步处置方案，详细步骤可在审计链路复核。`
+              : '已生成处置方案，详细内容可在审计链路复核。',
+            previewOnly: !event.writeConfirmed
+          }
+        }
+      }
       if (event.traceId) msg.traceId = event.traceId
       if (Array.isArray(event.toolsUsed) && event.toolsUsed.length) {
         msg.toolsUsed = event.toolsUsed
@@ -485,6 +558,19 @@ function applySseToAssistant (assistantIdx, payload) {
   })
 }
 
+function contextUsage (msg) {
+  return msg?.contextUsage || msg?.meta?.contextUsage || msg?.streamEvent?.contextUsage || null
+}
+
+function formatContextUsage (usage) {
+  const total = Number(usage?.totalTokens)
+  const window = Number(usage?.contextWindow)
+  const pct = Number(usage?.utilizationPct)
+  if (!Number.isFinite(total) || !Number.isFinite(window)) return '暂无用量'
+  const percent = Number.isFinite(pct) ? pct.toFixed(1) : ((total * 100) / window).toFixed(1)
+  return `${total.toLocaleString()} / ${window.toLocaleString()} tokens (${percent}%)`
+}
+
 function finalizeAssistantMessage (assistantIdx) {
   const msg = messages.value[assistantIdx]
   if (!msg) return
@@ -497,8 +583,17 @@ function finalizeAssistantMessage (assistantIdx) {
   }
   if (!msg.ragHits?.length && msg.meta?.ragHits?.length) msg.ragHits = msg.meta.ragHits
   if (msg.meta?.writeConfirmed || msg.meta?.securityOutcome === 'EXECUTED') msg.writeConfirmed = true
-  if (!msg.writeConfirmed && hasActionableRemediationPlan(msg.content)) {
+  if (hasNoActionableFinding(msg.content)) {
+    msg.remediationPlan = null
+    msg.planReady = true
+    msg.awaitingConfirm = false
+    msg.pendingWriteTools = []
+    msg.planPhase = 'DIAGNOSE'
+  } else if (!msg.writeConfirmed && hasActionableRemediationPlan(msg.content)) {
     msg.remediationPlan = parseRemediationPlan(msg.content)
+    msg.planReady = true
+  } else if (msg.remediationPlan) {
+    msg.planReady = true
   }
   if (!msg.toolsUsed?.length) {
     const extractedTools = extractToolsUsedFromText(msg.content)
@@ -536,10 +631,14 @@ const confirmPlanFromMessage = async (index) => {
     const prior = messages.value[index]
     if (prior) {
       prior.writeConfirmed = true
-      prior.meta = { ...(prior.meta || {}), writeConfirmed: true }
+      prior.awaitingConfirm = false
+      prior.meta = { ...(prior.meta || {}), writeConfirmed: true, awaitingConfirm: false }
     }
     skipRemediationConfirm.value = true
-    inputMessage.value = '确认执行'
+    const tools = Array.isArray(prior?.plannedTools) ? prior.plannedTools.filter(Boolean) : []
+    inputMessage.value = tools.length
+      ? `确认执行\n请按上一轮计划落地：${tools.join('、')}`
+      : '确认执行'
     await handleSend()
   } catch {
     // cancelled
@@ -567,6 +666,7 @@ const runNaturalLanguageStream = async (message) => {
     const response = await assistantChatStream(message, history, {
       useToolAgent: !userDeclinesTools(message),
       confirmRemediation: userConfirmedRemediation(message),
+      modelProfile: selectedModelProfile.value,
       signal: streamAbortController.signal
     })
     if (isGenerationCancelled(token)) return
@@ -647,7 +747,7 @@ const runNaturalLanguageStream = async (message) => {
 
 const handleSend = async () => {
   const rawInput = inputMessage.value.trim()
-  let message = rawInput
+  let message = buildDraftMessage(rawInput)
   if (pendingAttachment.value) {
     message = `${rawInput}\n\n> 附件: ${pendingAttachment.value.name}\n${pendingAttachment.value.text}`.trim()
   }
@@ -655,7 +755,6 @@ const handleSend = async () => {
 
   inputMessage.value = ''
   pendingAttachment.value = null
-
   messages.value.push({
     role: 'user',
     content: message,
@@ -680,6 +779,13 @@ const handleSend = async () => {
   if (isWorkbenchHighRiskMessage(message)) {
     loading.value = true
     try {
+      const code = classifyWorkbenchBlockCode(message)
+      // 前端抢先拦截时后端收不到请求，必须显式上报否则「安全教训」永远为空
+      captureOpsFailureInsight({
+        userInput: message,
+        securityCode: code,
+        detail: 'workbench local high-risk block'
+      }).catch(() => {})
       messages.value.push({
         role: 'assistant',
         content: workbenchHighRiskBlockMarkdown(message),
@@ -716,7 +822,7 @@ function applyPrefill(text) {
   nextTick(() => scrollToBottom())
 }
 
-onUnmounted(() => {
+  onUnmounted(() => {
   stopGeneration()
   if (patrolPollTimer) {
     clearInterval(patrolPollTimer)
@@ -856,79 +962,39 @@ defineExpose({ applyPrefill, clearChat })
   font-size: 12px;
 }
 
-.patrol-pending-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 8px auto;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--el-color-warning-light-9, #fdf6ec);
-  border: 1px solid var(--el-color-warning-light-5, #f5dab1);
-}
-
-.patrol-pending-text {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-  min-width: 0;
-}
-
-.patrol-summary {
-  color: var(--el-text-color-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
-.system-pressure-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 8px auto;
+.agent-think-panel {
+  margin: 0 0 10px;
   padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid #fed7aa;
-  background: #fff7ed;
-  color: #9a3412;
-}
-
-.system-pressure-banner--critical {
-  border-color: #fecaca;
-  background: #fef2f2;
-  color: #991b1b;
-}
-
-.system-pressure-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.system-pressure-main .el-icon {
-  flex-shrink: 0;
-  font-size: 18px;
-}
-
-.system-pressure-text {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(13, 148, 136, 0.22);
+  background: linear-gradient(180deg, #f0fdfa, #f8fafc);
+  color: #0f766e;
   font-size: 13px;
 }
 
-.system-pressure-text span {
-  color: inherit;
-  opacity: 0.82;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.agent-think-panel.is-live {
+  border-color: rgba(13, 148, 136, 0.4);
+  box-shadow: 0 0 0 1px rgba(13, 148, 136, 0.08);
+}
+
+.agent-think-panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.agent-think-panel__list {
+  margin: 0;
+  padding-left: 18px;
+  color: #334155;
+  line-height: 1.6;
+}
+
+.agent-think-panel__hint {
+  margin: 0;
+  color: #64748b;
 }
 
 .agent-stream-status {
@@ -946,6 +1012,44 @@ defineExpose({ applyPrefill, clearChat })
   color: #0f766e;
   font-size: 13px;
   font-weight: 500;
+}
+
+.assistant-context-usage {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0 42px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.assistant-context-usage__label {
+  color: #0f766e;
+  font-weight: 600;
+}
+
+.assistant-context-usage__model {
+  padding-left: 6px;
+  border-left: 1px solid #cbd5e1;
+  color: #94a3b8;
+}
+
+.agent-model-switcher {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.agent-model-switcher__label {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.agent-model-switcher__select {
+  width: 220px;
 }
 
 </style>

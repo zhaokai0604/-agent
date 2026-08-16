@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -71,11 +72,11 @@ public class SystemdTool extends AbstractCommandExecutor {
     ) throws JsonProcessingException {
         long start = System.currentTimeMillis();
         if (serviceName == null || serviceName.isBlank()) {
-            return buildError("服务名不能为空", start);
+            return McpToolResponses.error(objectMapper, "服务名不能为空", start);
         }
         String svc = serviceName.trim();
         if (!SERVICE_NAME.matcher(svc).matches()) {
-            return buildError("服务名格式不合法", start);
+            return McpToolResponses.error(objectMapper, "服务名格式不合法", start);
         }
         String unit = svc.endsWith(".service") ? svc : svc + ".service";
 
@@ -101,7 +102,7 @@ public class SystemdTool extends AbstractCommandExecutor {
             case "failed", "list-failed" -> listFailedSystemdUnits();
             case "status" -> getServiceStatus(serviceName);
             case "restart", "reload" -> serviceRestartTool.restartService(serviceName, dryRun, confirmRestart);
-            default -> buildError("未知 operation: " + operation + "；可选 failed|status|restart",
+            default -> McpToolResponses.error(objectMapper, "未知 operation: " + operation + "；可选 failed|status|restart",
                     System.currentTimeMillis());
         };
     }
@@ -122,12 +123,10 @@ public class SystemdTool extends AbstractCommandExecutor {
             body.put("stderr", r.error());
         }
         long duration = System.currentTimeMillis() - start;
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(ok, objectMapper.writeValueAsString(body), ok ? null : r.error(), duration, false));
-    }
-
-    private String buildError(String msg, long start) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, msg, System.currentTimeMillis() - start, false));
+        String dataJson = objectMapper.writeValueAsString(body);
+        if (ok) {
+            return McpToolResponses.success(objectMapper, dataJson, duration);
+        }
+        return McpToolResponses.warn(objectMapper, dataJson, duration);
     }
 }

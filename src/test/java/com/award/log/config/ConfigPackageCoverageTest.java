@@ -83,9 +83,9 @@ class ConfigPackageCoverageTest {
         assertEquals(Boolean.TRUE, patrol.get("enabled"));
         assertEquals(1, asInt(patrol.get("disk-warn-percent")));
         assertTrue(String.valueOf(patrol.get("inspect-roots")).contains("C:/Users/Administrator/AppData/Local/Temp"));
-        assertTrue(String.valueOf(patrol.get("inspect-roots")).contains("D:/Temp"));
+        assertTrue(String.valueOf(patrol.get("inspect-roots")).contains("C:/Windows/Temp"));
         assertTrue(listAt(paths, "windows-clean-roots").contains("C:/Windows/Temp"));
-        assertTrue(listAt(paths, "windows-clean-roots").contains("D:/Temp"));
+        assertTrue(listAt(paths, "windows-clean-roots").contains("C:/Users/Administrator/AppData/Local/Temp"));
         assertTrue(listAt(paths, "windows-log-cleanup-roots").contains("logs"));
         assertEquals(Boolean.TRUE, mapAt(agent, "runtime").get("enabled"));
         assertEquals(Boolean.TRUE, mapAt(agent, "autonomous").get("enabled"));
@@ -94,12 +94,13 @@ class ConfigPackageCoverageTest {
     }
 
     @Test
-    void kylinProfileDefaultsToRootOpsUser() throws Exception {
+    void kylinProfileDefaultsToDedicatedLowPrivilegeUser() throws Exception {
         Map<String, Object> root = loadYamlResource("application-kylin.yml");
         Map<String, Object> agent = mapAt(root, "agent");
         Map<String, Object> ops = mapAt(root, "ops");
 
-        assertEquals("${AGENT_RUN_AS_USER:root}", agent.get("run-as-user"));
+        assertEquals("${AGENT_RUN_AS_USER:award-agent}", agent.get("run-as-user"));
+        assertEquals("${AGENT_MIN_PRIVILEGE:true}", mapAt(agent, "min-privilege").get("enabled"));
         assertEquals(Boolean.TRUE, mapAt(ops, "auto-remediation").get("enabled"));
         assertTrue(String.valueOf(mapAt(ops, "patrol").get("inspect-roots")).contains("/var/log"));
         assertTrue(listAt(mapAt(agent, "paths"), "clean-roots").contains("/var/cache"));

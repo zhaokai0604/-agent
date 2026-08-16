@@ -46,13 +46,22 @@ public class McpExecutionService {
             boolean toolOk = dispatched.success()
                     && resultJson != null
                     && McpToolPayloadParser.isSuccessful(objectMapper, resultJson);
+            String status = resultJson != null
+                    ? McpToolPayloadParser.statusOf(objectMapper, resultJson)
+                    : "ERROR";
             if (toolOk) {
                 response.put("success", true);
+                response.put("status", status);
                 response.put("data", dispatched.data());
                 response.put("duration", duration);
-                log.info("工具 {} 执行成功，耗时: {}ms", toolName, duration);
+                if ("WARN".equalsIgnoreCase(status)) {
+                    log.warn("工具 {} 执行完成但为 WARN，耗时: {}ms", toolName, duration);
+                } else {
+                    log.info("工具 {} 执行成功，耗时: {}ms", toolName, duration);
+                }
             } else {
                 response.put("success", false);
+                response.put("status", "ERROR");
                 String err = dispatched.success()
                         ? McpToolPayloadParser.errorMessage(objectMapper, resultJson)
                         : dispatched.errorMessage();
@@ -68,6 +77,12 @@ public class McpExecutionService {
                 response.put("success", false);
                 if (!response.containsKey("error") || String.valueOf(response.get("error")).isBlank()) {
                     response.put("error", String.valueOf(response.get("writeMismatchMessage")));
+                }
+            }
+            if (Boolean.TRUE.equals(response.get("evidenceIncomplete"))) {
+                response.put("success", false);
+                if (!response.containsKey("error") || String.valueOf(response.get("error")).isBlank()) {
+                    response.put("error", String.valueOf(response.get("evidenceMessage")));
                 }
             }
             return response;

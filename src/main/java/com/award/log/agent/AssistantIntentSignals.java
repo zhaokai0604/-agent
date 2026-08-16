@@ -202,6 +202,21 @@ public final class AssistantIntentSignals {
                 && !CONFIRM_WRITE.matcher(msg).find();
     }
 
+    /** 多指标综合查询交给 Tool Agent，由模型根据首轮结果决定是否继续取数。 */
+    public static boolean isBroadMetricsQuery(String msg) {
+        if (!isMetricsQuery(msg)) {
+            return false;
+        }
+        String value = msg == null ? "" : msg.toLowerCase();
+        int domains = 0;
+        for (String domain : List.of("cpu", "内存", "磁盘", "进程", "网络", "端口", "服务")) {
+            if (value.contains(domain)) {
+                domains++;
+            }
+        }
+        return domains >= 3;
+    }
+
     public static boolean isPreviewOnly(String msg) {
         return PREVIEW_ONLY.matcher(msg).find();
     }

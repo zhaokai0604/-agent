@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.util.OsRuntime;
@@ -43,7 +44,7 @@ public class ConfigCheckTool extends AbstractCommandExecutor {
         long startTime = System.currentTimeMillis();
 
         if (configPath == null || configPath.isBlank()) {
-            return buildErrorResponse("配置文件路径不能为空", startTime);
+            return McpToolResponses.error(objectMapper, "配置文件路径不能为空", startTime);
         }
 
         String normalizedPath = configPath.trim();
@@ -51,7 +52,7 @@ public class ConfigCheckTool extends AbstractCommandExecutor {
 
         try {
             if (!opsPathPolicy.isAllowedConfigCheckPath(normalizedPath)) {
-                return buildErrorResponse(opsPathPolicy.rejectReason("配置文件路径"), startTime);
+                return McpToolResponses.error(objectMapper, opsPathPolicy.rejectReason("配置文件路径"), startTime);
             }
 
             String lowerPath = normalizedPath.toLowerCase();
@@ -115,11 +116,13 @@ public class ConfigCheckTool extends AbstractCommandExecutor {
             log.info("配置文件检查完成，类型: {}, 结果: {}, 退出码: {}, 耗时: {}ms",
                 configType, passed ? "通过" : "失败", result.exitCode(), duration);
 
-            return buildSuccessResponse(data, duration, false);
+            return passed
+                    ? McpToolResponses.success(objectMapper, data, duration)
+                    : McpToolResponses.warn(objectMapper, data, duration);
 
         } catch (Exception e) {
             log.error("检查配置文件时发生异常", e);
-            return buildErrorResponse("检查配置文件时发生异常: " + e.getMessage(), startTime);
+            return McpToolResponses.error(objectMapper, "检查配置文件时发生异常: " + e.getMessage(), startTime);
         }
     }
 
@@ -130,14 +133,5 @@ public class ConfigCheckTool extends AbstractCommandExecutor {
                      .replace("\n", "\\n")
                      .replace("\r", "\\r")
                      .replace("\t", "\\t");
-    }
-
-    private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<>(true, data, null, duration, cacheHit));
-    }
-
-    private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
     }
 }

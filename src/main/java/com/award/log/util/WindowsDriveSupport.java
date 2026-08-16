@@ -81,7 +81,7 @@ public final class WindowsDriveSupport {
         }
         try {
             Path p = Path.of(norm.replace('/', File.separatorChar));
-            if (Files.exists(p) || Files.exists(p.getRoot())) {
+            if (Files.isDirectory(p)) {
                 out.add(norm);
             }
         } catch (Exception ignored) {

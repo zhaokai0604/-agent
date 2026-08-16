@@ -18,7 +18,7 @@ export async function exportDashboardPdfDocument ({
 
   let headerBottom = margin
   const headerRaster = rasterizePdfTextBlock({
-    title: title || '日志分析仪表盘',
+    title: title || '证据趋势看板',
     summaryLine,
     widthPt: contentW
   })

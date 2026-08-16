@@ -25,6 +25,8 @@ public final class FailureInsightReflections {
                     "失败原因：Agentic 风险分超阈值。下次缩小路径范围、启用 dryRun，或在界面点击「确认执行」。";
             case "READ_ONLY_TOOL_SURFACE" ->
                     "失败原因：当前为只读工具面，写类工具 " + safeTool(toolName) + " 不可用。下次切换完整工具面或仅请求分析/诊断。";
+            case "NEED_CONFIRM" ->
+                    "经验：写操作 " + safeTool(toolName) + " 进入二次确认。下次可先 dryRun 预览，确认后再说「确认执行」。";
             case "REJECTED_HIGH_RISK", "REJECTED_HIGH_RISK_COMMAND", "REJECTED_INJECTION" ->
                     reflect(mapLegacyCode(code), toolName, userInput);
             default ->

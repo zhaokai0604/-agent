@@ -75,7 +75,7 @@ public class PatrolHistoryService {
         int d = Math.min(30, Math.max(1, days));
         int n = Math.min(200, Math.max(1, limit));
         try {
-            return jdbcTemplate.query(
+            List<Map<String, Object>> rows = jdbcTemplate.query(
                     """
                     SELECT id, patrol_time, finding_count, correlation_json, findings_json, created_at
                     FROM ops_patrol_history
@@ -95,6 +95,7 @@ public class PatrolHistoryService {
                     },
                     d,
                     n);
+            return rows;
         } catch (Exception e) {
             log.warn("查询巡检历史失败: {}", e.getMessage());
             return List.of();
@@ -124,6 +125,63 @@ public class PatrolHistoryService {
             log.warn("巡检趋势统计失败: {}", e.getMessage());
             return new ArrayList<>();
         }
+    }
+
+    /** 返回巡检期间的资源时序，并计算相对上一采样点的变化量。 */
+    public List<Map<String, Object>> metricsTrend(int days, int limit) {
+        int d = Math.min(90, Math.max(1, days));
+        int n = Math.min(2_000, Math.max(1, limit));
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.query(
+                    """
+                    SELECT patrol_time, correlation_json
+                    FROM ops_patrol_history
+                    WHERE patrol_time >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                    ORDER BY patrol_time ASC
+                    LIMIT ?
+                    """,
+                    (rs, rowNum) -> {
+                        Map<String, Object> correlation = JSON.parseObject(rs.getString("correlation_json"));
+                        Map<String, Object> row = new LinkedHashMap<>();
+                        row.put("timestamp", rs.getTimestamp("patrol_time").toLocalDateTime().toString());
+                        copyMetric(correlation, row, "cpuUsagePct");
+                        copyMetric(correlation, row, "memoryUsagePct");
+                        copyMetric(correlation, row, "diskUsagePct");
+                        copyMetric(correlation, row, "loadAvg1min");
+                        copyMetric(correlation, row, "loadAvg5min");
+                        copyMetric(correlation, row, "loadAvg15min");
+                        copyMetric(correlation, row, "alarmTotal24h");
+                        copyMetric(correlation, row, "zombieProcesses");
+                        return row;
+                    },
+                    d,
+                    n);
+            Map<String, Object> previous = null;
+            for (Map<String, Object> row : rows) {
+                addDelta(row, previous, "cpuUsagePct");
+                addDelta(row, previous, "memoryUsagePct");
+                addDelta(row, previous, "diskUsagePct");
+                previous = row;
+            }
+            return rows;
+        } catch (Exception e) {
+            log.warn("查询资源时序失败: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private static void copyMetric(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source != null && source.get(key) instanceof Number number) {
+            target.put(key, number.doubleValue());
+        }
+    }
+
+    private static void addDelta(Map<String, Object> row, Map<String, Object> previous, String key) {
+        if (previous == null || !(row.get(key) instanceof Number current) || !(previous.get(key) instanceof Number before)) {
+            return;
+        }
+        row.put("delta" + Character.toUpperCase(key.charAt(0)) + key.substring(1),
+                current.doubleValue() - before.doubleValue());
     }
 
     /** 清理超出保留期的巡检历史，避免表无限增长 */

@@ -1,13 +1,15 @@
 <template>
   <div class="structured-result-view" :class="{ 'is-nested': depth > 0 }">
-    <el-empty v-if="model.kind === 'empty'" description="无展示数据" :image-size="56" />
+    <el-empty v-if="model.kind === 'empty'" description="暂无可展示数据" :image-size="56" />
 
     <p v-else-if="model.kind === 'text'" class="sr-text">{{ model.text }}</p>
 
     <div v-else-if="model.kind === 'tags'" class="sr-section">
       <div v-if="model.title" class="sr-section-title">{{ model.title }}</div>
       <div class="sr-tags">
-        <el-tag v-for="(tag, i) in model.items" :key="i" size="small" type="info" effect="plain">{{ tag }}</el-tag>
+        <el-tag v-for="(tag, i) in model.items" :key="i" size="small" type="info" effect="plain">
+          {{ tag }}
+        </el-tag>
       </div>
     </div>
 
@@ -98,23 +100,21 @@ import { buildStructuredViewModel, formatTableCell } from '../utils/structuredDa
 const props = defineProps({
   data: { type: null, default: null },
   depth: { type: Number, default: 0 },
-  /** 透传已构建的 viewModel，避免重复计算 */
   viewModel: { type: Object, default: null }
 })
 
 const model = computed(() => props.viewModel || buildStructuredViewModel(props.data, props.depth))
-
 const descriptionColumn = computed(() => (props.depth > 0 ? 1 : 2))
 
 function tagTypeForField(key, val) {
   const k = String(key).toLowerCase()
-  if (k === 'severity') {
-    const s = String(val).toUpperCase()
-    if (s.includes('FATAL') || s.includes('ERROR')) return 'danger'
-    if (s.includes('WARN')) return 'warning'
-    return 'info'
+  if (typeof val === 'boolean') return val ? 'success' : 'info'
+  if (k === 'success' || k === 'executionok' || k === 'passed') {
+    return val === true || val === 'true' ? 'success' : 'danger'
   }
-  if (k === 'status') return 'info'
+  if (k.includes('error') || k.includes('fail') || k === 'severity') return 'danger'
+  if (k.includes('warn') || k === 'risklevel') return 'warning'
+  if (k.includes('status') || k === 'mode') return 'info'
   return undefined
 }
 </script>

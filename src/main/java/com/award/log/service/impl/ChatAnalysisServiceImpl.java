@@ -83,9 +83,15 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
             return Flux.just("请输入有效问题。");
         }
         if (promptInjectionGuard != null && promptInjectionGuard.isInjection(safe)) {
+            if (failureInsightService != null) {
+                failureInsightService.captureReject(safe, "INJECTION", null, "chat analysis inject", null);
+            }
             return Flux.just("检测到提示注入特征，已拦截。请直接描述日志分析需求。");
         }
         if (intentRiskFilter != null && intentRiskFilter.evaluate(safe) == RiskLevel.HIGH) {
+            if (failureInsightService != null) {
+                failureInsightService.captureReject(safe, "HIGH_INTENT", null, "chat analysis high intent", null);
+            }
             return Flux.just("检测到高风险意图，日志分析助手无法执行系统变更类操作。");
         }
 

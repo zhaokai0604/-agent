@@ -2,6 +2,7 @@ package com.award.log.service.impl;
 
 import com.award.log.mapper.LogAlarmMapper;
 import com.award.log.model.LogAlarm;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,7 +26,7 @@ class AlarmLifecycleServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        service = new AlarmLifecycleServiceImpl(logAlarmMapper);
+        service = new AlarmLifecycleServiceImpl(logAlarmMapper, new ObjectMapper());
     }
 
     @Test

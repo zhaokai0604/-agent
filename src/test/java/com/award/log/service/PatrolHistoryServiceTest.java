@@ -98,6 +98,31 @@ class PatrolHistoryServiceTest {
     }
 
     @Test
+    void metricsTrendMapsResourcesAndDeltas() throws Exception {
+        when(jdbcTemplate.query(contains("SELECT patrol_time, correlation_json"), any(RowMapper.class), anyInt(), anyInt()))
+                .thenAnswer(inv -> {
+                    RowMapper<?> mapper = inv.getArgument(1);
+                    ResultSet first = mock(ResultSet.class);
+                    when(first.getTimestamp("patrol_time"))
+                            .thenReturn(Timestamp.valueOf(LocalDateTime.of(2024, 6, 1, 10, 0)));
+                    when(first.getString("correlation_json"))
+                            .thenReturn("{\"cpuUsagePct\":20,\"memoryUsagePct\":30,\"diskUsagePct\":40}");
+                    ResultSet second = mock(ResultSet.class);
+                    when(second.getTimestamp("patrol_time"))
+                            .thenReturn(Timestamp.valueOf(LocalDateTime.of(2024, 6, 1, 10, 1)));
+                    when(second.getString("correlation_json"))
+                            .thenReturn("{\"cpuUsagePct\":35,\"memoryUsagePct\":28,\"diskUsagePct\":44}");
+                    return List.of(mapper.mapRow(first, 0), mapper.mapRow(second, 1));
+                });
+
+        List<Map<String, Object>> trend = service.metricsTrend(7, 10);
+        assertEquals(2, trend.size());
+        assertEquals(35.0, trend.get(1).get("cpuUsagePct"));
+        assertEquals(15.0, trend.get(1).get("deltaCpuUsagePct"));
+        assertEquals(-2.0, trend.get(1).get("deltaMemoryUsagePct"));
+    }
+
+    @Test
     void purgeExpiredHistoryRemovesOldRows() {
         when(jdbcTemplate.update(anyString(), anyInt())).thenReturn(3);
         service.purgeExpiredHistory();

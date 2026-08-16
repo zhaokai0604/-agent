@@ -11,12 +11,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(RuntimeException.class)
     public Result<String> handleRuntimeException(RuntimeException e) {
         log.error("Runtime exception", e);
-        return Result.error(500, "Business processing failed");
+        String detail = e.getClass().getSimpleName()
+                + (e.getMessage() == null || e.getMessage().isBlank() ? "" : (": " + e.getMessage()));
+        return Result.error(500, "Business processing failed: " + detail);
     }
 
     @ExceptionHandler(Exception.class)
     public Result<String> handleException(Exception e) {
         log.error("Unhandled exception", e);
-        return Result.error(500, "Internal server error");
+        String detail = e.getClass().getSimpleName()
+                + (e.getMessage() == null || e.getMessage().isBlank() ? "" : (": " + e.getMessage()));
+        return Result.error(500, "Internal server error: " + detail);
     }
 }

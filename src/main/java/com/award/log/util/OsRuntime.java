@@ -1,6 +1,9 @@
 package com.award.log.util;
 
 import java.util.LinkedHashMap;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
 
@@ -16,9 +19,11 @@ public final class OsRuntime {
     private static final String OS_NAME_LOWER = OS_NAME.toLowerCase(Locale.ROOT);
 
     private static final boolean WINDOWS = OS_NAME_LOWER.contains("win");
+    private static final Map<String, String> OS_RELEASE = loadOsRelease();
     private static final boolean KYLIN = OS_NAME_LOWER.contains("kylin")
+            || OsReleaseParser.isKylin(OS_RELEASE)
             || readFileContains("/etc/.kyinfo", "kylin")
-            || readFileContains("/etc/os-release", "kylin");
+            || readFileContains("/etc/.kyinfo", "麒麟");
     private static final boolean LOONGARCH = OS_ARCH.contains("loongarch")
             || OS_ARCH.equals("mips64")
             || OS_ARCH.contains("loongson");
@@ -45,11 +50,11 @@ public final class OsRuntime {
     }
 
     public static String osName() {
-        return OS_NAME;
+        return firstNonBlank(OS_RELEASE.get("PRETTY_NAME"), OS_RELEASE.get("NAME"), OS_NAME);
     }
 
     public static String osVersion() {
-        return OS_VERSION;
+        return firstNonBlank(OS_RELEASE.get("VERSION_ID"), OS_RELEASE.get("VERSION"), OS_VERSION);
     }
 
     public static String osArch() {
@@ -63,6 +68,10 @@ public final class OsRuntime {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("osName", OS_NAME);
         m.put("osVersion", OS_VERSION);
+        m.put("distributionId", OS_RELEASE.getOrDefault("ID", ""));
+        m.put("distributionName", firstNonBlank(OS_RELEASE.get("PRETTY_NAME"), OS_RELEASE.get("NAME"), ""));
+        m.put("distributionVersion", firstNonBlank(OS_RELEASE.get("VERSION_ID"), OS_RELEASE.get("VERSION"), ""));
+        m.put("osRelease", Collections.unmodifiableMap(OS_RELEASE));
         m.put("osArch", osArch());
         m.put("windows", WINDOWS);
         m.put("unixLike", isUnixLike());
@@ -86,5 +95,33 @@ public final class OsRuntime {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private static Map<String, String> loadOsRelease() {
+        if (WINDOWS) {
+            return Map.of();
+        }
+        Map<String, String> merged = new LinkedHashMap<>();
+        for (String path : new String[]{"/etc/os-release", "/usr/lib/os-release", "/etc/lsb-release", "/etc/.kyinfo"}) {
+            try {
+                if (Files.isRegularFile(Path.of(path))) {
+                    for (Map.Entry<String, String> entry : OsReleaseParser.parse(Files.readString(Path.of(path))).entrySet()) {
+                        merged.putIfAbsent(entry.getKey(), entry.getValue());
+                    }
+                }
+            } catch (Exception ignored) {
+                // 发行版标识文件不可读时继续尝试下一个标准位置。
+            }
+        }
+        return Map.copyOf(merged);
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
     }
 }

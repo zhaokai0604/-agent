@@ -21,11 +21,21 @@ export function isWorkbenchHighRiskMessage(text) {
   return false
 }
 
+/** 与后端 FailureInsight 安全码对齐，便于前端本地拦截后上报 */
+export function classifyWorkbenchBlockCode(text) {
+  const t = (text || '').trim()
+  if (INJECTION_RE.test(t)) return 'INJECTION'
+  if (HIGH_RISK_RE.test(t)) return 'HIGH_RISK_COMMAND'
+  if (DESTRUCTIVE_CN_RE.test(t)) return 'HIGH_INTENT'
+  return 'HIGH_INTENT'
+}
+
 export function workbenchHighRiskBlockMarkdown(text) {
   return (
     `### 操作已拒绝\n\n` +
     `检测到**高风险表述**，未执行任何系统操作。\n\n` +
     `- 您的输入：${(text || '').slice(0, 200)}\n` +
-    `- 说明：请改用**查看、分析**类需求；如需执行修改操作，请通过「工具箱」并在确认后执行。\n`
+    `- 说明：请改用**查看、分析**类需求；如需执行修改操作，请通过「工具箱」并在确认后执行。\n` +
+    `- 本拦截已尝试记入「执行链路 → 安全教训」。\n`
   )
 }

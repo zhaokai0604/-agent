@@ -2,8 +2,10 @@ package com.award.log.security;
 
 import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.dispatch.McpToolParamReader;
+import com.award.log.security.effect.EvidenceContractValidator;
+import com.award.log.security.effect.ToolEffect;
+import com.award.log.security.effect.ToolEffectResolver;
 
-import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -20,6 +22,8 @@ public final class WriteExecutionCoordinator {
     private static final Pattern DELETE_UTTERANCE = Pattern.compile(
             "删除|删掉|移除|清除|清理|释放|删了",
             Pattern.CASE_INSENSITIVE);
+
+    private static final ToolEffectResolver EFFECT_RESOLVER = new ToolEffectResolver();
 
     private WriteExecutionCoordinator() {
     }
@@ -42,7 +46,8 @@ public final class WriteExecutionCoordinator {
     }
 
     /**
-     * 执行后校验：请求了真实写但工具仍返回 DRY-RUN 时，在 HTTP 响应中附加警告字段。
+     * 执行后校验：请求了真实写但工具仍返回 DRY-RUN 时，在 HTTP 响应中附加警告字段；
+     * 并通过证据契约检查可机读效果字段是否齐全。
      */
     public static void attachWriteMismatchIfNeeded(
             String toolName,
@@ -52,7 +57,19 @@ public final class WriteExecutionCoordinator {
         if (!WriteToolResultSupport.requestedRealWrite(parameters)) {
             return;
         }
+        ToolEffect effect = EFFECT_RESOLVER.resolve(toolName, parameters);
+        if (httpResponse != null) {
+            httpResponse.put("toolEffect", effect.toMap());
+        }
         if (WriteToolResultSupport.isConfirmedRealWrite(toolResultJson)) {
+            EvidenceContractValidator.ValidationResult evidence =
+                    EvidenceContractValidator.validateRequestedWrite(effect, true, toolResultJson);
+            if (!evidence.complete() && httpResponse != null) {
+                httpResponse.put("evidenceIncomplete", true);
+                httpResponse.put("evidenceContractId", evidence.contractId());
+                httpResponse.put("evidenceMissingFields", evidence.missingFields());
+                httpResponse.put("evidenceMessage", evidence.message());
+            }
             ChatToolExecutionTracker.record(toolName, toolResultJson);
             return;
         }

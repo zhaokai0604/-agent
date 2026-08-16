@@ -178,6 +178,24 @@ const isWorkflowPhase = (step) => {
   return phase === 'workflow' || detail.includes('AWM workflow')
 }
 
+function normalizeStepEvidence(rawBody) {
+  if (rawBody == null) return null
+  if (typeof rawBody !== 'string') return rawBody
+
+  let text = rawBody.replace(/\s+/g, ' ').trim()
+  text = text.replace(/^\[Step\s*\d+\s*-\s*[^\]]+\]\s*/i, '')
+
+  const objectStart = text.indexOf('{')
+  const objectEnd = text.lastIndexOf('}')
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    const before = text.slice(0, objectStart).replace(/[：:\s]+$/, '').trim()
+    const payload = coerceStructuredInput(text.slice(objectStart, objectEnd + 1))
+    return before ? { summary: before, result: payload } : payload
+  }
+
+  return coerceStructuredInput(text)
+}
+
 const loadData = async () => {
   loading.value = true
   try {
@@ -194,13 +212,13 @@ const loadData = async () => {
 const cotStepsNormalized = computed(() => {
   const steps = cotDetail.value?.steps
   if (!Array.isArray(steps)) return []
-  return steps.map((s) => {
+  return steps.map((s, idx) => {
     const title = traceStepTitle(s)
     const rawBody = s?.detail != null ? s.detail : s
-    const parsed = coerceStructuredInput(rawBody)
+    const parsed = normalizeStepEvidence(rawBody)
     const isWorkflow = isWorkflowPhase(s)
     return {
-      title: `${stepNum}${title}`,
+      title: `${idx + 1}. ${title}`,
       view: buildStructuredViewModel(parsed),
       rawBody,
       isWorkflow
@@ -216,8 +234,13 @@ function formatSummaryCell(raw) {
 
 const openCot = (traceId) => {
   if (!traceId) return
-  pendingTraceId.value = traceId
+  pendingTraceId.value = String(traceId)
   cotDetail.value = {}
+  if (cotVisible.value) {
+    // 对话框已开着时 @opened 不会再触发，需直接拉详情
+    onCotOpened()
+    return
+  }
   cotVisible.value = true
 }
 

@@ -163,13 +163,22 @@ export function formatProcessListSummary(list) {
   const unwrapped = unwrapNestedToolPayload(list)
   const arr = Array.isArray(list) ? list : Array.isArray(unwrapped) ? unwrapped : null
   if (!arr?.length) return ''
+  const reasonText = (r) => {
+    if (r === 'cpu') return '因CPU高入选'
+    if (r === 'mem') return '因内存高入选'
+    if (r === 'cpu+mem') return 'CPU与内存均高'
+    return ''
+  }
   return (
-    `当前有 ${arr.length} 个进程 CPU/内存占用超过阈值:\n` +
+    `当前有 ${arr.length} 个进程超过阈值（CPU 或 物理内存占比）。\n` +
+    `说明：内存%是该进程 Working Set 占整机物理内存的比例；系统总内存占用由大量进程分摊，不等于下列几行之和。\n` +
     arr
       .slice(0, 8)
       .map((p, i) => {
         const cpuText = p.cpu === 'n/a' || p.cpu == null ? 'CPU: 未采集' : `CPU: ${p.cpu}%`
-        return `${i + 1}. ${p.command?.substring(0, 40) || 'unknown'} (PID: ${p.pid}, ${cpuText}, MEM: ${p.mem}%)`
+        const memMb = p.memMb != null && p.memMb !== '' ? ` / ${p.memMb}MB` : ''
+        const why = reasonText(p.reason)
+        return `${i + 1}. ${p.command?.substring(0, 40) || 'unknown'} (PID: ${p.pid}, ${cpuText}, 内存: ${p.mem}%${memMb}${why ? `, ${why}` : ''})`
       })
       .join('\n')
   )

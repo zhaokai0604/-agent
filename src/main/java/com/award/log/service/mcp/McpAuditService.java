@@ -81,14 +81,19 @@ public class McpAuditService {
     public void persistSuccess(String traceId, String userInstruction, GateDecision decision, String toolName,
                                Map<String, Object> execResponse, long startTime, Map<String, Object> parameters) {
         boolean ok = Boolean.TRUE.equals(execResponse.get("success"));
+        String status = String.valueOf(execResponse.getOrDefault("status", ok ? "SUCCESS" : "ERROR")).trim().toUpperCase(Locale.ROOT);
+        boolean warn = ok && "WARN".equals(status);
         String summary = ok ? String.valueOf(execResponse.get("data")) : String.valueOf(execResponse.get("error"));
         String rs = McpSecurityService.formatRiskScoreLine(decision);
         String resultBrief = summary.length() > 600 ? summary.substring(0, 600) + "..." : summary;
+        String outcomeLabel = !ok ? "失败" : (warn ? "WARN" : "成功");
         String step4 = String.format(Locale.ROOT,
                 "%s 已执行 %s。结果 %s。摘要 %s",
-                rs, toolName, ok ? "成功" : "失败", resultBrief);
+                rs, toolName, outcomeLabel, resultBrief);
+        String securityOutcome = !ok ? "EXECUTION_FAILED" : (warn ? "WARN" : "PASS");
+        String decisionCode = !ok ? "EXECUTION_FAILED" : (warn ? "WARN" : "PASS");
         List<Map<String, Object>> steps = buildCotTrace(userInstruction, toolName, decision, step4);
-        opsAuditTraceService.save(traceId, "MCP", userInstruction, decision.getRiskLevel().name(), "PASS", toolName, ok,
+        opsAuditTraceService.save(traceId, "MCP", userInstruction, decision.getRiskLevel().name(), securityOutcome, toolName, ok && !warn,
                 summary, steps, System.currentTimeMillis() - startTime,
                 httpAuditSubject.currentOperatorId(), opsPathPolicy.getPolicyVersion(),
                 Map.of(),
@@ -96,7 +101,8 @@ public class McpAuditService {
                         "auditKind", "tool",
                         "requestChannel", "mcp",
                         "stage", "execute",
-                        "decision", ok ? "PASS" : "EXECUTION_FAILED",
+                        "decision", decisionCode,
+                        "status", status,
                         "targetType", "tool",
                         "targetName", toolName));
     }

@@ -63,10 +63,7 @@ public class LogOpsTool {
     }
 
     private String unknownOperation(String op) throws JsonProcessingException {
-        long t = System.currentTimeMillis();
         return objectMapper.writeValueAsString(
-                new ToolResult<>(false, null,
-                        "未知 operation: " + op + "；可选 analyze|cleanup",
-                        System.currentTimeMillis() - t, false));
+                ToolResult.error("未知 operation: " + op + "；可选 analyze|cleanup", 0L));
     }
 }

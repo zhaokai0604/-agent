@@ -55,11 +55,15 @@ public class OpsGovernanceProperties {
         m.put("redis", AssetTier.CORE_STATELESS);
         m.put("tomcat", AssetTier.CORE_STATELESS);
         m.put("mysqld", AssetTier.CORE_STATEFUL);
+        m.put("mysql", AssetTier.CORE_STATEFUL);
         m.put("mariadb", AssetTier.CORE_STATEFUL);
         m.put("docker", AssetTier.CORE_STATEFUL);
         m.put("kubelet", AssetTier.CORE_STATEFUL);
         m.put("sshd", AssetTier.FORBIDDEN_AUTO);
+        m.put("ssh", AssetTier.FORBIDDEN_AUTO);
         m.put("etcd", AssetTier.FORBIDDEN_AUTO);
+        m.put("iptables", AssetTier.FORBIDDEN_AUTO);
+        m.put("firewalld", AssetTier.FORBIDDEN_AUTO);
         return m;
     }
 
@@ -71,17 +75,22 @@ public class OpsGovernanceProperties {
         m.put("/var/log", AssetTier.NON_CORE);
         m.put("/var/log/journal", AssetTier.NON_CORE);
         m.put("/etc", AssetTier.FORBIDDEN_AUTO);
+        m.put("/boot", AssetTier.FORBIDDEN_AUTO);
+        m.put("/dev", AssetTier.FORBIDDEN_AUTO);
         m.put("/var/lib/mysql", AssetTier.FORBIDDEN_AUTO);
         m.put("/var/lib/pgsql", AssetTier.FORBIDDEN_AUTO);
+        m.put("/var/lib/docker", AssetTier.FORBIDDEN_AUTO);
+        m.put("/var/lib/kubelet", AssetTier.FORBIDDEN_AUTO);
         return m;
     }
 
     private static Map<String, ActionAdmissionRule> defaultActions() {
         Map<String, ActionAdmissionRule> m = new LinkedHashMap<>();
 
+        // 临时/日志清理：白名单路径允许，但禁止 ALLOW_AUTO（真实写一律确认，堵住社会工程与窄自动旁路）
         ActionAdmissionRule temp = new ActionAdmissionRule();
         temp.setAllowedTiers(List.of(AssetTier.NON_CORE));
-        temp.setAutoAllowed(true);
+        temp.setAutoAllowed(false);
         temp.setCooldownMs(3_600_000L);
         temp.setVerifyHint("磁盘使用率回落或 du 热点缩小");
         temp.setRollbackHint("删除不可回滚；依赖审计与备份策略");
@@ -89,7 +98,7 @@ public class OpsGovernanceProperties {
 
         ActionAdmissionRule log = new ActionAdmissionRule();
         log.setAllowedTiers(List.of(AssetTier.NON_CORE));
-        log.setAutoAllowed(true);
+        log.setAutoAllowed(false);
         log.setCooldownMs(3_600_000L);
         log.setVerifyHint("journal 无新增 FATAL；错误率下降");
         log.setRollbackHint("日志裁剪不可回滚");

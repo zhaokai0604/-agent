@@ -1,16 +1,23 @@
 package com.award.log.service.impl;
 
 import com.award.log.agent.AssistantIntentCategory;
+import com.award.log.agent.AssistantIntentSignals;
 import com.award.log.agent.AssistantReplyMode;
 import com.award.log.agent.AssistantReplyPlanner;
 import com.award.log.agent.AssistantReplyPrompts;
+import com.award.log.agent.AgentExecutionState;
 import com.award.log.agent.AssistantStreamEvents;
+import com.award.log.agent.AgentSkillPlan;
+import com.award.log.agent.AgentToolPhase;
 import com.award.log.agent.AssistantAuditRecorder;
 import com.award.log.agent.MultiAgentContextBuilder;
 import com.award.log.agent.OpsIntentRouter;
 import com.award.log.agent.OpsRuntimeService;
 import com.award.log.agent.OpsReportFormat;
 import com.award.log.agent.awm.FailureInsightService;
+import com.award.log.agent.awm.OpsWorkflow;
+import com.award.log.agent.awm.WorkflowMemoryService;
+import com.award.log.agent.awm.WorkflowRetriever;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.mcp.McpToolRegistry;
 import com.award.log.security.AgenticRiskScoreEngine;
@@ -26,20 +33,26 @@ import com.award.log.security.RiskLevel;
 import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.security.WriteExecutionCoordinator;
 import com.award.log.service.AiLogAlarmService;
+import com.award.log.service.AiModelRouter;
 import com.award.log.service.KnowledgeBaseService;
 import com.award.log.service.OpsOpenIncidentService;
 import com.award.log.service.StatisticsService;
 import com.award.log.util.AiChatResponseSupport;
+import com.award.log.util.AiUsageSupport;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.ChatModelCallAdvisor;
+import org.springframework.ai.chat.client.advisor.ToolCallAdvisor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -52,6 +65,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -67,11 +81,27 @@ public class UnifiedAssistantService {
 
     public static final String ASSISTANT_META_PREFIX = "ASSISTANT_META:";
 
+    private record ToolAgentCompletion(
+            String markdown,
+            String traceId,
+            String securityOutcome,
+            List<String> toolsUsed,
+            boolean writeConfirmed,
+            boolean realWriteOk,
+            boolean anyTool,
+            Map<String, Object> executionState,
+            Map<String, Object> contextUsage
+    ) {
+    }
+
     private static final int MAX_HISTORY_TURNS = 24;
     private static final int MAX_TURN_CHARS = 2800;
 
     @Autowired
     private ChatModel chatModel;
+
+    @Autowired(required = false)
+    private AiModelRouter aiModelRouter;
 
     @Autowired
     private StatisticsService statisticsService;
@@ -97,6 +127,9 @@ public class UnifiedAssistantService {
     @Autowired(required = false)
     private ChatClient.Builder chatClientBuilder;
 
+    @Autowired(required = false)
+    private ToolCallingManager toolCallingManager;
+
     @Autowired
     private McpToolRegistry mcpToolRegistry;
 
@@ -117,6 +150,12 @@ public class UnifiedAssistantService {
 
     @Autowired(required = false)
     private FailureInsightService failureInsightService;
+
+    @Autowired(required = false)
+    private WorkflowRetriever workflowRetriever;
+
+    @Autowired(required = false)
+    private WorkflowMemoryService workflowMemoryService;
 
     @Autowired
     private OpsIntentRouter opsIntentRouter;
@@ -147,6 +186,12 @@ public class UnifiedAssistantService {
 
     @Value("${agent.assistant.tool-catalog-prompt-max:28}")
     private int toolCatalogPromptMax;
+
+    @Value("${spring.ai.openai.chat.options.model:unknown}")
+    private String configuredModelName;
+
+    @Value("${agent.ai.default-context-window:32768}")
+    private int configuredContextWindow;
 
     public Map<String, Object> getAssistantContext() {
         return getAssistantContext(null);
@@ -249,6 +294,14 @@ public class UnifiedAssistantService {
                                    List<ChatTurn> history,
                                    boolean useToolAgent,
                                    boolean confirmRemediation) {
+        return chatStream(userMessage, history, useToolAgent, confirmRemediation, null);
+    }
+
+    public Flux<String> chatStream(String userMessage,
+                                   List<ChatTurn> history,
+                                   boolean useToolAgent,
+                                   boolean confirmRemediation,
+                                   String requestedModelProfile) {
         String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
                 userMessage == null ? "" : userMessage.trim(), 32_000);
         if (safe.isBlank()) {
@@ -257,9 +310,51 @@ public class UnifiedAssistantService {
         AssistantReplyPlanner.ReplyPlan plan = assistantReplyPlanner.plan(
                 safe, history, useToolAgent, confirmRemediation, orchestratorEnabled, opsRuntimeService);
         if (plan.useToolAgentPath()) {
-            return chatStreamWithToolAgent(safe, history, confirmRemediation, plan);
+            return chatStreamWithToolAgent(safe, history, confirmRemediation, plan, requestedModelProfile);
         }
-        return chatStreamPlain(safe, history, plan);
+        return chatStreamPlain(safe, history, plan, requestedModelProfile);
+    }
+
+    public Map<String, Object> previewAgentState(String userMessage,
+                                                 List<ChatTurn> history,
+                                                 boolean useToolAgent,
+                                                 boolean confirmRemediation) {
+        String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
+                userMessage == null ? "" : userMessage.trim(), 32_000);
+        AssistantReplyPlanner.ReplyPlan plan = assistantReplyPlanner.plan(
+                safe, history, useToolAgent, confirmRemediation, orchestratorEnabled, opsRuntimeService);
+        boolean allowWrite = confirmRemediation || (opsIntentRouter != null && opsIntentRouter.forceRemediate(safe));
+        String conversationContext = AssistantIntentSignals.recentConversationText(safe, history, 8);
+        OpsWorkflow awmHit = resolveAwmHit(safe, conversationContext);
+        List<String> plannedTools = AgentSkillPlan.resolveTools(safe, conversationContext, awmHit, allowWrite);
+        String planPhase = AgentSkillPlan.planPhase(allowWrite, plannedTools);
+        boolean awaitingConfirm = !allowWrite && AgentSkillPlan.hasWriteTools(plannedTools);
+
+        Map<String, Object> preview = new LinkedHashMap<>();
+        preview.put("message", safe);
+        preview.put("replyMode", plan.mode().name());
+        preview.put("intentCategory", plan.category().name());
+        preview.put("useToolAgentPath", plan.useToolAgentPath());
+        preview.put("planPhase", planPhase);
+        preview.put("writeConfirmed", allowWrite);
+        preview.put("awaitingConfirm", awaitingConfirm);
+        preview.put("plannedTools", plannedTools);
+        preview.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
+        preview.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
+        preview.put("executionState", AgentExecutionState.build(
+                plan.mode().name(),
+                allowWrite,
+                allowWrite,
+                plannedTools,
+                planPhase,
+                null,
+                null,
+                awmHit));
+        if (awmHit != null) {
+            preview.put("awmWorkflowId", awmHit.workflowId());
+            preview.put("awmWorkflowTitle", awmHit.title());
+        }
+        return preview;
     }
 
     Map<String, Object> buildChatMeta(String userMessage, AssistantReplyPlanner.ReplyPlan plan) {
@@ -289,7 +384,10 @@ public class UnifiedAssistantService {
         return meta;
     }
 
-    private Flux<String> chatStreamPlain(String userMessage, List<ChatTurn> history, AssistantReplyPlanner.ReplyPlan plan) {
+    private Flux<String> chatStreamPlain(String userMessage,
+                                         List<ChatTurn> history,
+                                         AssistantReplyPlanner.ReplyPlan plan,
+                                         String requestedModelProfile) {
         AssistantReplyMode mode = plan.mode();
         Map<String, Object> context = switch (mode) {
             case CHITCHAT -> Map.of();
@@ -318,8 +416,14 @@ public class UnifiedAssistantService {
         messages.add(new UserMessage(userMessage));
 
         Prompt prompt = new Prompt(messages);
+        AiModelRouter.ResolvedModel resolvedModel = resolveModel(
+                userMessage, AiUsageSupport.estimatePromptTokens(messages), false, requestedModelProfile);
+        Map<String, Object> routeMeta = routingMeta(resolvedModel);
         AtomicReference<String> streamAcc = new AtomicReference<>("");
-        Flux<String> body = chatModel.stream(prompt)
+        AtomicReference<ChatResponse> lastResponse = new AtomicReference<>();
+        boolean sanitizeOps = mode == AssistantReplyMode.OPS_ANALYSIS;
+        Flux<String> body = resolvedModel.chatModel().stream(prompt)
+                .doOnNext(lastResponse::set)
                 .map(AiChatResponseSupport::textFrom)
                 .map(piece -> toStreamingDelta(streamAcc, piece))
                 .filter(piece -> !piece.isEmpty())
@@ -329,7 +433,22 @@ public class UnifiedAssistantService {
                     log.error("assistant plain stream failed", e);
                     return Flux.just("助手暂时不可用：" + e.getMessage());
                 });
-        return prependAssistantMeta(body, userMessage, plan);
+        if (sanitizeOps) {
+            body = body.collectList()
+                    .map(parts -> {
+                        String full = String.join("", parts);
+                        String cleaned = WriteExecutionCoordinator.sanitizeAssistantText(full, false);
+                        return appendChatAntiHallucinationFooter(cleaned, false, false);
+                    })
+                    .flatMapMany(this::chunkTextForSse);
+        }
+        body = Flux.concat(body, usageEvent(
+                resolvedModel,
+                lastResponse,
+                AiUsageSupport.estimatePromptTokens(messages),
+                streamAcc));
+        routeMeta.put("contextUsagePending", true);
+        return prependAssistantMeta(body, userMessage, routeMeta, plan);
     }
 
     Map<String, Object> buildChatMeta(String userMessage) {
@@ -339,7 +458,8 @@ public class UnifiedAssistantService {
     private Flux<String> chatStreamWithToolAgent(String userMessage,
                                                  List<ChatTurn> history,
                                                  boolean confirmRemediation,
-                                                 AssistantReplyPlanner.ReplyPlan plan) {
+                                                 AssistantReplyPlanner.ReplyPlan plan,
+                                                 String requestedModelProfile) {
         if (promptInjectionGuard != null && promptInjectionGuard.isInjection(userMessage)) {
             captureStreamReject(userMessage, "INJECTION", null, "prompt injection detected");
             return Flux.just("检测到疑似注入内容，本轮已拦截，请换一种说法描述您的运维需求。");
@@ -360,9 +480,44 @@ public class UnifiedAssistantService {
         Map<String, Object> metaExtras = new LinkedHashMap<>();
         metaExtras.put("userIntentConfirmed", allowWrite);
         metaExtras.put("writeConfirmed", false);
+        metaExtras.putAll(routingMeta(resolveModel(
+                userMessage, AiUsageSupport.estimateTokens(userMessage), true, requestedModelProfile)));
 
-        if (orchestratorEnabled && opsRuntimeService != null
-                && opsRuntimeService.shouldOrchestrateFromContext(userMessage, history)) {
+        String conversationContext = AssistantIntentSignals.recentConversationText(userMessage, history, 8);
+        OpsWorkflow awmHit = resolveAwmHit(userMessage, conversationContext);
+        recordAwmPlanningHit(awmHit);
+        List<String> plannedTools = AgentSkillPlan.resolveTools(
+                userMessage, conversationContext, awmHit, false);
+        String planPhase = AgentSkillPlan.planPhase(allowWrite, plannedTools);
+        boolean awaitingConfirm = !allowWrite && AgentSkillPlan.hasWriteTools(plannedTools);
+        metaExtras.put("plannedTools", plannedTools);
+        metaExtras.put("planThenAct", true);
+        metaExtras.put("planPhase", planPhase);
+        metaExtras.put("awaitingConfirm", awaitingConfirm);
+        metaExtras.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
+        metaExtras.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
+        metaExtras.put("writeToolsMounted", false);
+        metaExtras.put("executionState", AgentExecutionState.build(
+                plan.mode().name(),
+                false,
+                false,
+                plannedTools,
+                planPhase,
+                null,
+                null,
+                awmHit));
+        if (awmHit != null) {
+            metaExtras.put("awmWorkflowId", awmHit.workflowId());
+            metaExtras.put("awmWorkflowTitle", awmHit.title());
+        }
+
+        // Planner 已选择 Tool Agent 时，不能再被关键词命中的固定剧本截胡；
+        // 只有明确的巡检编排计划才进入 runPlaybook，其余运维任务交给模型选择工具。
+        if (plan.mode() == AssistantReplyMode.ORCHESTRATE
+                && orchestratorEnabled && opsRuntimeService != null
+                && !AssistantIntentSignals.isBroadMetricsQuery(userMessage)) {
+            OpsIntentRouter.Playbook playbook = opsIntentRouter.resolveFromContext(userMessage, history);
+            if (playbook != null && playbook != OpsIntentRouter.Playbook.NONE) {
             McpToolSurface surface = toolSurfaceResolver.resolve(userMessage, intentRisk);
             String traceId = UUID.randomUUID().toString();
             String hint = plan.statusHintZh().isBlank()
@@ -370,12 +525,50 @@ public class UnifiedAssistantService {
                     : plan.statusHintZh();
             AssistantReplyPlanner.ReplyPlan orchestratePlan = new AssistantReplyPlanner.ReplyPlan(
                     AssistantReplyMode.ORCHESTRATE, plan.category(), true, hint);
+            List<String> orchTools = AgentSkillPlan.resolveTools(
+                    userMessage, conversationContext, awmHit, true);
+            String orchPhase = AgentSkillPlan.planPhase(allowWrite, orchTools);
+            metaExtras.put("plannedTools", orchTools);
+            metaExtras.put("planPhase", orchPhase);
+            metaExtras.put("awaitingConfirm", !allowWrite && AgentSkillPlan.hasWriteTools(orchTools));
+            metaExtras.put("observeTools", AgentSkillPlan.observeTools(orchTools));
+            metaExtras.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(orchTools));
+            // 编排路径仍走 orchestrator 内置 Dry-Run；写真实落地仍需确认
+            metaExtras.put("writeToolsMounted", allowWrite);
+            metaExtras.put("executionState", AgentExecutionState.build(
+                    orchestratePlan.mode().name(),
+                    allowWrite,
+                    allowWrite,
+                    orchTools,
+                    orchPhase,
+                    traceId,
+                    null,
+                    awmHit));
+            metaExtras.put("playbook", playbook.name());
+            String prepareHint = allowWrite
+                    ? "用户已确认，按计划执行观测与处置编排…"
+                    : hint;
             Flux<String> body = Flux.concat(
-                    Flux.just("> " + hint + "\n\n"),
+                    progressEventFlux("route", "已识别为巡检编排任务"),
+                    progressEventFlux("prepare", prepareHint),
+                    toolPlanEventFlux(orchTools, "ORCHESTRATE", allowWrite, orchPhase,
+                            AgentExecutionState.build(
+                                    orchestratePlan.mode().name(),
+                                    allowWrite,
+                                    allowWrite,
+                                    orchTools,
+                                    orchPhase,
+                                    traceId,
+                                    null,
+                                    awmHit)),
+                    progressEventFlux("run", allowWrite
+                            ? "正在按确认计划执行本机观测与处置编排…"
+                            : "正在按计划执行本机观测与处置编排，请稍候…"),
                     Mono.fromCallable(() -> {
                                 OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite);
                                 try {
-                                    return opsRuntimeService.runFromContext(userMessage, history, surface, intentRisk);
+                                    return opsRuntimeService.runPlaybook(
+                                            playbook, userMessage, surface, intentRisk);
                                 } finally {
                                     OpsSecurityContext.clear();
                                 }
@@ -383,6 +576,18 @@ public class UnifiedAssistantService {
                             .subscribeOn(Schedulers.boundedElastic())
                             .timeout(Duration.ofMinutes(5))
                             .flatMapMany(result -> {
+                                if (result != null && result.softFallback()) {
+                                    log.info("playbook soft-fallback to tool-agent reason={}",
+                                            result.report() != null
+                                                    ? result.report().get("softFallbackReason")
+                                                    : "PLAYBOOK_NONE");
+                                    return Flux.concat(
+                                            progressEventFlux("route", "未命中固定剧本，改走工具增强诊断"),
+                                            streamToolAgentBody(
+                                                    userMessage, history, confirmRemediation, plan,
+                                                    allowWrite, metaExtras, plannedTools, planPhase,
+                                                    awaitingConfirm, awmHit, requestedModelProfile));
+                                }
                                 Flux<String> event = Flux.empty();
                                 String encoded = AssistantStreamEvents.encode(result.report());
                                 if (encoded != null) {
@@ -391,7 +596,13 @@ public class UnifiedAssistantService {
                                 Object outcome = result.report() != null
                                         ? result.report().get("securityOutcome") : null;
                                 boolean orchLanded = "EXECUTED".equals(String.valueOf(outcome));
+                                recordAwmOrchestratedFeedback(
+                                        awmHit,
+                                        result.traceId(),
+                                        String.valueOf(outcome),
+                                        result.markdown());
                                 return Flux.concat(
+                                        progressEventFlux("synthesize", "编排完成，正在整理答复…"),
                                         event,
                                         chunkTextForSse(appendChatAntiHallucinationFooter(
                                                 result.markdown(), allowWrite, orchLanded)));
@@ -401,50 +612,159 @@ public class UnifiedAssistantService {
                 return Flux.just("巡检编排执行失败：" + e.getMessage());
             });
             return prependAssistantMeta(body, userMessage, metaExtras, orchestratePlan);
+            }
         }
 
+        return prependAssistantMeta(
+                streamToolAgentBody(
+                        userMessage, history, confirmRemediation, plan,
+                        allowWrite, metaExtras, plannedTools, planPhase,
+                        awaitingConfirm, awmHit, requestedModelProfile),
+                userMessage, metaExtras, plan);
+    }
+
+    private Flux<String> streamToolAgentBody(
+            String userMessage,
+            List<ChatTurn> history,
+            boolean confirmRemediation,
+            AssistantReplyPlanner.ReplyPlan plan,
+            boolean allowWrite,
+            Map<String, Object> metaExtras,
+            List<String> plannedTools,
+            String planPhase,
+            boolean awaitingConfirm,
+            OpsWorkflow awmHit,
+            String requestedModelProfile) {
+        boolean writeMounted = allowWrite;
+        metaExtras.put("writeToolsMounted", writeMounted);
         String toolHint = plan.statusHintZh().isBlank()
-                ? "正在通过本地运维工具采集实时数据，请稍候…"
+                ? (allowWrite
+                    ? "用户已确认，正在按计划调用本机运维工具落地…"
+                    : AgentToolPhase.phaseHintZh(false, awaitingConfirm))
                 : plan.statusHintZh();
-        Flux<String> body = Flux.concat(
-                Flux.just("> " + toolHint + "\n\n"),
-                Mono.fromCallable(() -> runBlockingToolAugmentedCompletion(userMessage, history, confirmRemediation))
+        String runHint = allowWrite
+                ? "正在按确认计划执行（写工具已挂载）…"
+                : (awaitingConfirm
+                    ? "正在仅用观测工具诊断；写工具待确认后挂载…"
+                    : "正在按计划调用本机观测工具采集数据…");
+        List<String> toolsForRun = plannedTools;
+        OpsWorkflow awmForRun = awmHit;
+        return Flux.concat(
+                    progressEventFlux("route", allowWrite ? "已识别为确认执行" : "已识别为工具增强诊断"),
+                    progressEventFlux("prepare", toolHint),
+                toolPlanEventFlux(toolsForRun, "TOOL_AGENT", allowWrite, planPhase,
+                        AgentExecutionState.build(
+                                plan.mode().name(),
+                                allowWrite,
+                                writeMounted,
+                                toolsForRun,
+                                planPhase,
+                                null,
+                                null,
+                                awmForRun)),
+                progressEventFlux("run", runHint),
+                Mono.fromCallable(() -> runBlockingToolAugmentedCompletion(
+                                userMessage, history, confirmRemediation, plan,
+                                toolsForRun, planPhase, awmForRun, requestedModelProfile))
                         .subscribeOn(Schedulers.boundedElastic())
                         .timeout(Duration.ofMinutes(4))
-                        .flatMapMany(this::chunkTextForSse)
+                        .flatMapMany(completion -> Flux.concat(
+                                progressEventFlux("synthesize", "采集完成，正在生成说明…"),
+                                toolAgentResultEventFlux(completion),
+                                chunkTextForSse(completion.markdown()),
+                                usageEvent(completion.contextUsage())))
         ).onErrorResume(e -> {
             log.error("assistant tool-agent flow failed", e);
             return Flux.just("工具增强助手暂时不可用：" + e.getMessage());
         });
-        return prependAssistantMeta(body, userMessage, metaExtras, plan);
     }
 
-    private String runBlockingToolAugmentedCompletion(String userMessage,
-                                                      List<ChatTurn> history,
-                                                      boolean confirmRemediation) {
+    private OpsWorkflow resolveAwmHit(String userMessage, String conversationContext) {
+        if (workflowRetriever == null) {
+            return null;
+        }
+        String seed = AgentSkillPlan.planningSeed(userMessage, conversationContext);
+        try {
+            return workflowRetriever.bestMatch(AgentSkillPlan.guessDomain(seed), List.of(), seed);
+        } catch (Exception e) {
+            log.debug("AWM bestMatch skipped: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private ToolAgentCompletion runBlockingToolAugmentedCompletion(String userMessage,
+                                                                   List<ChatTurn> history,
+                                                                   boolean confirmRemediation,
+                                                                   AssistantReplyPlanner.ReplyPlan plan,
+                                                                   List<String> plannedTools,
+                                                                   String planPhase,
+                                                                   OpsWorkflow awmHit,
+                                                                   String requestedModelProfile) {
         Map<String, Object> context = getAssistantContext(userMessage);
         augmentContextWithSessionSecurity(userMessage, context);
         context.put("assistantToolLoop", Boolean.TRUE);
 
         boolean allowWrite = confirmRemediation || opsIntentRouter.forceRemediate(userMessage);
         context.put("userConfirmedWrite", allowWrite);
+        String effectivePlanPhase = planPhase == null || planPhase.isBlank()
+                ? AgentSkillPlan.planPhase(allowWrite, plannedTools)
+                : planPhase;
+        context.put("planPhase", effectivePlanPhase);
+        if (plannedTools != null && !plannedTools.isEmpty()) {
+            context.put("plannedTools", plannedTools);
+            context.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
+            context.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
+        }
 
-        McpToolSurface surface = parseToolSurface(context);
-        ToolCallback[] toolCallbacks = mcpToolRegistry.getToolCallbacksForChatAgent(surface, readOnlySurfaceDenylist);
+        if (awmHit != null) {
+            String seq = AgentSkillPlan.workflowStepSummary(awmHit);
+            if (!seq.isBlank()) {
+                context.put("awmPreferredSequence", seq);
+                context.put("awmWorkflowId", awmHit.workflowId());
+                context.put("awmWorkflowTitle", awmHit.title());
+            }
+        }
+
+        McpToolSurface requestedSurface = parseToolSurface(context);
+        McpToolSurface surface = AgentToolPhase.effectiveSurface(requestedSurface, allowWrite);
+        boolean writeMounted = AgentToolPhase.writeToolsMounted(allowWrite, surface);
+        context.put("toolSurfaceEffective", surface.name());
+        context.put("writeToolsMounted", writeMounted);
+        ToolCallback[] toolCallbacks = mcpToolRegistry.getToolCallbacksForChatAgent(
+                requestedSurface, readOnlySurfaceDenylist, allowWrite);
 
         String traceId = UUID.randomUUID().toString();
         long startedAt = System.currentTimeMillis();
         ChatToolExecutionTracker.clear();
         OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite);
         try {
+            AiModelRouter.ResolvedModel resolvedModel = resolveModel(
+                    userMessage, AiUsageSupport.estimateTokens(contextToJson(context)), true,
+                    requestedModelProfile);
+            int estimatedPromptTokens = AiUsageSupport.estimateTokens(
+                    contextToJson(context) + bundleHistoryAndUser(history, userMessage));
+            ChatResponse response = null;
             String content;
             if (chatClientBuilder == null) {
-                content = runFallbackPromptOnly(userMessage, history, context);
+                content = runFallbackPromptOnly(userMessage, history, context, resolvedModel.chatModel());
             } else {
-                ChatClient client = chatClientBuilder.build();
+                ChatClient.Builder dynamicClientBuilder = ChatClient.builder(resolvedModel.chatModel())
+                        .defaultAdvisors(ChatModelCallAdvisor.builder()
+                                .chatModel(resolvedModel.chatModel())
+                                .build());
+                if (toolCallbacks.length > 0 && toolCallingManager != null) {
+                    dynamicClientBuilder.defaultAdvisors(ToolCallAdvisor.builder()
+                            .toolCallingManager(toolCallingManager)
+                            .build());
+                }
+                ChatClient client = dynamicClientBuilder.build();
                 String ctxJson = contextToJson(context);
                 String systemPrompt = AssistantReplyPrompts.toolAgentSystemPrompt(
-                        ctxJson, toolAugmentedSection(context, surface));
+                        ctxJson,
+                        toolAugmentedSection(context, surface),
+                        allowWrite,
+                        plannedTools == null ? List.of() : plannedTools,
+                        writeMounted);
                 String bundledUser = bundleHistoryAndUser(history, userMessage);
                 var promptSpec = client.prompt()
                         .system(systemPrompt)
@@ -452,28 +772,41 @@ public class UnifiedAssistantService {
                 if (toolCallbacks.length > 0) {
                     promptSpec = promptSpec.toolCallbacks(toolCallbacks);
                 }
-                content = promptSpec.call().content();
+                var responseSpec = promptSpec.call();
+                content = responseSpec.content();
+                response = responseSpec.chatResponse();
             }
+            Map<String, Object> contextUsage = AiUsageSupport.usage(
+                    response,
+                    resolvedModel.profile(),
+                    resolvedModel.model(),
+                    resolvedModel.contextWindow(),
+                    estimatedPromptTokens,
+                    AiUsageSupport.estimateTokens(content));
 
             List<Map<String, Object>> steps = assistantAuditRecorder.newSteps();
             assistantAuditRecorder.addCot(steps, 1, "receive", userMessage);
             assistantAuditRecorder.addCot(steps, 2, "perceive", "assistant context injected");
-            assistantAuditRecorder.addCot(steps, 3, "reason", "tool-augmented assistant completion");
+            assistantAuditRecorder.addCot(steps, 3, "reason",
+                    writeMounted ? "tool-augmented execute phase" : "tool-augmented diagnose phase");
+            LinkedHashSet<String> toolsUsed = new LinkedHashSet<>();
             for (ChatToolExecutionTracker.ToolInvocation inv : ChatToolExecutionTracker.snapshot()) {
                 Map<String, Object> toolStep = new LinkedHashMap<>();
                 toolStep.put("toolName", inv.toolName());
                 toolStep.put("mode", inv.mode() != null ? inv.mode() : "READ");
                 toolStep.put("success", inv.success());
+                toolsUsed.add(inv.toolName());
                 String phase = inv.success() && inv.mode() != null
                         && inv.mode().toUpperCase(Locale.ROOT).contains("DELETE")
                         ? "execute" : "preview";
                 assistantAuditRecorder.addStructuredStep(steps, phase, toolStep);
             }
-            assistantAuditRecorder.addCot(steps, 4, "verify", "tool surface=" + surface.name());
+            assistantAuditRecorder.addCot(steps, 4, "verify",
+                    "tool surface=" + surface.name() + ", writeMounted=" + writeMounted);
             assistantAuditRecorder.addStep(steps, "result", truncateForAudit(content, 600));
             String toolAgentOutcome;
             if (surface == McpToolSurface.READ_ONLY) {
-                toolAgentOutcome = "READ_ONLY_SURFACE";
+                toolAgentOutcome = allowWrite ? "READ_ONLY_SURFACE" : "DIAGNOSE_READONLY_MOUNT";
             } else if (ChatToolExecutionTracker.hasSuccessfulRealWrite()) {
                 toolAgentOutcome = "EXECUTED";
             } else if (ChatToolExecutionTracker.hasAnyToolInvocation()) {
@@ -499,16 +832,156 @@ public class UnifiedAssistantService {
             cleaned = polishAssistantResponse(cleaned, new AssistantReplyPlanner.ReplyPlan(
                     AssistantReplyMode.TOOL_AGENT, AssistantIntentCategory.OPS_DIAGNOSIS, true, ""));
             cleaned = WriteExecutionCoordinator.sanitizeAssistantText(cleaned, allowWrite);
-            return appendChatAntiHallucinationFooter(cleaned, allowWrite);
+            boolean realWriteOk = ChatToolExecutionTracker.hasSuccessfulRealWrite();
+            List<String> planRef = plannedTools != null && !plannedTools.isEmpty()
+                    ? plannedTools
+                    : AgentSkillPlan.forToolAgent(userMessage);
+            boolean shouldAppendPlan = !allowWrite && !realWriteOk
+                    && (ChatToolExecutionTracker.hasAnyToolInvocation()
+                    || AgentSkillPlan.hasWriteTools(planRef));
+            if (shouldAppendPlan && !cleaned.contains("## 处置计划")) {
+                cleaned = cleaned + OpsReportFormat.remediationPlanMarkdown(
+                        AgentSkillPlan.remediationItems(planRef, false));
+            }
+            Map<String, Object> executionState = AgentExecutionState.build(
+                    plan.mode().name(),
+                    allowWrite,
+                    writeMounted,
+                    planRef,
+                    effectivePlanPhase,
+                    traceId,
+                    toolAgentOutcome,
+                    awmHit);
+            executionState.put("toolsUsed", List.copyOf(toolsUsed));
+            executionState.put("realWriteOk", realWriteOk);
+            boolean anyTool = ChatToolExecutionTracker.hasAnyToolInvocation();
+            executionState.put("anyTool", anyTool);
+            executionState.put("memoryApplied", awmHit != null);
+            boolean feedbackRecorded = recordAwmToolAgentFeedback(
+                    awmHit,
+                    traceId,
+                    toolAgentOutcome,
+                    List.copyOf(toolsUsed),
+                    anyTool,
+                    realWriteOk,
+                    cleaned);
+            executionState.put("feedbackRecorded", feedbackRecorded);
+            return new ToolAgentCompletion(
+                    appendChatAntiHallucinationFooter(cleaned, allowWrite),
+                    traceId,
+                    toolAgentOutcome,
+                    List.copyOf(toolsUsed),
+                    allowWrite,
+                    realWriteOk,
+                    anyTool,
+                    executionState,
+                    contextUsage);
         } finally {
             ChatToolExecutionTracker.clear();
             OpsSecurityContext.clear();
         }
     }
 
+    private void recordAwmPlanningHit(OpsWorkflow awmHit) {
+        if (awmHit == null || workflowRetriever == null) {
+            return;
+        }
+        try {
+            workflowRetriever.recordHit(awmHit);
+        } catch (Exception e) {
+            log.debug("AWM planning hit record skipped workflowId={}: {}",
+                    awmHit.workflowId(), e.getMessage());
+        }
+    }
+
+    private boolean recordAwmToolAgentFeedback(
+            OpsWorkflow awmHit,
+            String traceId,
+            String outcome,
+            List<String> toolsUsed,
+            boolean anyTool,
+            boolean realWriteOk,
+            String summary
+    ) {
+        if (awmHit == null || workflowMemoryService == null) {
+            return false;
+        }
+        boolean success = isAwmSuccessfulOutcome(outcome, anyTool, realWriteOk);
+        int toolCount = toolsUsed == null ? 0 : toolsUsed.size();
+        int stepsTotal = awmHit.steps() == null || awmHit.steps().isEmpty()
+                ? Math.max(1, toolCount)
+                : awmHit.steps().size();
+        int stepsOk = success ? Math.min(stepsTotal, Math.max(1, toolCount)) : 0;
+        try {
+            workflowMemoryService.recordRun(
+                    awmHit.workflowId(),
+                    traceId,
+                    success,
+                    stepsOk,
+                    stepsTotal,
+                    "tool-agent outcome=" + outcome
+                            + ", tools=" + (toolsUsed == null ? List.of() : toolsUsed)
+                            + ", summary=" + truncateForAudit(summary, 240));
+            if (success) {
+                workflowMemoryService.recordSuccess(awmHit.workflowId());
+            }
+            return true;
+        } catch (Exception e) {
+            log.debug("AWM tool-agent feedback skipped workflowId={}: {}",
+                    awmHit.workflowId(), e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean recordAwmOrchestratedFeedback(
+            OpsWorkflow awmHit,
+            String traceId,
+            String outcome,
+            String summary
+    ) {
+        if (awmHit == null || workflowMemoryService == null) {
+            return false;
+        }
+        boolean success = isAwmSuccessfulOutcome(
+                outcome,
+                true,
+                "EXECUTED".equalsIgnoreCase(String.valueOf(outcome)));
+        int stepsTotal = awmHit.steps() == null || awmHit.steps().isEmpty() ? 1 : awmHit.steps().size();
+        try {
+            workflowMemoryService.recordRun(
+                    awmHit.workflowId(),
+                    traceId,
+                    success,
+                    success ? stepsTotal : 0,
+                    stepsTotal,
+                    "orchestrator outcome=" + outcome
+                            + ", summary=" + truncateForAudit(summary, 240));
+            if (success) {
+                workflowMemoryService.recordSuccess(awmHit.workflowId());
+            }
+            return true;
+        } catch (Exception e) {
+            log.debug("AWM orchestrator feedback skipped workflowId={}: {}",
+                    awmHit.workflowId(), e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean isAwmSuccessfulOutcome(String outcome, boolean anyTool, boolean realWriteOk) {
+        String normalized = outcome == null ? "" : outcome.trim().toUpperCase(Locale.ROOT);
+        if (realWriteOk || "EXECUTED".equals(normalized) || "REMEDIATED".equals(normalized)) {
+            return true;
+        }
+        return anyTool && ("DIAGNOSED".equals(normalized)
+                || "PREVIEW".equals(normalized)
+                || "PREVIEW_OR_WRITE_PENDING".equals(normalized)
+                || "HEALTHY".equals(normalized));
+    }
+
     private String runFallbackPromptOnly(String userMessage,
                                          List<ChatTurn> history,
-                                         Map<String, Object> context) {
+                                         Map<String, Object> context,
+                                         ChatModel model) {
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(buildSystemPrompt(context)));
         for (ChatTurn turn : trimHistory(history)) {
@@ -524,7 +997,7 @@ public class UnifiedAssistantService {
             }
         }
         messages.add(new UserMessage(userMessage));
-        return AiChatResponseSupport.textFrom(chatModel.call(new Prompt(messages)));
+        return AiChatResponseSupport.textFrom(model.call(new Prompt(messages)));
     }
 
     boolean isChitchatMessage(String userMessage) {
@@ -643,6 +1116,60 @@ public class UnifiedAssistantService {
                 || trimmed.startsWith("| 项目 |")
                 || trimmed.matches("(?s)^\\|[^|]+\\|.*")
                 || trimmed.startsWith("## 系统状态");
+    }
+
+    private AiModelRouter.ResolvedModel resolveModel(String userMessage,
+                                                     int estimatedPromptTokens,
+                                                     boolean toolAgent) {
+        return resolveModel(userMessage, estimatedPromptTokens, toolAgent, null);
+    }
+
+    private AiModelRouter.ResolvedModel resolveModel(String userMessage,
+                                                     int estimatedPromptTokens,
+                                                     boolean toolAgent,
+                                                     String requestedModelProfile) {
+        if (aiModelRouter != null) {
+            return aiModelRouter.resolve(userMessage, estimatedPromptTokens, toolAgent, requestedModelProfile);
+        }
+        return new AiModelRouter.ResolvedModel(
+                chatModel,
+                "default",
+                configuredModelName,
+                Math.max(1, configuredContextWindow),
+                "DEFAULT");
+    }
+
+    private Map<String, Object> routingMeta(AiModelRouter.ResolvedModel resolvedModel) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        if (resolvedModel == null) return meta;
+        meta.put("modelProfile", resolvedModel.profile());
+        meta.put("model", resolvedModel.model());
+        meta.put("modelRoutingMode", resolvedModel.routingMode());
+        meta.put("contextWindow", resolvedModel.contextWindow());
+        return meta;
+    }
+
+    private Flux<String> usageEvent(AiModelRouter.ResolvedModel resolvedModel,
+                                    AtomicReference<ChatResponse> response,
+                                    int estimatedPromptTokens,
+                                    AtomicReference<String> output) {
+        if (resolvedModel == null) return Flux.empty();
+        return Flux.defer(() -> usageEvent(AiUsageSupport.usage(
+                response.get(),
+                resolvedModel.profile(),
+                resolvedModel.model(),
+                resolvedModel.contextWindow(),
+                estimatedPromptTokens,
+                AiUsageSupport.estimateTokens(output.get()))));
+    }
+
+    private Flux<String> usageEvent(Map<String, Object> usage) {
+        if (usage == null || usage.isEmpty()) return Flux.empty();
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", "context-usage");
+        event.put("contextUsage", usage);
+        String encoded = AssistantStreamEvents.encode(event);
+        return encoded == null ? Flux.empty() : Flux.just(encoded);
     }
 
     private Flux<String> prependAssistantMeta(Flux<String> body, String userMessage) {
@@ -886,6 +1413,77 @@ public class UnifiedAssistantService {
             parts.add(text.substring(i, Math.min(text.length(), i + step)));
         }
         return Flux.fromIterable(parts);
+    }
+
+    /** 结构化进度事件：前端展示「处理进度」，不污染正文 Markdown。 */
+    private static Flux<String> progressEventFlux(String phase, String title) {
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", "progress");
+        event.put("phase", phase);
+        event.put("title", title == null ? "" : title);
+        String encoded = AssistantStreamEvents.encode(event);
+        return encoded == null ? Flux.empty() : Flux.just(encoded);
+    }
+
+    /** Plan-then-Act：执行前推送计划工具列表，供前端展示。 */
+    private static Flux<String> toolPlanEventFlux(List<String> plannedTools,
+                                                  String mode,
+                                                  boolean writeConfirmed,
+                                                  String planPhase,
+                                                  Map<String, Object> executionState) {
+        if (plannedTools == null || plannedTools.isEmpty()) {
+            return Flux.empty();
+        }
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", "tool-plan");
+        event.put("phase", "plan");
+        event.put("mode", mode == null ? "" : mode);
+        event.put("planPhase", planPhase == null ? "" : planPhase);
+        event.put("tools", plannedTools);
+        event.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
+        event.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
+        event.put("items", AgentSkillPlan.remediationItems(plannedTools, writeConfirmed));
+        event.put("planKind", AgentSkillPlan.hasWriteTools(plannedTools) ? "REMEDIATION" : "DIAGNOSIS");
+        String phaseLabel = "EXECUTE".equals(planPhase) ? "确认执行计划" : "诊断计划";
+        event.put("title", writeConfirmed ? phaseLabel + "（已确认）" : phaseLabel + "（待执行）");
+        event.put("writeConfirmed", writeConfirmed);
+        event.put("awaitingConfirm", !writeConfirmed && AgentSkillPlan.hasWriteTools(plannedTools));
+        event.put("writeToolsMounted", writeConfirmed);
+        if (executionState != null && !executionState.isEmpty()) {
+            event.put("executionState", executionState);
+        }
+        String encoded = AssistantStreamEvents.encode(event);
+        return encoded == null ? Flux.empty() : Flux.just(encoded);
+    }
+
+    private static Flux<String> toolAgentResultEventFlux(ToolAgentCompletion completion) {
+        if (completion == null) {
+            return Flux.empty();
+        }
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", "tool-agent-result");
+        event.put("phase", "verify");
+        event.put("replyMode", "TOOL_AGENT");
+        event.put("traceId", completion.traceId());
+        event.put("securityOutcome", completion.securityOutcome());
+        event.put("toolsUsed", completion.toolsUsed());
+        event.put("writeConfirmed", completion.writeConfirmed());
+        event.put("writeToolsMounted", completion.writeConfirmed());
+        event.put("realWriteOk", completion.realWriteOk());
+        event.put("anyTool", completion.anyTool());
+        if (completion.executionState() != null && !completion.executionState().isEmpty()) {
+            event.put("executionState", completion.executionState());
+            Object awmWorkflowId = completion.executionState().get("awmWorkflowId");
+            Object awmWorkflowTitle = completion.executionState().get("awmWorkflowTitle");
+            if (awmWorkflowId != null) {
+                event.put("awmWorkflowId", awmWorkflowId);
+            }
+            if (awmWorkflowTitle != null) {
+                event.put("awmWorkflowTitle", awmWorkflowTitle);
+            }
+        }
+        String encoded = AssistantStreamEvents.encode(event);
+        return encoded == null ? Flux.empty() : Flux.just(encoded);
     }
 
     private static String toStreamingDelta(AtomicReference<String> accumulatedFull, String piece) {

@@ -9,12 +9,11 @@ spring:
   profiles:
     active: dev
   datasource:
-    # MariaDB: org.mariadb.jdbc.Driver + jdbc:mariadb://...
-    # MySQL: com.mysql.cj.jdbc.Driver + jdbc:mysql://...
+    # 默认 MySQL 8；若用 MariaDB：org.mariadb.jdbc.Driver + jdbc:mariadb://...
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/log_analysis?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
-    password: "请填写本地 MariaDB 密码"
+    password: "请填写本地 MySQL 密码"
 
   ai:
     openai:

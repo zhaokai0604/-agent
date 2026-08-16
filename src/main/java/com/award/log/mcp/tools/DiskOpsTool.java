@@ -62,10 +62,7 @@ public class DiskOpsTool {
     }
 
     private String unknownOperation(String op) throws JsonProcessingException {
-        long t = System.currentTimeMillis();
         return objectMapper.writeValueAsString(
-                new ToolResult<>(false, null,
-                        "未知 operation: " + op + "；可选 df|hotspots|analyze|clean-temp",
-                        System.currentTimeMillis() - t, false));
+                ToolResult.error("未知 operation: " + op + "；可选 df|hotspots|analyze|clean-temp", 0L));
     }
 }

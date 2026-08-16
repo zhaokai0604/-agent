@@ -1,5 +1,6 @@
 package com.award.log.mcp.tools;
 
+import com.award.log.mcp.McpToolResponses;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -73,6 +74,9 @@ public class SslCertTool {
                 Instant now = Instant.now();
                 long daysUntilExpiry = ChronoUnit.DAYS.between(now, notAfter);
 
+                boolean expired = now.isAfter(notAfter);
+                boolean expiringSoon = daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
+
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("host", targetHost);
                 data.put("port", tlsPort);
@@ -81,14 +85,15 @@ public class SslCertTool {
                 data.put("notBefore", notBefore.toString());
                 data.put("notAfter", notAfter.toString());
                 data.put("daysUntilExpiry", daysUntilExpiry);
-                data.put("expired", now.isAfter(notAfter));
-                data.put("expiringSoon", daysUntilExpiry >= 0 && daysUntilExpiry <= 30);
+                data.put("expired", expired);
+                data.put("expiringSoon", expiringSoon);
                 data.put("serialNumber", cert.getSerialNumber().toString(16));
 
                 long duration = System.currentTimeMillis() - start;
                 log.info("SSL 证书检查 {}:{} 剩余 {} 天", targetHost, tlsPort, daysUntilExpiry);
-                return objectMapper.writeValueAsString(
-                        new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(data), null, duration, false));
+                String dataJson = objectMapper.writeValueAsString(data);
+                boolean healthy = !expired && !expiringSoon;
+                return McpToolResponses.successOrWarn(objectMapper, dataJson, duration, healthy);
             }
         } catch (Exception e) {
             log.warn("SSL 证书检查失败 {}:{} - {}", targetHost, tlsPort, e.getMessage());
@@ -97,7 +102,6 @@ public class SslCertTool {
     }
 
     private String buildError(String msg, long start) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, msg, System.currentTimeMillis() - start, false));
+        return McpToolResponses.error(objectMapper, msg, start);
     }
 }

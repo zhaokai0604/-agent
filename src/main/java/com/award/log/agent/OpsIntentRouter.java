@@ -1,12 +1,18 @@
 package com.award.log.agent;
 
+import com.award.log.service.impl.UnifiedAssistantService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
  * 统一意图路由：决定走运维运行时编排还是 LLM 多步 Tool。
- * <p>规则优先于 LLM，保证磁盘/CPU/巡检等高频路径输出稳定。</p>
+ * <p>
+ * 优先级：规则命中 → 直接 Playbook；规则未命中 → 可选语义 LLM 兜底；
+ * 仍不确定 → {@link Playbook#NONE}（交对话 LLM / 追问，不瞎编排）。
+ * </p>
  */
 @Component
 public class OpsIntentRouter {
@@ -33,6 +39,7 @@ public class OpsIntentRouter {
                     + "cleanup.*(disk|log|temp)|"
                     + "(预览|查看|诊断).*(清理|清除).*(临时|tmp|temp|日志|磁盘)|"
                     + "磁盘满了|空间不够|清理临时|"
+                    + "帮我清理|请清理一下|清理一下|清一下垃圾|清理临时文件|"
                     + "(扫描|扫).*(磁盘|c盘|空间|文件|目录|热点|盘)|"
                     + "(照片|图片|文件|相册).*(c盘|磁盘|空间|备份|整理)",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
@@ -72,6 +79,8 @@ public class OpsIntentRouter {
                     + "清垃圾并执行|删垃圾并执行|直接删|马上删",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
+    private LlmPlaybookClassifier llmPlaybookClassifier;
+
     public enum Playbook {
         PATROL_AUTOMATION,
         DISK_CLEANUP,
@@ -80,7 +89,24 @@ public class OpsIntentRouter {
         NONE
     }
 
+    @Autowired(required = false)
+    public void setLlmPlaybookClassifier(LlmPlaybookClassifier llmPlaybookClassifier) {
+        this.llmPlaybookClassifier = llmPlaybookClassifier;
+    }
+
+    /**
+     * 规则 + 可选语义兜底。对外主入口。
+     */
     public Playbook resolve(String userMessage) {
+        Playbook byRule = resolveByRules(userMessage);
+        if (byRule != Playbook.NONE) {
+            return byRule;
+        }
+        return resolveByLlm(userMessage, null);
+    }
+
+    /** 仅规则层（测例 / 对照语义兜底时使用）。 */
+    public Playbook resolveByRules(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
             return Playbook.NONE;
         }
@@ -108,16 +134,30 @@ public class OpsIntentRouter {
 
     public Playbook resolveFromContext(
             String userMessage,
-            java.util.List<com.award.log.service.impl.UnifiedAssistantService.ChatTurn> history) {
-        Playbook direct = resolve(userMessage);
+            List<UnifiedAssistantService.ChatTurn> history) {
+        Playbook direct = resolveByRules(userMessage);
         if (direct != Playbook.NONE) {
             return direct;
         }
-        if (!AssistantIntentSignals.isOpsProceed(userMessage, history)
-                && !AssistantIntentSignals.isComputerManagementIntent(userMessage, history)) {
+        if (AssistantIntentSignals.isOpsProceed(userMessage, history)
+                || AssistantIntentSignals.isComputerManagementIntent(userMessage, history)) {
+            Playbook fromHistory = resolveByRules(
+                    AssistantIntentSignals.recentConversationText(userMessage, history, 8));
+            if (fromHistory != Playbook.NONE) {
+                return fromHistory;
+            }
+        }
+        String hint = history == null || history.isEmpty()
+                ? null
+                : AssistantIntentSignals.recentConversationText(userMessage, history, 6);
+        return resolveByLlm(userMessage, hint);
+    }
+
+    private Playbook resolveByLlm(String userMessage, String contextHint) {
+        if (llmPlaybookClassifier == null || !llmPlaybookClassifier.isAvailable()) {
             return Playbook.NONE;
         }
-        return resolve(AssistantIntentSignals.recentConversationText(userMessage, history, 8));
+        return llmPlaybookClassifier.classify(userMessage, contextHint).orElse(Playbook.NONE);
     }
 
     public boolean shouldOrchestrate(String userMessage) {
@@ -126,7 +166,7 @@ public class OpsIntentRouter {
 
     public boolean shouldOrchestrateFromContext(
             String userMessage,
-            java.util.List<com.award.log.service.impl.UnifiedAssistantService.ChatTurn> history) {
+            List<UnifiedAssistantService.ChatTurn> history) {
         if (shouldOrchestrate(userMessage)) {
             return true;
         }

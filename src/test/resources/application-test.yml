@@ -1,6 +1,7 @@
 spring:
   config:
-    import: optional:classpath:application-local.yml
+    # 测试禁止吸入本机密钥/MySQL；与 IntegrationTestBase 强制 H2 属性配合
+    import: "optional:classpath:application-local.yml"
   main:
     allow-circular-references: true
   datasource:

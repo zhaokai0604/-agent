@@ -19,6 +19,13 @@ app:
 ops:
   dry-run:
     global: false
+  remediation:
+    # 文件被占用时，跳过而不是卡住
+    skip-locked-files: true
+    max-scan-depth: 8
+    large-dir-threshold-gb: 5
+    prefer-access-days: 2
+    write-probe-timeout-ms: 50
   auto-remediation:
     enabled: true
     run-mode: HYBRID
@@ -35,7 +42,7 @@ ops:
     enabled: true
     disk-warn-percent: 1
     cpu-warn-percent: 1
-    inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:logs,C:/Users/Administrator/AppData/Local/Temp,C:/Windows/Temp,C:/Temp,D:/Temp,E:/Temp,F:/Temp}
+    inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:C:/Users/Administrator/AppData/Local/Temp,C:/Windows/Temp}
 
 # 本地 Windows / 无 sudo 用户时可改为 false，避免 sudo -u 失败
 agent:
@@ -50,18 +57,10 @@ agent:
       - C:/ProgramData/Microsoft/Windows/WER/ReportQueue
       - C:/Users/Administrator/AppData/Local/Temp
       - C:/Windows/Temp
-      - C:/Temp
-      - D:/Temp
-      - E:/Temp
-      - F:/Temp
       - logs
     windows-clean-roots:
       - C:/Users/Administrator/AppData/Local/Temp
       - C:/Windows/Temp
-      - C:/Temp
-      - D:/Temp
-      - E:/Temp
-      - F:/Temp
     windows-log-cleanup-roots:
       - C:/Windows/Logs
       - C:/Windows/System32/winevt/Logs
@@ -70,6 +69,8 @@ agent:
       - logs
   runtime:
     enabled: true
+  intent:
+    llm-routing-enabled: true
   assistant:
     use-tool-agent-default: true
     orchestrator:

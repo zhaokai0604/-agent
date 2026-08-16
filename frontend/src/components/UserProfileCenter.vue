@@ -160,7 +160,7 @@
     <el-dialog v-model="apiKeyDialogVisible" title="创建 API Key" width="460px">
       <el-form label-position="top">
         <el-form-item label="名称">
-          <el-input v-model="newApiKeyName" placeholder="例如：Workbench Readonly Key" />
+          <el-input v-model="newApiKeyName" placeholder="例如：Ops Readonly Key" />
         </el-form-item>
       </el-form>
       <template #footer>

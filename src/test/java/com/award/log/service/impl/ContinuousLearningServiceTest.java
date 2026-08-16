@@ -47,7 +47,8 @@ class ContinuousLearningServiceTest {
 
     @Test
     void triggerManualTrainingShouldInvokeDailyJob() {
-        service.triggerManualTraining();
-        verifyNoInteractions(decisionFeedbackMapper);
+        when(decisionFeedbackMapper.countUntrained()).thenReturn(0);
+        assertFalse(service.triggerManualTraining());
+        verify(decisionFeedbackMapper).countUntrained();
     }
 }

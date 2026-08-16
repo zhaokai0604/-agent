@@ -37,16 +37,6 @@
       </el-col>
     </el-row>
 
-    <el-alert
-      v-if="!status.ready"
-      type="warning"
-      :closable="false"
-      show-icon
-      class="conn-alert"
-      title="知识库未就绪"
-      description="请启动 Qdrant（docker compose up -d qdrant）。启动后系统会自动写入 5 篇内置 Runbook；也可手动新增文档。"
-    />
-
     <el-tabs v-model="activeTab" type="border-card" class="kb-tabs ops-tabs">
       <el-tab-pane label="文档管理" name="docs">
         <div class="toolbar">
@@ -166,6 +156,7 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 import OpsPageHeader from './OpsPageHeader.vue'
 import {
   getKnowledgeStatus,
+  seedKnowledgeBuiltin,
   listKnowledgeDocuments,
   uploadKnowledgeText,
   uploadKnowledgeFile,
@@ -194,7 +185,7 @@ const searchedOnce = ref(false)
 
 const embeddingLabel = computed(() => {
   if (status.value.embeddingMode === 'spring-ai') return 'DashScope 语义向量'
-  if (status.value.embeddingMode === 'local-fallback') return '本地降级（未连接向量库）'
+  if (status.value.embeddingMode === 'local-fallback') return '本地降级向量'
   return '不可用'
 })
 
@@ -230,6 +221,16 @@ async function fetchDocuments () {
 }
 
 async function refreshAll () {
+  loadingDocs.value = true
+  try {
+    const seed = await seedKnowledgeBuiltin()
+    const n = seed?.seeded ?? 0
+    if (n > 0) {
+      ElMessage.success(`已写入 ${n} 篇内置 Runbook`)
+    }
+  } catch (e) {
+    ElMessage.warning(e?.message || '种子写入失败，请检查 Qdrant 连接')
+  }
   await Promise.all([fetchStatus(), fetchDocuments()])
 }
 

@@ -12,6 +12,7 @@ import com.award.log.analyzer.LogCleaner;
 import com.award.log.dto.EnhancedLogParseResultEntity;
 import com.award.log.model.LogProtocolType;
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
 import com.award.log.security.OpsPathPolicy;
@@ -101,7 +102,7 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
 
         try {
             if (!opsPathPolicy.isAllowedLogReadPath(targetPath)) {
-                return buildErrorResponse(opsPathPolicy.rejectReason("日志读取路径"), startTime);
+                return McpToolResponses.error(objectMapper, opsPathPolicy.rejectReason("日志读取路径"), startTime);
             }
 
             List<String> logEntries = readLogFile(targetPath, readCap);
@@ -118,7 +119,7 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
                 emptyPayload.put("recommendation", "请检查日志文件路径是否正确");
                 String data = objectMapper.writeValueAsString(emptyPayload);
                 long duration = System.currentTimeMillis() - startTime;
-                return buildSuccessResponse(data, duration, false);
+                return McpToolResponses.warn(objectMapper, data, duration);
             }
 
             // 使用Drain-Plus解析日志
@@ -173,11 +174,11 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
             log.info("日志分析完成，异常行: {} 个, 模板桶: {}, 状态: {}, 耗时: {}ms",
                 anomalies.size(), templateSummary.size(), anomalies.isEmpty() ? "HEALTHY" : "ISSUES_DETECTED", duration);
 
-            return buildSuccessResponse(data, duration, false);
+            return McpToolResponses.success(objectMapper, data, duration);
 
         } catch (Exception e) {
             log.error("分析日志时发生异常", e);
-            return buildErrorResponse("分析日志时发生异常: " + e.getMessage(), startTime);
+            return McpToolResponses.error(objectMapper, "分析日志时发生异常: " + e.getMessage(), startTime);
         }
     }
 
@@ -492,14 +493,5 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
             hist.merge(k, 1L, Long::sum);
         }
         return hist;
-    }
-
-    private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<>(true, data, null, duration, cacheHit));
-    }
-
-    private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
     }
 }

@@ -70,6 +70,8 @@ const statusLabel = computed(() => {
   const p = payload.value
   if (!p) return '执行失败'
   if (p.writeMismatch) return '写意图未落地'
+  const status = String(p.status || '').toUpperCase()
+  if (status === 'WARN' && p.success) return '完成（告警）'
   const mode = String(p.mode || '').toUpperCase()
   if ((mode === 'DRY-RUN' || mode === 'PREVIEW') && p.success) return '预览成功'
   if (mode === 'SCAN' && p.success) return '扫描完成'
@@ -83,6 +85,7 @@ const statusChipClass = computed(() => {
   const p = payload.value
   if (!p) return 'fail'
   if (p.writeMismatch) return 'warn'
+  if (String(p.status || '').toUpperCase() === 'WARN' && p.success) return 'warn'
   const mode = String(p.mode || '').toUpperCase()
   if ((mode === 'DRY-RUN' || mode === 'PREVIEW' || mode === 'SCAN' || mode === 'NOOP') && p.success) return 'preview'
   if (p.success) return 'ok'
@@ -101,6 +104,10 @@ function open(result) {
   if (!result) return
   showTrace.value = result.showTrace !== false
   const raw = result.raw ?? result.fullResult ?? result
+  const nestedStatus =
+    (raw && typeof raw === 'object' && raw.status) ||
+    (raw?.data && typeof raw.data === 'object' && raw.data.status) ||
+    ''
   payload.value = {
     toolName: result.toolName,
     success: result.success === true,
@@ -108,6 +115,7 @@ function open(result) {
     traceId: result.traceId || result.raw?.traceId || result.raw?.trace_id || '',
     raw,
     mode: result.mode || pickMode(raw),
+    status: result.status || nestedStatus || (result.success === true ? 'SUCCESS' : 'ERROR'),
     writeMismatch:
       result.writeMismatch === true ||
       raw?.writeMismatch === true

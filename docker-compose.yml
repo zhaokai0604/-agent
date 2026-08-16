@@ -1,30 +1,31 @@
 # 本地/演示用依赖栈（应用进程仍建议本机 mvn / jar 启动，便于调试 MCP 与宿主路径）
 #
-# 启动：docker compose up -d mariadb qdrant
+# 启动：docker compose up -d mysql qdrant
 # 建表：首次需对库执行 src/main/resources/schema.sql（及所需增量 SQL）
 #
 # 环境变量可复制根目录 .env.example
 
 services:
-  mariadb:
-    image: mariadb:10.11
-    container_name: threshcore-mariadb
+  mysql:
+    image: mysql:8.0
+    container_name: threshcore-mysql
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?请在 .env 中设置 MARIADB_ROOT_PASSWORD}
-      MARIADB_DATABASE: ${MARIADB_DATABASE:-log_analysis}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-log_analysis}
       TZ: Asia/Shanghai
     ports:
-      - "${MARIADB_PUBLISH_PORT:-3306}:3306"
+      - "${MYSQL_PUBLISH_PORT:-3306}:3306"
     command: >
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=caching_sha2_password
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p$$MYSQL_ROOT_PASSWORD"]
       interval: 8s
       timeout: 5s
       retries: 12
-      start_period: 30s
+      start_period: 40s
 
   qdrant:
     image: qdrant/qdrant:v1.12.4

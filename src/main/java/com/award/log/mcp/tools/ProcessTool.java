@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
 import com.award.log.util.OsRuntime;
@@ -28,6 +29,9 @@ import java.util.regex.Pattern;
 public class ProcessTool extends AbstractCommandExecutor {
 
     private static final Pattern PS_LIST_PATTERN = Pattern.compile(
+        "^(\\S+)\\s+(\\d+)\\s+(\\d+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+(\\S+)\\s+(\\S+)\\s+(.*)$"
+    );
+    private static final Pattern PS_LIST_LEGACY_PATTERN = Pattern.compile(
         "^(\\S+)\\s+(\\d+)\\s+([\\d.]+)\\s+([\\d.]+)\\s+(\\S+)\\s+(\\S+)\\s+(.*)$"
     );
 
@@ -61,10 +65,10 @@ public class ProcessTool extends AbstractCommandExecutor {
                 return listProcessesWindows(cpuThreshold, memThreshold, startTime);
             }
             AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(List.of(
-                    "ps", "-eo", "user,pid,pcpu,pmem,etime,stat,command", "--sort=-pcpu,-pmem", "--no-headers"));
+                    "ps", "-eo", "user,pid,ppid,pcpu,pmem,etime,stat,command", "--sort=-pcpu,-pmem", "--no-headers"));
 
             if (!result.success()) {
-                String errorJson = buildErrorResponse("ps 命令执行失败: " + result.error(), startTime);
+                String errorJson = McpToolResponses.error(objectMapper,"ps 命令执行失败: " + result.error(), startTime);
                 log.error("进程列表检查失败: {}", result.error());
                 return errorJson;
             }
@@ -74,11 +78,11 @@ public class ProcessTool extends AbstractCommandExecutor {
             long duration = System.currentTimeMillis() - startTime;
 
             log.info("进程列表检查完成，共获取 {} 个符合条件的进程，耗时: {}ms", processList.size(), duration);
-            return buildSuccessResponse(dataJson, duration, false);
+            return McpToolResponses.success(objectMapper, dataJson, duration);
 
         } catch (Exception e) {
             log.error("执行进程列表检查时发生异常", e);
-            return buildErrorResponse("执行进程列表检查时发生异常: " + e.getMessage(), startTime);
+            return McpToolResponses.error(objectMapper,"执行进程列表检查时发生异常: " + e.getMessage(), startTime);
         }
     }
 
@@ -101,7 +105,7 @@ public class ProcessTool extends AbstractCommandExecutor {
                 List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psPerf), 60_000L);
         List<Map<String, String>> processList = parseWindowsProcessJson(result, cpuThreshold, memThreshold, true);
         if (processList.isEmpty() && (!result.success() || result.output() == null || result.output().isBlank())) {
-            return buildErrorResponse("Windows 进程列表失败: " + (result.success() ? "无数据" : result.error()), startTime);
+            return McpToolResponses.error(objectMapper,"Windows 进程列表失败: " + (result.success() ? "无数据" : result.error()), startTime);
         }
         if (processList.isEmpty()) {
             processList = listProcessesWindowsMemFallback(cpuThreshold, memThreshold);
@@ -109,7 +113,7 @@ public class ProcessTool extends AbstractCommandExecutor {
         processList = sortProcessesByUsage(processList);
         String dataJson = toJson(processList);
         long duration = System.currentTimeMillis() - startTime;
-        return buildSuccessResponse(dataJson, duration, false);
+        return McpToolResponses.success(objectMapper, dataJson, duration);
     }
 
     /** perf 计数器不可用时：仅按内存占比筛选，CPU 列标注为不可用 */
@@ -158,6 +162,16 @@ public class ProcessTool extends AbstractCommandExecutor {
                     info.put("cpu", String.format("%.1f", cpu));
                 }
                 info.put("mem", String.format("%.1f", mem));
+                if (n.has("wsMb")) {
+                    info.put("memMb", String.format("%.1f", n.path("wsMb").asDouble(0)));
+                }
+                if (cpuHit && memHit) {
+                    info.put("reason", "cpu+mem");
+                } else if (cpuHit) {
+                    info.put("reason", "cpu");
+                } else {
+                    info.put("reason", "mem");
+                }
                 info.put("etime", "-");
                 info.put("command", n.path("ProcessName").asText(""));
                 info.put("state", "running");
@@ -181,6 +195,10 @@ public class ProcessTool extends AbstractCommandExecutor {
             if (line.isEmpty()) continue;
 
             Matcher matcher = PS_LIST_PATTERN.matcher(line);
+            boolean hasParentPid = matcher.matches();
+            if (!hasParentPid) {
+                matcher = PS_LIST_LEGACY_PATTERN.matcher(line);
+            }
             if (!matcher.matches()) {
                 log.debug("无法解析的行: {}", line);
                 continue;
@@ -188,11 +206,16 @@ public class ProcessTool extends AbstractCommandExecutor {
 
             String user = matcher.group(1);
             String pid = matcher.group(2);
-            double cpu = parsePercent(matcher.group(3));
-            double mem = parsePercent(matcher.group(4));
-            String etime = matcher.group(5);
-            String state = matcher.group(6);
-            String command = matcher.group(7).trim();
+            String ppid = hasParentPid ? matcher.group(3) : "";
+            double cpu = parsePercent(matcher.group(hasParentPid ? 4 : 3));
+            double mem = parsePercent(matcher.group(hasParentPid ? 5 : 4));
+            String etime = matcher.group(hasParentPid ? 6 : 5);
+            String state = matcher.group(hasParentPid ? 7 : 6);
+            String command = matcher.group(hasParentPid ? 8 : 7).trim();
+
+            if (isSelfInspectionCommand(command)) {
+                continue;
+            }
 
             boolean isZombie = state != null && state.contains("Z");
             boolean cpuExceeds = cpu > cpuThreshold;
@@ -205,14 +228,37 @@ public class ProcessTool extends AbstractCommandExecutor {
             Map<String, String> info = new LinkedHashMap<>();
             info.put("user", user);
             info.put("pid", pid);
+            if (!ppid.isBlank()) {
+                info.put("ppid", ppid);
+            }
             info.put("cpu", String.format("%.1f", cpu));
             info.put("mem", String.format("%.1f", mem));
+            if (cpuExceeds && memExceeds) {
+                info.put("reason", "cpu+mem");
+            } else if (cpuExceeds) {
+                info.put("reason", "cpu");
+            } else {
+                info.put("reason", "mem");
+            }
             info.put("etime", etime);
             info.put("command", truncateCommand(command));
             info.put("state", isZombie ? "zombie" : "running");
             processList.add(info);
         }
         return processList;
+    }
+
+    private boolean isSelfInspectionCommand(String command) {
+        if (command == null) {
+            return false;
+        }
+        String normalized = command.trim().toLowerCase();
+        return normalized.equals("ps")
+                || normalized.startsWith("ps ")
+                || normalized.startsWith("/bin/ps ")
+                || normalized.startsWith("/usr/bin/ps ")
+                || normalized.contains(" ps -eo ")
+                || normalized.contains(" ps --sort=");
     }
 
     private double parsePercent(String value) {
@@ -265,13 +311,100 @@ public class ProcessTool extends AbstractCommandExecutor {
         return objectMapper.writeValueAsString(list);
     }
 
-    private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<>(true, data, null, duration, cacheHit));
+    @Tool(name = "inspectProcessOwnership", description = "归因指定 Linux 进程：结合父进程、/proc cgroup、systemd status、可执行文件和 lsof 判断匿名进程（如 s_daemon）属于哪个服务；只读，不结束进程")
+    public String inspectProcessOwnership(
+            @ToolParam(description = "待归因的进程 PID", required = true) Integer pid
+    ) throws JsonProcessingException {
+        long startTime = System.currentTimeMillis();
+        if (pid == null || pid < 1 || pid > 4_194_304) {
+            return McpToolResponses.error(objectMapper, "无效 PID", startTime);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("pid", pid);
+        result.put("platform", OsRuntime.isWindows() ? "windows" : "linux");
+        if (OsRuntime.isWindows()) {
+            AbstractCommandExecutor.CommandResult process = minPrivilegeExecutor.executeSafely(List.of(
+                    "powershell.exe", "-NoProfile", "-Command",
+                    "$p=Get-CimInstance Win32_Process -Filter 'ProcessId=" + pid + "';"
+                            + "if($p){$p|Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine|ConvertTo-Json -Compress}"
+            ), 60_000L);
+            result.put("process", probe(process));
+            result.put("association", "Windows parent-process/WMI evidence");
+        } else {
+            result.put("procStatus", readProcFile(pid, "status"));
+            result.put("cgroup", readProcFile(pid, "cgroup"));
+            result.put("executable", readProcLink(pid, "exe"));
+            result.put("process", probe(minPrivilegeExecutor.executeSafely(List.of(
+                    "ps", "-o", "pid=,ppid=,user=,group=,etime=,stat=,comm=,args=", "-p", String.valueOf(pid)))));
+            result.put("systemd", probe(minPrivilegeExecutor.executeSafely(List.of(
+                    "systemctl", "status", "--no-pager", "--full", String.valueOf(pid)), 60_000L)));
+            result.put("openFiles", probe(minPrivilegeExecutor.executeSafely(List.of(
+                    "lsof", "-nP", "-p", String.valueOf(pid)), 60_000L)));
+            String cgroup = String.valueOf(result.getOrDefault("cgroup", ""));
+            result.put("serviceUnit", serviceUnitFromCgroup(cgroup));
+            result.put("association", associationHint(cgroup, String.valueOf(result.get("serviceUnit"))));
+        }
+        return McpToolResponses.success(objectMapper, objectMapper.writeValueAsString(result),
+                System.currentTimeMillis() - startTime);
     }
 
-    private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
+    private String readProcFile(int pid, String name) {
+        try {
+            return java.nio.file.Files.readString(java.nio.file.Path.of("/proc", String.valueOf(pid), name));
+        } catch (Exception e) {
+            return "unavailable: " + e.getMessage();
+        }
+    }
+
+    private String readProcLink(int pid, String name) {
+        try {
+            return java.nio.file.Files.readSymbolicLink(java.nio.file.Path.of("/proc", String.valueOf(pid), name)).toString();
+        } catch (Exception e) {
+            return "unavailable: " + e.getMessage();
+        }
+    }
+
+    private Map<String, Object> probe(AbstractCommandExecutor.CommandResult result) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("success", result != null && result.success());
+        if (result == null) {
+            out.put("error", "no result");
+            return out;
+        }
+        String output = result.output();
+        if (output != null && output.length() > 16_000) {
+            output = output.substring(0, 16_000) + "\n...[truncated]";
+        }
+        out.put("output", output);
+        if (!result.success()) {
+            out.put("error", result.error() != null ? result.error() : "exit=" + result.exitCode());
+        }
+        return out;
+    }
+
+    private String serviceUnitFromCgroup(String cgroup) {
+        if (cgroup == null || cgroup.isBlank()) {
+            return "";
+        }
+        for (String line : cgroup.split("\\R")) {
+            String path = line.substring(line.lastIndexOf(':') + 1).trim();
+            for (String part : path.split("/")) {
+                if (part.endsWith(".service") || part.endsWith(".scope")) {
+                    return part;
+                }
+            }
+        }
+        return "";
+    }
+
+    private String associationHint(String cgroup, String serviceUnit) {
+        if (serviceUnit != null && !serviceUnit.isBlank()) {
+            return "cgroup 显示归属于 systemd 单元 " + serviceUnit;
+        }
+        if (cgroup != null && !cgroup.isBlank() && !cgroup.startsWith("unavailable")) {
+            return "已取得 cgroup 与父进程证据，但未解析出 .service/.scope 单元";
+        }
+        return "未取得 systemd 归属证据，需要结合父进程、命令行和 lsof 人工判断";
     }
 
     @Tool(name = "terminateProcess",
@@ -284,13 +417,13 @@ public class ProcessTool extends AbstractCommandExecutor {
     ) throws JsonProcessingException {
         long startTime = System.currentTimeMillis();
         if (pid == null || pid <= 10) {
-            return buildErrorResponse("PID 无效或属于受保护范围（须 >10）", startTime);
+            return McpToolResponses.error(objectMapper,"PID 无效或属于受保护范围（须 >10）", startTime);
         }
         com.award.log.security.ChatWriteExecutionPolicy.ResolvedKill write =
                 com.award.log.security.ChatWriteExecutionPolicy.resolveKill(dryRun, confirmKill);
         boolean isDryRun = write.dryRun();
         if (!isDryRun && !write.confirmKill()) {
-            return buildErrorResponse("真实结束进程需 dryRun=false 且 confirmKill=true", startTime);
+            return McpToolResponses.error(objectMapper,"真实结束进程需 dryRun=false 且 confirmKill=true", startTime);
         }
         String sig = signal == null || signal.isBlank() ? "TERM" : signal.trim().toUpperCase();
         List<String> cmd;
@@ -309,14 +442,14 @@ public class ProcessTool extends AbstractCommandExecutor {
             preview.put("pid", pid);
             preview.put("plan", String.join(" ", cmd));
             String data = objectMapper.writeValueAsString(preview);
-            return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+            return McpToolResponses.success(objectMapper, data, System.currentTimeMillis() - startTime);
         }
         AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(cmd, 30_000L);
         if (isSimulatedDryRun(result)) {
-            return buildErrorResponse("全局演练模式已启用：结束进程请求被模拟执行，进程未实际终止", startTime);
+            return McpToolResponses.error(objectMapper,"全局演练模式已启用：结束进程请求被模拟执行，进程未实际终止", startTime);
         }
         if (!result.success()) {
-            return buildErrorResponse("结束进程失败: " + (result.error() != null ? result.error() : result.output()), startTime);
+            return McpToolResponses.error(objectMapper,"结束进程失败: " + (result.error() != null ? result.error() : result.output()), startTime);
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("mode", "EXECUTED");
@@ -326,7 +459,7 @@ public class ProcessTool extends AbstractCommandExecutor {
         body.put("output", result.output());
         String data = objectMapper.writeValueAsString(body);
         long duration = System.currentTimeMillis() - startTime;
-        return buildSuccessResponse(data, duration, false);
+        return McpToolResponses.success(objectMapper, data, duration);
     }
 
     private boolean isSimulatedDryRun(AbstractCommandExecutor.CommandResult result) {
@@ -347,7 +480,7 @@ public class ProcessTool extends AbstractCommandExecutor {
         return switch (op) {
             case "list", "ps" -> listProcesses(minCpu, minMem);
             case "kill", "terminate", "stop" -> terminateProcess(pid, signal, dryRun, confirmKill);
-            default -> buildErrorResponse("未知 operation: " + operation + "；可选 list|kill", System.currentTimeMillis());
+            default -> McpToolResponses.error(objectMapper,"未知 operation: " + operation + "；可选 list|kill", System.currentTimeMillis());
         };
     }
 }

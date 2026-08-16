@@ -1,6 +1,7 @@
 package com.award.log.controller;
 
 import com.award.log.agent.AssistantOrchestrator;
+import com.award.log.agent.AutonomousOpsOrchestrator;
 import com.award.log.agent.OpsIntentRouter;
 import com.award.log.agent.OpsPatrolAutomationService;
 import com.award.log.agent.OpsRuntimeService;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -41,6 +43,8 @@ class AutonomousOpsControllerIntegrationTest {
     private OpsAutoRemediationService opsAutoRemediationService;
     @Mock
     private RequestUserResolver requestUserResolver;
+    @Mock
+    private ObjectProvider<AutonomousOpsOrchestrator> autonomousOpsOrchestrator;
 
     private MockMvc mockMvc;
 
@@ -53,7 +57,8 @@ class AutonomousOpsControllerIntegrationTest {
         OpsRuntimeService opsRuntimeService = new OpsRuntimeService(
                 opsIntentRouter,
                 assistantOrchestrator,
-                patrolAutomationService);
+                patrolAutomationService,
+                autonomousOpsOrchestrator);
         AutonomousOpsController controller = new AutonomousOpsController(
                 opsRuntimeService,
                 opsIntentRouter,

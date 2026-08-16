@@ -101,11 +101,14 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     private void seedIfEmpty() {
         if (getJson("/collections") == null) {
+            log.warn("[知识库] seed 跳过：无法连接 Qdrant url={}", qdrantUrl);
             return;
         }
         ensureCollection();
+        invalidateDocumentCountCache();
         refreshDocumentCountCache();
         if (cachedDocumentCount > 0) {
+            log.info("[知识库] 已有 {} 篇文档，跳过 seed", cachedDocumentCount);
             return;
         }
         int ok = 0;
@@ -118,8 +121,39 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
             }
         }
         if (ok > 0) {
+            invalidateDocumentCountCache();
             log.info("[知识库] 冷启动 seed 写入 {} 篇内置 Runbook", ok);
+        } else {
+            log.warn("[知识库] seed 未写入任何文档，请检查 Qdrant PUT 权限与 Embedding");
         }
+    }
+
+    @Override
+    public Map<String, Object> seedBuiltinIfEmpty() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (!knowledgeProperties.isEnabled()) {
+            out.put("seeded", 0);
+            out.put("skipped", true);
+            out.put("reason", "knowledge disabled");
+            return out;
+        }
+        long before = 0;
+        try {
+            if (isCollectionPresent()) {
+                refreshDocumentCountCache();
+                before = Math.max(0, cachedDocumentCount);
+            }
+        } catch (Exception ignored) {
+            // ignore
+        }
+        seedIfEmpty();
+        refreshDocumentCountCache();
+        long after = Math.max(0, cachedDocumentCount);
+        out.put("seeded", Math.max(0, after - before));
+        out.put("documentCount", after);
+        out.put("qdrantUrl", qdrantUrl);
+        out.put("collection", collectionName);
+        return out;
     }
 
     @Override
@@ -541,7 +575,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
     private void createCollectionOnce(int dim) {
         log.info("[知识库] 创建 Qdrant 集合 {}，维度 {}（进程内仅发起一次创建请求）", collectionName, dim);
-        post("/collections/" + collectionName, Map.of(
+        // Qdrant API：创建集合必须 PUT /collections/{name}
+        put("/collections/" + collectionName, Map.of(
                 "vectors", Map.of("size", dim, "distance", "Cosine")
         ));
         collectionReady = true;
@@ -649,7 +684,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     }
 
     private void upsertPoints(List<Map<String, Object>> points) {
-        post("/collections/" + collectionName + "/points", Map.of("points", points));
+        // Qdrant API：upsert 必须 PUT /collections/{name}/points（POST 是按 id 读取）
+        put("/collections/" + collectionName + "/points?wait=true", Map.of("points", points));
     }
 
     private List<Double> toDoubleList(float[] arr) {
@@ -676,7 +712,8 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         while (u.endsWith("/")) {
             u = u.substring(0, u.length() - 1);
         }
-        if (u.contains("cloud.qdrant.io") && !u.matches(".*:\\d+$")) {
+        // 本地 Docker 常见无协议数字端口；Cloud HTTPS 走 443，勿强加 :6333
+        if (u.contains("cloud.qdrant.io") && u.startsWith("http://") && !u.matches(".*:\\d+$")) {
             u = u + ":6333";
         }
         return u;
@@ -716,6 +753,21 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
             return objectMapper.readTree(response.getBody());
         } catch (Exception e) {
             log.warn("[知识库] Qdrant 请求失败 {}: {}", path, e.getMessage());
+            throw new IllegalStateException("向量库不可用，请确认 Qdrant 地址与 API Key: " + e.getMessage(), e);
+        }
+    }
+
+    private JsonNode put(String path, Map<String, Object> body) {
+        try {
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, qdrantHeaders(true));
+            ResponseEntity<String> response = restTemplate.exchange(
+                    qdrantUrl + path, HttpMethod.PUT, entity, String.class);
+            if (response.getBody() == null || response.getBody().isBlank()) {
+                return objectMapper.createObjectNode();
+            }
+            return objectMapper.readTree(response.getBody());
+        } catch (Exception e) {
+            log.warn("[知识库] Qdrant PUT 失败 {}: {}", path, e.getMessage());
             throw new IllegalStateException("向量库不可用，请确认 Qdrant 地址与 API Key: " + e.getMessage(), e);
         }
     }

@@ -6,6 +6,7 @@ import com.award.log.analyzer.DrainPlusParser;
 import com.award.log.analyzer.LogCleaner;
 import com.award.log.config.AgentOpsProperties;
 import com.award.log.config.OpsDryRunProperties;
+import com.award.log.config.OpsRemediationProperties;
 import com.award.log.mcp.LogSafetyClassifier;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.OpsPathPolicy;
@@ -73,7 +74,8 @@ final class McpToolsTestFixtures {
     }
 
     static CleanTempTool cleanTempTool(ExecutorService executor) {
-        return new CleanTempTool(executor, objectMapper(), minPrivilegeExecutor(executor), opsPathPolicy());
+        return new CleanTempTool(executor, objectMapper(), minPrivilegeExecutor(executor), opsPathPolicy(),
+                new OpsRemediationProperties());
     }
 
     static DiskAnalyzeTool diskAnalyzeTool(ExecutorService executor) {
@@ -107,7 +109,7 @@ final class McpToolsTestFixtures {
     static LogCleanupTool logCleanupTool(ExecutorService executor) {
         OpsPathPolicy policy = opsPathPolicy();
         return new LogCleanupTool(executor, objectMapper(), minPrivilegeExecutor(executor),
-                policy, logSafetyClassifier(policy, agentOpsProperties()));
+                policy, logSafetyClassifier(policy, agentOpsProperties()), new OpsRemediationProperties());
     }
 
     static LogAnalysisTool logAnalysisTool(ExecutorService executor, AiDiagnosisService aiDiagnosisService) {

@@ -381,30 +381,11 @@ class AutonomousOpsOrchestratorDeepTest {
 
         OpsSecurityContext.openChatAgent("trace", "autonomous ops", McpToolSurface.FULL, true);
         when(opsIntentRouter.forceRemediate("autonomous ops")).thenReturn(false);
-        when(systemLoadTool.checkSystemLoad())
-                .thenReturn("{\"success\":true,\"data\":{\"cpuUsagePercent\":20.0,\"memUsagePercent\":40.0}}")
-                .thenReturn("{\"success\":true,\"data\":{\"cpuUsagePercent\":20.0,\"memUsagePercent\":40.0}}");
-        when(diskTool.checkDiskUsage())
-                .thenReturn("{\"success\":true,\"data\":[{\"usePercent\":\"92%\"}]}")
-                .thenReturn("{\"success\":true,\"data\":[{\"usePercent\":\"92%\"}]}");
-        when(workflowRetriever.bestMatch("disk", List.of("DISK_PRESSURE"), "autonomous ops")).thenReturn(null);
-        when(cleanTempTool.scanAllTempJunk(0)).thenReturn("{\"success\":true,\"data\":{\"totalFilesFound\":0}}");
-        when(opsRemediationGate.decideLogCleanup(anyString(), anyInt(), eq(true), anyString()))
-                .thenReturn(new OpsRemediationGate.RemediationDecision(
-                        OpsRemediationGate.WriteDecision.PREVIEW,
-                        GovernanceAdmissionVerdict.CONFIRM_ONLY,
-                        OpsTrustTier.APPROVE,
-                        "preview"));
-        when(logCleanupTool.cleanupOldLogs("/var/log", 30, true, false))
-                .thenReturn("{\"success\":true,\"data\":{\"filesFound\":0}}");
-        when(remediationEffectEvaluator.captureMetrics())
-                .thenReturn(Map.of("diskUsagePct", 92.0, "cpuUsagePct", 20.0))
-                .thenReturn(Map.of("diskUsagePct", 92.0, "cpuUsagePct", 20.0));
 
         AutonomousOpsOrchestrator.RunResult result =
                 orchestrator.run("autonomous ops", McpToolSurface.FULL, RiskLevel.LOW);
 
-        assertTrue(result.markdown().contains("trace"));
+        assertTrue(result.traceId() != null && result.traceId().contains("trace"));
         assertTrue(result.markdown().contains("### Remediation"));
     }
 

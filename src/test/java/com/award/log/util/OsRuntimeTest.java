@@ -9,6 +9,19 @@ import static org.junit.jupiter.api.Assertions.*;
 class OsRuntimeTest {
 
     @Test
+    void parsesQuotedKylinOsReleaseFields() {
+        Map<String, String> parsed = OsReleaseParser.parse(""
+                + "NAME=\"Kylin Linux Advanced Server\"\n"
+                + "ID=kylin\n"
+                + "VERSION_ID=\"V11\"\n"
+                + "VARIANT=Server\n");
+
+        assertEquals("kylin", parsed.get("ID"));
+        assertEquals("V11", parsed.get("VERSION_ID"));
+        assertTrue(OsReleaseParser.isKylin(parsed));
+    }
+
+    @Test
     void platformSummaryContainsRequiredKeys() {
         Map<String, Object> s = OsRuntime.platformSummary();
         assertNotNull(s.get("osName"));

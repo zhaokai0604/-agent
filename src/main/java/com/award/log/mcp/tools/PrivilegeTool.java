@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.util.OsRuntime;
@@ -47,14 +48,14 @@ public class PrivilegeTool extends AbstractCommandExecutor {
         long startTime = System.currentTimeMillis();
 
         if (resource == null || resource.isBlank()) {
-            return buildErrorResponse("资源路径不能为空", startTime);
+            return McpToolResponses.error(objectMapper, "资源路径不能为空", startTime);
         }
 
         String targetResource = resource.trim();
         String checkAction = (action != null && !action.isBlank()) ? action.toLowerCase() : "execute";
 
         if (!checkAction.matches("^(read|write|execute|r|w|x)$")) {
-            return buildErrorResponse("无效的操作类型，请使用 read、write 或 execute", startTime);
+            return McpToolResponses.error(objectMapper, "无效的操作类型，请使用 read、write 或 execute", startTime);
         }
 
         log.info("开始检查权限，资源: {}, 操作: {}", targetResource, checkAction);
@@ -68,7 +69,17 @@ public class PrivilegeTool extends AbstractCommandExecutor {
 
             if (isFile) {
                 if (!opsPathPolicy.isAllowedPrivilegeProbePath(targetResource)) {
-                    return buildErrorResponse(opsPathPolicy.rejectReason("权限探测路径"), startTime);
+                    return McpToolResponses.error(objectMapper, opsPathPolicy.rejectReason("权限探测路径"), startTime);
+                }
+                Path filePath = Paths.get(targetResource);
+                if (!Files.exists(filePath)) {
+                    String data = String.format(
+                            "{\"hasPrivilege\":false,\"resource\":\"%s\",\"resolvedPath\":\"%s\",\"action\":\"%s\"," +
+                            "\"currentUser\":\"%s\",\"isFile\":true,\"targetUnreachable\":true," +
+                            "\"suggestion\":\"目标路径不存在或不可达\"}",
+                            targetResource, targetResource, checkAction, currentUser);
+                    long duration = System.currentTimeMillis() - startTime;
+                    return McpToolResponses.warn(objectMapper, data, duration);
                 }
                 hasPermission = checkFilePermission(targetResource, checkAction);
             } else {
@@ -80,10 +91,10 @@ public class PrivilegeTool extends AbstractCommandExecutor {
                         targetResource, checkAction, currentUser
                     );
                     long duration = System.currentTimeMillis() - startTime;
-                    return buildSuccessResponse(data, duration, false);
+                    return McpToolResponses.success(objectMapper, data, duration);
                 }
                 if (!opsPathPolicy.isAllowedPrivilegeProbePath(resolvedPath)) {
-                    return buildErrorResponse(opsPathPolicy.rejectReason("权限探测路径"), startTime);
+                    return McpToolResponses.error(objectMapper, opsPathPolicy.rejectReason("权限探测路径"), startTime);
                 }
                 hasPermission = checkFilePermission(resolvedPath, checkAction);
             }
@@ -120,11 +131,11 @@ public class PrivilegeTool extends AbstractCommandExecutor {
             log.info("权限检查完成，资源: {}, 操作: {}, 有权限: {}, 需要sudo: {}, 耗时: {}ms",
                 targetResource, checkAction, hasPermission, needsSudo, duration);
 
-            return buildSuccessResponse(data, duration, false);
+            return McpToolResponses.success(objectMapper, data, duration);
 
         } catch (Exception e) {
             log.error("检查权限时发生异常", e);
-            return buildErrorResponse("检查权限时发生异常: " + e.getMessage(), startTime);
+            return McpToolResponses.error(objectMapper, "检查权限时发生异常: " + e.getMessage(), startTime);
         }
     }
 
@@ -205,14 +216,5 @@ public class PrivilegeTool extends AbstractCommandExecutor {
             log.debug("检查 sudo 权限失败: {}", command);
         }
         return false;
-    }
-
-    private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<>(true, data, null, duration, cacheHit));
-    }
-
-    private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
     }
 }

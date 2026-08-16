@@ -192,13 +192,17 @@ public class WorkflowMemoryService {
                 .collect(Collectors.toList());
     }
 
-    public void upsert(OpsWorkflow workflow, boolean incrementUtility) {
+    /**
+     * @return true 表示写入成功；失败返回 false（异常已记日志）
+     */
+    public boolean upsert(OpsWorkflow workflow, boolean incrementUtility) {
         if (workflow == null || workflow.workflowId() == null) {
-            return;
+            return false;
         }
         try {
+            List<OpsWorkflowStep> steps = workflow.steps() != null ? workflow.steps() : List.of();
             String stepsJson = objectMapper.writeValueAsString(
-                    workflow.steps().stream().map(OpsWorkflowStep::toMap).toList());
+                    steps.stream().map(OpsWorkflowStep::toMap).toList());
             String kinds = workflow.findingKinds() == null ? "" :
                     String.join(",", workflow.findingKinds());
             int utility = workflow.utilityCount() + (incrementUtility ? 1 : 0);
@@ -233,8 +237,10 @@ public class WorkflowMemoryService {
                     incrementUtility ? 1 : 0
             );
             reloadCache();
+            return true;
         } catch (Exception e) {
             log.warn("upsert workflow 失败 id={}: {}", workflow.workflowId(), e.getMessage());
+            return false;
         }
     }
 
@@ -342,7 +348,7 @@ public class WorkflowMemoryService {
         }
         int cap = Math.min(50, Math.max(1, limit));
         try {
-            return jdbcTemplate.queryForList(
+            List<Map<String, Object>> raw = jdbcTemplate.queryForList(
                     """
                     SELECT id, workflow_id, trace_id, success, steps_ok, steps_total, summary, created_at
                     FROM ops_workflow_run
@@ -352,6 +358,21 @@ public class WorkflowMemoryService {
                     """,
                     workflowId,
                     cap);
+            List<Map<String, Object>> out = new ArrayList<>();
+            for (Map<String, Object> row : raw) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", row.get("id"));
+                m.put("workflowId", row.get("workflow_id"));
+                m.put("traceId", row.get("trace_id"));
+                Object success = row.get("success");
+                m.put("success", success instanceof Number n ? n.intValue() == 1 : Boolean.TRUE.equals(success));
+                m.put("stepsOk", row.get("steps_ok"));
+                m.put("stepsTotal", row.get("steps_total"));
+                m.put("summary", row.get("summary"));
+                m.put("createdAt", row.get("created_at"));
+                out.add(m);
+            }
+            return out;
         } catch (Exception e) {
             return List.of();
         }

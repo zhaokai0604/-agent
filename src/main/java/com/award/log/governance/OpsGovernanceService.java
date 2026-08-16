@@ -32,7 +32,7 @@ public class OpsGovernanceService {
         out.put("serviceTierCount", properties.getServiceTiers().size());
         out.put("pathTierCount", properties.getPathTiers().size());
         out.put("actionMatrix", actionMatrixSummary());
-        out.put("note", "仅 NON_CORE 上的临时/日志清理可自动；服务重启默认须确认；FORBIDDEN_AUTO 不纳入方案。");
+        out.put("note", "NON_CORE 临时/日志清理须确认后执行；服务重启默认须确认；FORBIDDEN_AUTO 不纳入方案。");
         return out;
     }
 
@@ -56,6 +56,93 @@ public class OpsGovernanceService {
         return out;
     }
 
+    /**
+     * 将 MCP 工具调用映射为治理步骤并裁决。非治理写动作返回 ALLOW_AUTO（不抬升、不旁路）。
+     */
+    public GovernanceEvaluation evaluateToolCall(String toolName, Map<String, Object> parameters) {
+        Map<String, Object> step = toGovernanceStep(toolName, parameters);
+        if (step == null) {
+            return new GovernanceEvaluation(
+                    GovernanceAdmissionVerdict.ALLOW_AUTO,
+                    AssetTier.NON_CORE,
+                    "",
+                    "非治理写动作，跳过资产准入矩阵");
+        }
+        return evaluateStep(step);
+    }
+
+    /**
+     * @return 可被 {@link #evaluateStep} 识别的步骤；无法映射时返回 null
+     */
+    public Map<String, Object> toGovernanceStep(String toolName, Map<String, Object> parameters) {
+        if (toolName == null || toolName.isBlank()) {
+            return null;
+        }
+        String tool = toolName.trim();
+        String path = firstParam(parameters, "path", "rootPath", "logPath", "targetPath",
+                "target", "dir", "directory", "folder", "cleanPath");
+        if (path.isEmpty()) {
+            // LLM 偶发把路径塞进 paths 数组 / 逗号串
+            path = firstParam(parameters, "paths");
+            if (path.contains(",")) {
+                path = path.split(",")[0].trim();
+            }
+        }
+        String service = firstParam(parameters, "serviceName", "service", "unit");
+        String operation = firstParam(parameters, "operation", "op", "action").toLowerCase(Locale.ROOT);
+
+        return switch (tool) {
+            case "CleanTempTool" -> stepOf("CLEAN_TEMP", path, service);
+            case "LogCleanupTool" -> stepOf("CLEAN_LOG", path, service);
+            case "ServiceRestartTool" -> stepOf("RESTART_SERVICE", path, service);
+            case "DiskOpsTool" -> {
+                if (operation.contains("clean") || operation.contains("delete") || operation.contains("清理")) {
+                    yield stepOf("CLEAN_TEMP", path, service);
+                }
+                yield null;
+            }
+            case "LogOpsTool" -> {
+                if (operation.contains("clean") || operation.contains("truncat") || operation.contains("清理")
+                        || operation.contains("裁剪")) {
+                    yield stepOf("CLEAN_LOG", path, service);
+                }
+                yield null;
+            }
+            case "ServiceOpsTool", "SystemdTool" -> {
+                if (operation.contains("restart") || operation.contains("重启")) {
+                    yield stepOf("RESTART_SERVICE", path, service);
+                }
+                yield null;
+            }
+            default -> null;
+        };
+    }
+
+    private static Map<String, Object> stepOf(String kind, String path, String service) {
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("kind", kind);
+        step.put("path", path == null ? "" : path);
+        step.put("serviceName", service == null ? "" : service);
+        return step;
+    }
+
+    private static String firstParam(Map<String, Object> parameters, String... keys) {
+        if (parameters == null || keys == null) {
+            return "";
+        }
+        for (String key : keys) {
+            Object v = parameters.get(key);
+            if (v == null) {
+                continue;
+            }
+            String s = String.valueOf(v).trim();
+            if (!s.isEmpty() && !"null".equalsIgnoreCase(s)) {
+                return s;
+            }
+        }
+        return "";
+    }
+
     public GovernanceEvaluation evaluateStep(Map<String, Object> step) {
         OpsActionType action = OpsActionType.fromStepKind(String.valueOf(step.getOrDefault("kind", "")));
         if (action == null) {
@@ -75,6 +162,24 @@ public class OpsGovernanceService {
         } else {
             target = String.valueOf(step.getOrDefault("path", ""));
             tier = resolvePathTier(target);
+        }
+
+        // 硬规则：文件系统根路径禁止自动清理（不可把 "/" 放进 pathTiers，否则会前缀匹配所有 Unix 路径）
+        if (action != OpsActionType.SERVICE_RESTART && isFilesystemRoot(target)) {
+            return new GovernanceEvaluation(
+                    GovernanceAdmissionVerdict.FORBIDDEN,
+                    AssetTier.FORBIDDEN_AUTO,
+                    target,
+                    "硬规则：文件系统根路径禁止清理/删除类自动方案");
+        }
+
+        // 硬规则：Windows 系统目录 / Program Files → 必须人工确认，禁止 ALLOW_AUTO
+        if (action != OpsActionType.SERVICE_RESTART && isWindowsProtectedPath(target)) {
+            return new GovernanceEvaluation(
+                    GovernanceAdmissionVerdict.CONFIRM_ONLY,
+                    AssetTier.CORE_STATELESS,
+                    target,
+                    "硬规则：路径命中 C:\\Windows 或 C:\\Program Files，pathSensitivity=10，必须人工确认");
         }
 
         if (tier == AssetTier.FORBIDDEN_AUTO) {
@@ -178,6 +283,33 @@ public class OpsGovernanceService {
             p = p.substring(0, p.length() - 1);
         }
         return p;
+    }
+
+    /** Unix `/` 或 Windows 盘符根（如 `C:` / `C:/`）视为文件系统根，禁止清理类自动执行。 */
+    static boolean isFilesystemRoot(String path) {
+        if (path == null || path.isBlank()) {
+            return false;
+        }
+        String n = normalizePath(path);
+        if ("/".equals(n)) {
+            return true;
+        }
+        String lower = n.toLowerCase(Locale.ROOT);
+        return lower.matches("^[a-z]:$") || lower.matches("^[a-z]:/$");
+    }
+
+    /** C:\\Windows 或 C:\\Program Files（含子路径）视为系统敏感目录。 */
+    static boolean isWindowsProtectedPath(String path) {
+        if (path == null || path.isBlank()) {
+            return false;
+        }
+        String n = normalizePath(path).toLowerCase(Locale.ROOT);
+        return n.equals("c:/windows")
+                || n.startsWith("c:/windows/")
+                || n.equals("c:/program files")
+                || n.startsWith("c:/program files/")
+                || n.equals("c:/programfiles")
+                || n.startsWith("c:/programfiles/");
     }
 
     public record GovernanceEvaluation(

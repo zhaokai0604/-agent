@@ -1,4 +1,4 @@
--- 用户表
+﻿-- 用户表
 CREATE TABLE IF NOT EXISTS `sys_user` (
   `user_id` int(11) NOT NULL AUTO_INCREMENT COMMENT '用户ID',
   `username` varchar(64) NOT NULL COMMENT '用户名',
@@ -11,6 +11,20 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   PRIMARY KEY (`user_id`),
   UNIQUE KEY `uk_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
+
+-- Default admin seed: 12345678 / 12345678
+-- Idempotent insert for repeated schema imports
+INSERT INTO `sys_user` (`username`, `password`, `role`, `email`, `create_time`, `update_time`)
+SELECT
+  '12345678',
+  '$2b$10$z0csJ1KrtOcpvymI.vKWpuocS6HhZ8w9JhGoYdFxLlHAz9wmwnPN6',
+  1,
+  NULL,
+  NOW(),
+  NOW()
+WHERE NOT EXISTS (
+  SELECT 1 FROM `sys_user` WHERE `username` = '12345678'
+);
 
 -- 角色表
 CREATE TABLE IF NOT EXISTS `sys_role` (

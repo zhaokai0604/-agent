@@ -124,12 +124,19 @@ public class AssistantReplyPlanner {
                         AssistantReplyPrompts.patrolContinuationHint());
             }
         }
-        if (AssistantIntentSignals.PATROL_ORCHESTRATE.matcher(msg).find()) {
+        if (AssistantIntentSignals.PATROL_ORCHESTRATE.matcher(msg).find()
+                && !AssistantIntentSignals.isBroadMetricsQuery(msg)) {
             if (orchestratorEnabled && opsRuntimeService != null
                     && opsRuntimeService.shouldOrchestrate(msg)) {
                 return plan(AssistantReplyMode.ORCHESTRATE, AssistantIntentCategory.PATROL_ORCHESTRATE, true,
                         AssistantReplyPrompts.orchestrateStatusHint());
             }
+        }
+
+        // P9 多指标事实查询交给真正的工具代理，避免固定巡检剧本替用户预设处置方案
+        if (useToolAgentRequested && AssistantIntentSignals.isBroadMetricsQuery(msg)) {
+            return plan(AssistantReplyMode.TOOL_AGENT, AssistantIntentCategory.METRICS_QUERY, true,
+                    AssistantReplyPrompts.toolAgentStatusHint());
         }
 
         // P9 只读指标

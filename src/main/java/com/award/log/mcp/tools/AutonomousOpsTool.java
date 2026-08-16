@@ -2,6 +2,7 @@ package com.award.log.mcp.tools;
 
 import com.award.log.agent.OpsPatrolAutomationService;
 import com.award.log.agent.OpsRunResult;
+import com.award.log.mcp.McpToolResponses;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.tool.annotation.Tool;
@@ -9,7 +10,9 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 兼容旧自主运维工具名，现统一转为巡检自动修复单轨入口。
@@ -47,8 +50,40 @@ public class AutonomousOpsTool {
         }
 
         long duration = System.currentTimeMillis() - start;
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(payload), null, duration, false));
+        String dataJson = objectMapper.writeValueAsString(payload);
+        if (hasFailureSigns(result.report())) {
+            return McpToolResponses.warn(objectMapper, dataJson, duration);
+        }
+        return McpToolResponses.success(objectMapper, dataJson, duration);
+    }
+
+    private static boolean hasFailureSigns(Map<String, Object> report) {
+        if (report == null || report.isEmpty()) {
+            return false;
+        }
+        Object findings = report.get("findings");
+        if (findings instanceof List<?> list && !list.isEmpty()) {
+            return true;
+        }
+        Object remediation = report.get("remediation");
+        if (remediation instanceof Map<?, ?> rem) {
+            Object statusObj = rem.get("status");
+            String status = statusObj != null ? String.valueOf(statusObj) : "";
+            if (Set.of("EXECUTION_PARTIAL", "MANUAL_REVIEW", "PENDING_CONFIRMATION", "EXECUTED_WITH_PENDING")
+                    .contains(status)) {
+                return true;
+            }
+            Object actions = rem.get("actions");
+            if (actions instanceof List<?> acts) {
+                for (Object item : acts) {
+                    if (item instanceof Map<?, ?> action && Boolean.FALSE.equals(action.get("success"))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        Object pending = report.get("pending");
+        return pending instanceof Map<?, ?> p && Boolean.TRUE.equals(p.get("hasPending"));
     }
 
     public String executeGateway(String userIntent, Boolean forceRemediate) throws JsonProcessingException {

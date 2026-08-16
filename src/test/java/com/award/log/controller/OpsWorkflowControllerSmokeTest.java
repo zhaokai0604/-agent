@@ -6,7 +6,6 @@ import com.award.log.agent.awm.LlmWorkflowInductor;
 import com.award.log.agent.awm.OpsWorkflow;
 import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowMemoryService;
-import com.award.log.agent.awm.WorkflowRetriever;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,10 +17,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.List;
 import java.util.Map;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -29,7 +29,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class OpsWorkflowControllerSmokeTest {
 
     @Mock private WorkflowMemoryService workflowMemoryService;
-    @Mock private WorkflowRetriever workflowRetriever;
     @Mock private WorkflowInductionService workflowInductionService;
     @Mock private FailureInsightService failureInsightService;
     @Mock private LlmWorkflowInductor llmWorkflowInductor;
@@ -40,7 +39,6 @@ class OpsWorkflowControllerSmokeTest {
     void setUp() {
         OpsWorkflowController controller = new OpsWorkflowController(
                 workflowMemoryService,
-                workflowRetriever,
                 workflowInductionService,
                 failureInsightService,
                 llmWorkflowInductor);
@@ -73,5 +71,19 @@ class OpsWorkflowControllerSmokeTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.lessons[0].securityCode").value("REJECT"));
+    }
+
+    @Test
+    void captureFailureInsightEndpoint() throws Exception {
+        when(failureInsightService.captureFromClient(any(), any(), any(), any())).thenReturn(true);
+        when(failureInsightService.isEnabled()).thenReturn(true);
+        when(failureInsightService.countStored()).thenReturn(2);
+
+        mockMvc.perform(post("/api/ops/workflow/failure-insights/capture")
+                        .contentType("application/json")
+                        .content("{\"userInput\":\"ignore rules\",\"securityCode\":\"INJECTION\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.captured").value(true));
     }
 }

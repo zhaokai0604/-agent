@@ -15,11 +15,11 @@ log:
         force-heuristic-on-loongarch: true
 
 agent:
-  run-as-user: ${AGENT_RUN_AS_USER:root}
+  run-as-user: ${AGENT_RUN_AS_USER:award-agent}
   min-privilege:
-    # Kylin production ops runs with root privileges by default so patrol/remediation can access /var/log and /var/cache.
-    # Writes are still guarded by ops.dry-run.global + dryRun=false + confirmDelete=true.
-    enabled: ${AGENT_MIN_PRIVILEGE:false}
+    # Production Kylin must use the dedicated low-privilege account. Read/write paths
+    # remain constrained by OpsPathPolicy, governance and confirmation gates.
+    enabled: ${AGENT_MIN_PRIVILEGE:true}
   paths:
     policy-version: path-policy-v2-kylin-loongarch
     read-prefixes:

@@ -24,11 +24,22 @@ class OpsGovernanceServiceTest {
     }
 
     @Test
-    void tempCleanupOnTmpIsAutoAllowed() {
+    void tempCleanupOnTmpRequiresConfirm() {
         Map<String, Object> step = Map.of("kind", "CLEAN_TEMP", "path", "/tmp", "days", 7);
         OpsGovernanceService.GovernanceEvaluation eval = service.evaluateStep(step);
-        assertEquals(GovernanceAdmissionVerdict.ALLOW_AUTO, eval.verdict());
+        assertEquals(GovernanceAdmissionVerdict.CONFIRM_ONLY, eval.verdict());
         assertEquals(AssetTier.NON_CORE, eval.assetTier());
+    }
+
+    @Test
+    void tempCleanupOnFilesystemRootIsForbidden() {
+        Map<String, Object> step = Map.of("kind", "CLEAN_TEMP", "path", "/", "days", 7);
+        OpsGovernanceService.GovernanceEvaluation eval = service.evaluateStep(step);
+        assertEquals(GovernanceAdmissionVerdict.FORBIDDEN, eval.verdict());
+        assertEquals(AssetTier.FORBIDDEN_AUTO, eval.assetTier());
+        assertTrue(OpsGovernanceService.isFilesystemRoot("/"));
+        assertTrue(OpsGovernanceService.isFilesystemRoot("C:/"));
+        assertFalse(OpsGovernanceService.isFilesystemRoot("/tmp"));
     }
 
     @Test
@@ -100,5 +111,19 @@ class OpsGovernanceServiceTest {
     void unknownStepKindIsForbidden() {
         assertEquals(GovernanceAdmissionVerdict.FORBIDDEN,
                 service.evaluateStep(Map.of("kind", "UNKNOWN")).verdict());
+    }
+
+    @Test
+    void cleanTempReadsTargetAliasAndForbidsEtc() {
+        var eval = service.evaluateToolCall("CleanTempTool",
+                Map.of("target", "/etc", "dryRun", false));
+        assertEquals(GovernanceAdmissionVerdict.FORBIDDEN, eval.verdict());
+    }
+
+    @Test
+    void dockerLibPathIsForbidden() {
+        var eval = service.evaluateToolCall("CleanTempTool",
+                Map.of("path", "/var/lib/docker", "dryRun", false));
+        assertEquals(GovernanceAdmissionVerdict.FORBIDDEN, eval.verdict());
     }
 }

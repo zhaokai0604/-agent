@@ -22,4 +22,7 @@ public interface KnowledgeBaseService {
     Map<String, Object> getStatus();
 
     Map<String, Object> listDocuments(int page, int pageSize);
+
+    /** 库为空时写入内置 Runbook；刷新按钮可触发。 */
+    Map<String, Object> seedBuiltinIfEmpty();
 }

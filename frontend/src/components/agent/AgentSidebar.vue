@@ -6,14 +6,14 @@
       </div>
       <div v-if="!collapsed" class="brand-copy">
         <strong>ThreshCore</strong>
-        <span>Agent · 运维</span>
+        <span>运维 Agent</span>
       </div>
     </div>
 
     <div class="sidebar-actions">
       <button type="button" class="new-chat-btn" @click="$emit('new-chat')">
         <el-icon><Plus /></el-icon>
-        <span v-if="!collapsed">新建对话</span>
+        <span v-if="!collapsed">新建会话</span>
       </button>
     </div>
 
@@ -25,7 +25,7 @@
         @click="$emit('select', 'ops-chat')"
       >
         <el-icon><ChatLineSquare /></el-icon>
-        <span v-if="!collapsed">对话</span>
+        <span v-if="!collapsed">运维对话</span>
       </button>
       <button
         type="button"
@@ -34,7 +34,7 @@
         @click="$emit('select', 'agent-skills')"
       >
         <el-icon><Grid /></el-icon>
-        <span v-if="!collapsed">技能</span>
+        <span v-if="!collapsed">工具与技能</span>
       </button>
     </nav>
 
@@ -49,7 +49,7 @@
 
     <div v-if="!collapsed" class="sidebar-section">
       <button type="button" class="section-toggle" @click="opsExpanded = !opsExpanded">
-        <span>运维中心</span>
+        <span>运行任务</span>
         <el-icon :class="{ rotated: opsExpanded }"><ArrowDown /></el-icon>
       </button>
 
@@ -258,47 +258,26 @@ const flatNavItems = computed(() =>
   font-size: 10px;
   font-weight: 600;
   color: var(--shell-muted);
-  opacity: 0.85;
-}
-
-.ops-nav-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 9px 12px;
+  min-width: 0;
+  padding: 9px 10px;
   border: none;
   border-radius: 8px;
   background: transparent;
   color: var(--shell-text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  text-align: left;
   cursor: pointer;
+  text-align: left;
   transition: background 0.15s ease, color 0.15s ease;
-  position: relative;
-}
-
-.nav-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 18px;
-  border-radius: 0 3px 3px 0;
-  background: var(--ops-primary);
-}
-
-.nav-item--icon.active::before {
-  display: none;
 }
 
 .nav-item:hover {
@@ -308,7 +287,6 @@ const flatNavItems = computed(() =>
 .nav-item.active {
   background: var(--shell-nav-active);
   color: var(--ops-primary);
-  font-weight: 600;
 }
 
 .nav-item--sub {
@@ -320,13 +298,17 @@ const flatNavItems = computed(() =>
   padding: 10px;
 }
 
-.sidebar-collapsed-ops {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 10px;
+.ops-nav-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+}
+
+.sidebar-collapsed-ops {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 10px 12px;
 }
 
 .sidebar-footer {
@@ -336,14 +318,11 @@ const flatNavItems = computed(() =>
   justify-content: center;
 }
 
-@media (max-width: 768px) {
-  .agent-sidebar {
-    transform: translateX(-100%);
-    width: var(--agent-sidebar-w);
-  }
+:deep(.el-button.is-text.el-button--small) {
+  color: var(--shell-muted);
+}
 
-  .agent-sidebar:not(.collapsed) {
-    transform: translateX(0);
-  }
+:deep(.el-button.is-text.el-button--small:hover) {
+  color: var(--ops-primary);
 }
 </style>

@@ -2,22 +2,22 @@
   <div class="ops-page unified-audit-center">
     <OpsPageHeader
       title="统一审计中心"
-      subtitle="用人话回看：谁做了什么、系统拦没拦、确认了没有、最后改没改机器"
+      subtitle="集中查看工具调用、对话、访问与安全拦截记录，默认展示可读摘要和结构化证据。"
     >
       <template #actions>
         <el-input-number v-model="limit" :min="20" :max="300" :step="20" size="small" />
         <el-button size="small" :loading="loading" @click="refreshActive">刷新</el-button>
         <el-button size="small" type="success" plain :disabled="!activeRows.length" @click="exportCsv">
-          导出
+          导出 CSV
         </el-button>
       </template>
     </OpsPageHeader>
 
     <el-tabs v-model="activePane" class="audit-tabs" @tab-change="onPaneChange">
-      <el-tab-pane label="工具执行" name="tools" />
-      <el-tab-pane label="对话经过" name="dialogue" />
-      <el-tab-pane label="谁访问了系统" name="access" />
-      <el-tab-pane label="安全拦了啥" name="security" />
+      <el-tab-pane label="工具" name="tools" />
+      <el-tab-pane label="对话" name="dialogue" />
+      <el-tab-pane label="访问" name="access" />
+      <el-tab-pane label="安全" name="security" />
     </el-tabs>
 
     <div class="audit-summary-row">
@@ -30,8 +30,8 @@
     <div v-if="activePane === 'security'" class="security-panel" v-loading="selfCheckLoading">
       <div class="security-panel__head">
         <div>
-          <h3>安全护栏体检</h3>
-          <p>用几组固定「试探」检查拦截是否生效，不会真的在机器上执行命令。</p>
+          <h3>安全门禁自检</h3>
+          <p>检查高危操作拦截、二次确认、策略判定和证据记录是否按预期工作。</p>
         </div>
         <div class="security-panel__actions">
           <el-tag
@@ -39,25 +39,26 @@
             :type="selfCheck.overallStatus === 'PASS' ? 'success' : 'warning'"
             size="small"
           >
-            {{ selfCheck.overallStatus === 'PASS' ? '护栏正常' : '有项未通过' }}
+            {{ selfCheck.overallStatus === 'PASS' ? '自检通过' : '存在风险' }}
           </el-tag>
           <el-button size="small" type="primary" :loading="selfCheckLoading" @click="loadSelfCheck">
-            马上体检
+            重新自检
           </el-button>
+          <el-button size="small" @click="openSecurityCockpit">打开安全驾驶舱</el-button>
         </div>
       </div>
       <div v-if="selfCheck?.summary" class="security-headline">
-        {{ selfCheck.summary.headline || `共 ${selfCheck.summary.total || 0} 项，通过 ${selfCheck.summary.passed || 0} 项` }}
+        {{ selfCheck.summary.headline || `共 ${selfCheck.summary.total || 0} 项检查，通过 ${selfCheck.summary.passed || 0} 项` }}
       </div>
       <div v-if="selfCheckLayers.length" class="security-layers">
         <article v-for="layer in selfCheckLayers" :key="layer.id" class="security-layer" :class="{ 'is-ok': layer.ok }">
           <strong>{{ layer.name }}</strong>
-          <span>{{ layer.ok ? '正常' : '需关注' }} · {{ layer.passed }}/{{ layer.total }}</span>
+          <span>{{ layer.ok ? '通过' : '需关注' }} · {{ layer.passed }}/{{ layer.total }}</span>
           <p>{{ layer.description }}</p>
         </article>
       </div>
       <el-table v-if="selfCheckProbes.length" :data="selfCheckProbes" border stripe size="small" max-height="220">
-        <el-table-column prop="title" label="试了什么" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="title" label="检查项" min-width="160" show-overflow-tooltip />
         <el-table-column label="期望" width="110">
           <template #default="{ row }">{{ humanGateExpect(row.expect) }}</template>
         </el-table-column>
@@ -67,20 +68,20 @@
         <el-table-column label="结果" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="row.passed ? 'success' : 'danger'">
-              {{ row.passed ? '过关' : '未过' }}
+              {{ row.passed ? '通过' : '异常' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="judgeHint" label="人话说明" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="judgeHint" label="判定说明" min-width="220" show-overflow-tooltip />
       </el-table>
     </div>
 
-    <div class="audit-filters" v-if="activePane !== 'access'">
+    <div v-if="activePane !== 'access'" class="audit-filters">
       <el-radio-group v-model="kindFilter" size="small" @change="loadFeed">
         <el-radio-button
           v-for="option in paneKindOptions"
           :key="option.value"
-          :value="option.value"
+          :label="option.value"
         >
           {{ option.label }}
         </el-radio-button>
@@ -99,34 +100,32 @@
           highlight-current-row
           @row-click="openRow"
         >
-          <el-table-column v-if="activePane !== 'access'" label="类别" width="108">
+          <el-table-column v-if="activePane !== 'access'" label="类型" width="108">
             <template #default="{ row }">
               <el-tag size="small" :type="kindTagType(row.auditKind)">
                 {{ kindText(row) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="发生了什么" min-width="220" show-overflow-tooltip>
-            <template #default="{ row }">
-              {{ rowBrief(row) }}
-            </template>
+          <el-table-column label="对象 / 摘要" min-width="220" show-overflow-tooltip>
+            <template #default="{ row }">{{ rowBrief(row) }}</template>
           </el-table-column>
-          <el-table-column v-if="activePane === 'access'" prop="remoteIp" label="来自哪里" width="130" show-overflow-tooltip />
+          <el-table-column v-if="activePane === 'access'" prop="remoteIp" label="来源 IP" width="130" show-overflow-tooltip />
           <el-table-column label="结果" width="128">
             <template #default="{ row }">
               <el-tag size="small" :type="outcomeTagType(row)">{{ humanOutcome(row) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="operatorUserId" label="谁" width="96" show-overflow-tooltip />
-          <el-table-column label="用时" width="100">
-            <template #default="{ row }">{{ formatDurationMs(row.durationMs) || '—' }}</template>
+          <el-table-column prop="operatorUserId" label="操作人" width="96" show-overflow-tooltip />
+          <el-table-column label="耗时" width="100">
+            <template #default="{ row }">{{ formatDurationMs(row.durationMs) || '-' }}</template>
           </el-table-column>
           <el-table-column label="时间" min-width="158">
             <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
           </el-table-column>
-          <el-table-column label="" width="72" fixed="right">
+          <el-table-column label="操作" width="72" fixed="right">
             <template #default="{ row }">
-              <el-button type="primary" link @click.stop="openRow(row)">细看</el-button>
+              <el-button type="primary" link @click.stop="openRow(row)">详情</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -136,8 +135,8 @@
         <template #header>
           <div class="audit-detail-card__header">
             <div>
-              <h3>这件事怎么回事</h3>
-              <p>{{ selected ? kindText(selected) : '点左侧一条，右侧用白话讲清楚' }}</p>
+              <h3>审计详情</h3>
+              <p>{{ selected ? kindText(selected) : '选择左侧记录后查看摘要、步骤和证据。' }}</p>
             </div>
             <div class="audit-detail-card__header-actions">
               <el-tag v-if="selected" size="small" :type="outcomeTagType(selected)">
@@ -150,13 +149,13 @@
                 plain
                 @click="jumpOpsTrace(selected.traceId)"
               >
-                看完整思考过程
+                查看执行链路
               </el-button>
             </div>
           </div>
         </template>
 
-        <el-empty v-if="!selected" description="还没选记录。选一条就能看到白话叙述和时间线。" />
+        <el-empty v-if="!selected" description="暂无选中的审计记录" />
 
         <template v-else>
           <div class="audit-narrative">
@@ -165,7 +164,7 @@
 
           <div class="audit-detail-meta">
             <div class="meta-item">
-              <span class="meta-item__label">从哪进来</span>
+              <span class="meta-item__label">入口</span>
               <strong>{{ humanChannel(selected.requestChannel || selected.channel) }}</strong>
             </div>
             <div class="meta-item">
@@ -177,11 +176,11 @@
               <strong>{{ selected.remoteIp }}</strong>
             </div>
             <div v-if="toolLabel(selected)" class="meta-item">
-              <span class="meta-item__label">用了哪项能力</span>
+              <span class="meta-item__label">工具</span>
               <strong>{{ toolLabel(selected) }}</strong>
             </div>
             <div v-if="formatDurationMs(selected.durationMs)" class="meta-item">
-              <span class="meta-item__label">用时</span>
+              <span class="meta-item__label">耗时</span>
               <strong>{{ formatDurationMs(selected.durationMs) }}</strong>
             </div>
             <div v-if="selected.operatorUserId" class="meta-item">
@@ -191,36 +190,38 @@
           </div>
 
           <div v-if="selected.userInput" class="audit-detail-block">
-            <div class="audit-detail-block__title">当时怎么说的</div>
+            <div class="audit-detail-block__title">用户输入</div>
             <div class="audit-detail-block__body">{{ selected.userInput }}</div>
           </div>
 
-          <div v-if="selected.resultSummary || selected.effectSummary" class="audit-detail-block">
-            <div class="audit-detail-block__title">系统怎么收场</div>
+          <div v-if="selectedBusinessSummary" class="audit-detail-block">
+            <div class="audit-detail-block__title">业务结果</div>
             <div class="audit-detail-block__body">
-              {{ selected.effectSummary || selected.resultSummary }}
+              {{ selectedBusinessSummary }}
             </div>
           </div>
 
           <div class="audit-detail-block">
-            <div class="audit-detail-block__title">过程时间线</div>
+            <div class="audit-detail-block__title">执行步骤</div>
             <div v-if="selectedSteps.length" class="timeline-list">
               <div v-for="(step, index) in selectedSteps" :key="index" class="timeline-step">
                 <span class="timeline-step__index">{{ index + 1 }}</span>
                 <div class="timeline-step__content">
                   <strong>{{ humanStepTitle(step, index) }}</strong>
-                  <pre>{{ humanStepBody(step) }}</pre>
+                  <div class="timeline-step__preview">{{ stepPreview(step, index) }}</div>
                 </div>
               </div>
             </div>
-            <el-empty v-else description="这条没有拆开的步骤，看上面的白话就够了" />
+            <el-empty v-else description="暂无执行步骤" />
           </div>
 
-          <el-collapse class="raw-collapse">
-            <el-collapse-item title="技术底稿（排障用，默认折叠）" name="raw">
-              <pre class="raw-json">{{ JSON.stringify(selected.raw || selected, null, 2) }}</pre>
-            </el-collapse-item>
-          </el-collapse>
+          <div class="audit-detail-block audit-detail-block--evidence">
+            <div class="audit-detail-block__title">结构化证据</div>
+            <div class="audit-detail-block__body audit-evidence">
+              <div class="audit-evidence__summary">{{ selectedEvidencePreview }}</div>
+              <StructuredResultView :data="selectedEvidencePayload" />
+            </div>
+          </div>
         </template>
       </el-card>
     </div>
@@ -240,6 +241,7 @@ import {
 import { formatLocalDateKey } from '../utils/formatDate.js'
 import { exportRowsAsCsv } from '../utils/tableExport.js'
 import OpsPageHeader from './OpsPageHeader.vue'
+import StructuredResultView from './StructuredResultView.vue'
 import {
   auditKindLabel,
   formatDurationMs,
@@ -251,6 +253,7 @@ import {
   narrateAudit,
   outcomeTagType
 } from '../utils/auditHumanize.js'
+import { formatResultPreview, looksLikeJsonString } from '../utils/structuredDataView'
 
 const activePane = ref('tools')
 const kindFilter = ref('all')
@@ -269,17 +272,17 @@ const PANE_KINDS = {
     { value: 'all', label: '全部' },
     { value: 'tool', label: '工具调用' },
     { value: 'remediation', label: '处置修复' },
-    { value: 'confirm', label: '等确认' }
+    { value: 'confirm', label: '待确认' }
   ],
   dialogue: [
-    { value: 'dialogue', label: '纯对话' },
-    { value: 'all', label: '对话及相关' }
+    { value: 'dialogue', label: '对话' },
+    { value: 'all', label: '全部链路' }
   ],
   access: [],
   security: [
     { value: 'block', label: '已拦截' },
-    { value: 'confirm', label: '等确认' },
-    { value: 'all', label: '相关全部' }
+    { value: 'confirm', label: '待确认' },
+    { value: 'all', label: '全部安全事件' }
   ]
 }
 
@@ -289,9 +292,7 @@ const activeRows = computed(() => {
   if (activePane.value === 'access') return accessRows.value
   const rows = feedRows.value
   if (activePane.value === 'tools') {
-    if (kindFilter.value === 'all') {
-      return rows.filter((r) => ['tool', 'remediation', 'confirm'].includes(r.auditKind))
-    }
+    if (kindFilter.value === 'all') return rows.filter((r) => ['tool', 'remediation', 'confirm'].includes(r.auditKind))
     return rows.filter((r) => r.auditKind === kindFilter.value)
   }
   if (activePane.value === 'dialogue') {
@@ -313,9 +314,9 @@ const summaryCards = computed(() => {
   if (activePane.value === 'access') {
     const err = accessRows.value.filter((r) => Number(r.httpStatus) >= 400).length
     return [
-      { key: 'total', label: '一共多少次访问', count: accessRows.value.length },
-      { key: 'error', label: '失败/拒绝', count: err },
-      { key: 'ok', label: '成功', count: accessRows.value.length - err }
+      { key: 'total', label: '访问记录', count: accessRows.value.length },
+      { key: 'error', label: '异常访问', count: err },
+      { key: 'ok', label: '正常访问', count: accessRows.value.length - err }
     ]
   }
   const counters = activeRows.value.reduce((acc, row) => {
@@ -326,17 +327,17 @@ const summaryCards = computed(() => {
   if (activePane.value === 'security') {
     const probes = selfCheck.value?.summary || {}
     return [
-      { key: 'block', label: '拦住了几次', count: counters.block || 0 },
-      { key: 'confirm', label: '还在等确认', count: counters.confirm || 0 },
-      { key: 'probe', label: '护栏体检', count: `${probes.passed ?? '—'} / ${probes.total ?? '—'}` }
+      { key: 'block', label: '拦截事件', count: counters.block || 0 },
+      { key: 'confirm', label: '待确认', count: counters.confirm || 0 },
+      { key: 'probe', label: '门禁自检', count: `${probes.passed ?? '-'} / ${probes.total ?? '-'}` }
     ]
   }
   return [
-    { key: 'total', label: '本页条数', count: activeRows.value.length },
+    { key: 'total', label: '当前记录', count: activeRows.value.length },
     { key: 'tool', label: '工具调用', count: counters.tool || 0 },
     { key: 'dialogue', label: '对话', count: counters.dialogue || 0 },
     { key: 'remediation', label: '处置', count: counters.remediation || 0 },
-    { key: 'confirm', label: '等确认', count: counters.confirm || 0 },
+    { key: 'confirm', label: '确认', count: counters.confirm || 0 },
     { key: 'block', label: '拦截', count: counters.block || 0 }
   ]
 })
@@ -346,8 +347,49 @@ const selectedSteps = computed(() => {
   return Array.isArray(steps) ? steps : []
 })
 
+const selectedEvidencePayload = computed(() => selected.value?.raw || selected.value || null)
+
+const selectedEvidencePreview = computed(() => {
+  const payload = selectedEvidencePayload.value
+  if (!payload) return '暂无结构化证据'
+  return formatResultPreview(payload, 220)
+})
+
+const selectedBusinessSummary = computed(() => {
+  const raw = selected.value?.effectSummary || selected.value?.resultSummary || ''
+  if (!raw) return ''
+  return readablePreview(raw, 520)
+})
+
 const selfCheckLayers = computed(() => (Array.isArray(selfCheck.value?.layers) ? selfCheck.value.layers : []))
 const selfCheckProbes = computed(() => (Array.isArray(selfCheck.value?.probes) ? selfCheck.value.probes : []))
+
+function stepPreview(step, index) {
+  const raw = humanStepBody(step)
+  const text = readablePreview(raw, 160)
+  if (!text) return `第 ${index + 1} 步暂无补充说明`
+  return text
+}
+
+function readablePreview(raw, maxLen = 160) {
+  let text = String(raw ?? '').replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  text = text.replace(/^\[Step\s*\d+\s*-\s*[^\]]+\]\s*/i, '')
+
+  if (looksLikeJsonString(text)) {
+    return formatResultPreview(text, maxLen)
+  }
+
+  const objectStart = text.indexOf('{')
+  const objectEnd = text.lastIndexOf('}')
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    const before = text.slice(0, objectStart).replace(/[：:\s]+$/, '').trim()
+    const preview = formatResultPreview(text.slice(objectStart, objectEnd + 1), Math.max(80, maxLen - before.length - 4))
+    text = `${before ? `${before}：` : ''}${preview}`
+  }
+
+  return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text
+}
 
 function kindText(row) {
   return auditKindLabel(row?.auditKind) || row?.auditKindLabel || '记录'
@@ -362,15 +404,15 @@ function rowBrief(row) {
   if (tool) return tool
   if (row?.targetName) return String(row.targetName).slice(0, 80)
   if (row?.userInput) return String(row.userInput).slice(0, 80)
-  return '运维动作'
+  return '运维记录'
 }
 
 function humanGateExpect(code) {
   const c = String(code || '').toUpperCase()
-  if (c === 'BLOCK') return '应拦截'
-  if (c === 'ALLOW') return '应放行'
-  if (c.includes('CONFIRM')) return '应先确认'
-  return code || '—'
+  if (c === 'BLOCK') return '拦截'
+  if (c === 'ALLOW') return '允许'
+  if (c.includes('CONFIRM')) return '需确认'
+  return code || '-'
 }
 
 function defaultKindForPane(pane) {
@@ -401,7 +443,7 @@ async function loadFeed() {
       if (latest) selected.value = { ...selected.value, ...latest }
     }
   } catch (error) {
-    ElMessage.error(error.message || '加载审计列表失败')
+    ElMessage.error(error.message || '审计记录加载失败')
   } finally {
     loading.value = false
   }
@@ -415,7 +457,7 @@ async function loadAccess() {
     accessRows.value = list.map((row) => ({
       entryId: `api:${row.id}`,
       auditKind: 'access',
-      auditKindLabel: '登录/访问',
+      auditKindLabel: '接口访问',
       targetName: `${row.method || ''} ${row.path || ''}`.trim(),
       remoteIp: row.remote_ip || row.remoteIp || '',
       httpStatus: row.status,
@@ -423,11 +465,11 @@ async function loadAccess() {
       operatorUserId: row.user_id || row.userId || '',
       durationMs: row.duration_ms ?? row.durationMs,
       createdAt: row.created_at || row.createdAt,
-      resultSummary: Number(row.status) >= 400 ? `请求未成功（状态 ${row.status}）` : `访问成功（状态 ${row.status}）`,
+      resultSummary: Number(row.status) >= 400 ? `接口返回异常状态 ${row.status}` : `接口访问成功，状态 ${row.status}`,
       raw: row
     }))
   } catch (error) {
-    ElMessage.error(error.message || '加载访问记录失败')
+    ElMessage.error(error.message || '访问审计加载失败')
     accessRows.value = []
   } finally {
     loading.value = false
@@ -439,10 +481,14 @@ async function loadSelfCheck() {
   try {
     selfCheck.value = await getSecuritySelfCheck()
   } catch (error) {
-    ElMessage.error(error.message || '安全体检失败')
+    ElMessage.error(error.message || '安全自检失败')
   } finally {
     selfCheckLoading.value = false
   }
+}
+
+function openSecurityCockpit() {
+  window.dispatchEvent(new CustomEvent('ops-navigate-tab', { detail: { tab: 'security-cockpit' } }))
 }
 
 async function refreshActive() {
@@ -474,10 +520,10 @@ async function openRow(row) {
       detail = {
         ...row,
         steps: [
-          { phase: 'request', detail: `访问了 ${row.targetName}` },
+          { phase: 'request', detail: `访问接口：${row.targetName}` },
           {
             phase: 'identity',
-            detail: `操作人 ${row.operatorUserId || '未知'}，角色 ${row.userRole || '未知'}，IP ${row.remoteIp || '未知'}`
+            detail: `操作人：${row.operatorUserId || '未知'}，角色：${row.userRole || '未知'}，来源 IP：${row.remoteIp || '未知'}`
           },
           { phase: 'result', detail: row.resultSummary || humanOutcome(row) }
         ]
@@ -491,7 +537,8 @@ async function openRow(row) {
         if (rich && typeof rich === 'object') {
           const steps = Array.isArray(rich.steps)
             ? rich.steps
-            : (typeof rich.stepsJson === 'string' ? safeParseJson(rich.stepsJson) : [])
+            : (typeof rich.stepsJsonRaw === 'string' ? safeParseJson(rich.stepsJsonRaw)
+              : (typeof rich.stepsJson === 'string' ? safeParseJson(rich.stepsJson) : []))
           detail = {
             ...(detail || {}),
             ...normalizeTraceDetail(rich, detail),
@@ -499,12 +546,12 @@ async function openRow(row) {
           }
         }
       } catch {
-        // ignore
+        // 详情增强失败不影响基础审计记录展示。
       }
     }
     selected.value = detail && Object.keys(detail).length ? detail : row
   } catch (error) {
-    ElMessage.error(error.message || '加载详情失败')
+    ElMessage.error(error.message || '审计详情加载失败')
   } finally {
     detailLoading.value = false
   }
@@ -561,14 +608,14 @@ function kindTagType(auditKind) {
 }
 
 function formatTime(value) {
-  if (!value) return '—'
+  if (!value) return '-'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN')
 }
 
 function exportCsv() {
   if (!activeRows.value.length) {
-    ElMessage.warning('当前没有可导出的数据')
+    ElMessage.warning('暂无可导出的审计记录')
     return
   }
   const rows = activeRows.value.map((row) => ({
@@ -581,28 +628,26 @@ function exportCsv() {
   exportRowsAsCsv({
     rows,
     columns: [
-      { key: '_story', label: '白话叙述' },
+      { key: '_story', label: '摘要' },
       { key: '_outcome', label: '结果' },
-      { key: 'auditKindLabel', label: '类别' },
-      { key: '_tool', label: '能力' },
+      { key: 'auditKindLabel', label: '类型' },
+      { key: '_tool', label: '工具' },
       { key: 'targetName', label: '目标' },
       { key: '_channel', label: '入口' },
       { key: 'operatorUserId', label: '操作人' },
       { key: 'remoteIp', label: 'IP' },
-      { key: 'durationMs', label: '用时毫秒' },
+      { key: 'durationMs', label: '耗时ms' },
       { key: 'createdAt', label: '时间' },
-      { key: 'traceId', label: '追踪号' }
+      { key: 'traceId', label: 'traceId' }
     ],
-    filename: `审计-${activePane.value}-${formatLocalDateKey(new Date())}.csv`
+    filename: `审计中心-${activePane.value}-${formatLocalDateKey(new Date())}.csv`
   })
-  ElMessage.success('已导出')
+  ElMessage.success('已导出 CSV')
 }
 
 async function openTrace(traceId) {
   if (!traceId) return
-  if (activePane.value === 'access') {
-    activePane.value = 'tools'
-  }
+  if (activePane.value === 'access') activePane.value = 'tools'
   const row = feedRows.value.find((item) => item.traceId === traceId)
   if (row) {
     await openRow(row)
@@ -626,9 +671,7 @@ function jumpOpsTrace(traceId) {
 function onNavigateTab(event) {
   const detail = event?.detail || {}
   if (!['audit', 'ops-audit-trace'].includes(detail.tab)) return
-  if (detail.traceId) {
-    openTrace(detail.traceId)
-  }
+  if (detail.traceId) openTrace(detail.traceId)
 }
 
 watch(activePane, (pane) => {
@@ -668,10 +711,9 @@ defineExpose({ openTrace, refreshActive })
 
 .audit-summary-card {
   padding: 14px 16px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #fff, #f8fafc);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
 }
 
 .audit-summary-card__label {
@@ -689,7 +731,7 @@ defineExpose({ openTrace, refreshActive })
 
 .security-panel {
   padding: 16px;
-  border-radius: 16px;
+  border-radius: 8px;
   border: 1px solid #e2e8f0;
   background: #fff;
   display: flex;
@@ -697,33 +739,38 @@ defineExpose({ openTrace, refreshActive })
   gap: 12px;
 }
 
-.security-panel__head {
+.security-panel__head,
+.audit-detail-card__header {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: start;
+  align-items: flex-start;
 }
 
-.security-panel__head h3 {
+.security-panel__head h3,
+.audit-detail-card__header h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
 }
 
-.security-panel__head p {
+.security-panel__head p,
+.audit-detail-card__header p {
   margin: 6px 0 0;
   color: #64748b;
-  font-size: 13px;
+  line-height: 1.5;
 }
 
-.security-panel__actions {
+.security-panel__actions,
+.audit-detail-card__header-actions {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .security-headline {
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #f0fdf4;
   color: #166534;
   font-size: 13px;
@@ -738,7 +785,7 @@ defineExpose({ openTrace, refreshActive })
 
 .security-layer {
   padding: 12px;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid #e2e8f0;
   background: #f8fafc;
 }
@@ -782,39 +829,14 @@ defineExpose({ openTrace, refreshActive })
 
 .audit-list-card,
 .audit-detail-card {
-  border-radius: 18px;
-}
-
-.audit-detail-card__header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: start;
-}
-
-.audit-detail-card__header-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.audit-detail-card__header h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.audit-detail-card__header p {
-  margin: 6px 0 0;
-  color: #64748b;
-  line-height: 1.5;
+  border-radius: 8px;
 }
 
 .audit-narrative {
   margin-bottom: 14px;
   padding: 14px 16px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #f0fdfa, #f8fafc);
+  border-radius: 8px;
+  background: #f0fdfa;
   border: 1px solid rgba(13, 148, 136, 0.18);
   color: #134e4a;
   font-size: 14px;
@@ -830,7 +852,7 @@ defineExpose({ openTrace, refreshActive })
 
 .meta-item {
   padding: 12px;
-  border-radius: 12px;
+  border-radius: 8px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
 }
@@ -854,11 +876,10 @@ defineExpose({ openTrace, refreshActive })
 }
 
 .audit-detail-block__body,
-.raw-json,
-.timeline-step pre {
+.timeline-step__preview {
   margin: 0;
   padding: 12px;
-  border-radius: 12px;
+  border-radius: 8px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   white-space: pre-wrap;
@@ -867,20 +888,20 @@ defineExpose({ openTrace, refreshActive })
   color: #334155;
 }
 
-.raw-collapse {
-  margin-top: 16px;
-  border: none;
+.audit-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  white-space: normal;
 }
 
-.raw-collapse :deep(.el-collapse-item__header) {
-  font-size: 13px;
-  color: #64748b;
-  border: none;
-  background: transparent;
-}
-
-.raw-collapse :deep(.el-collapse-item__wrap) {
-  border: none;
+.audit-evidence__summary {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  line-height: 1.6;
 }
 
 .timeline-list {
@@ -892,7 +913,7 @@ defineExpose({ openTrace, refreshActive })
 .timeline-step {
   display: flex;
   gap: 10px;
-  align-items: start;
+  align-items: flex-start;
 }
 
 .timeline-step__index {

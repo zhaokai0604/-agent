@@ -36,7 +36,7 @@ class AlarmHistoryControllerSmokeTest {
     void setUp() {
         AlarmHistoryController controller = new AlarmHistoryController(
                 aiLogAlarmService, jdbcTemplate, requestUserResolver);
-        ReflectionTestUtils.setField(controller, "datasourceUrl", "jdbc:mariadb://localhost/test");
+        ReflectionTestUtils.setField(controller, "datasourceUrl", "jdbc:mysql://localhost/test");
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

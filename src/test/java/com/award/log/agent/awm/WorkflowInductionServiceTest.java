@@ -105,16 +105,17 @@ class WorkflowInductionServiceTest {
         when(workflowMemoryService.isEnabled()).thenReturn(true);
         when(trajectoryEvaluator.shouldInduce(exp)).thenReturn(true);
         when(experienceLoader.loadRecentSuccessful(3)).thenReturn(List.of(exp));
-        when(workflowMemoryService.existsWithToolSequence("cpu", List.of("SystemLoadTool", "ServiceRestartTool")))
+        when(workflowMemoryService.existsWithToolSequence("service", List.of("SystemLoadTool", "ServiceRestartTool")))
                 .thenReturn(false);
-        when(workflowMemoryService.isDomainFull("cpu")).thenReturn(false);
+        when(workflowMemoryService.isDomainFull("service")).thenReturn(false);
+        when(workflowMemoryService.upsert(any(), anyBoolean())).thenReturn(true);
 
         int created = service.induceFromRecentTraces(3).created();
 
         ArgumentCaptor<OpsWorkflow> workflowCaptor = ArgumentCaptor.forClass(OpsWorkflow.class);
         verify(workflowMemoryService).upsert(workflowCaptor.capture(), anyBoolean());
         assertEquals(1, created);
-        assertEquals("cpu", workflowCaptor.getValue().domainTag());
+        assertEquals("service", workflowCaptor.getValue().domainTag());
         assertEquals("ServiceRestartTool", workflowCaptor.getValue().steps().get(1).toolName());
         assertEquals("{service-name}", workflowCaptor.getValue().steps().get(1).argsTemplate().get("serviceName"));
     }
@@ -262,6 +263,7 @@ class WorkflowInductionServiceTest {
         when(workflowMemoryService.existsWithToolSequence("service", List.of("SystemdTool", "ServiceRestartTool")))
                 .thenReturn(false);
         when(workflowMemoryService.isDomainFull("service")).thenReturn(false);
+        when(workflowMemoryService.upsert(any(), anyBoolean())).thenReturn(true);
 
         int created = service.induceFromRecentTraces(2).created();
 

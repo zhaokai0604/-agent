@@ -3,11 +3,12 @@
     <span class="agent-quick-bar__label">常用</span>
     <button
       v-for="item in actions"
-      :key="item.cmd"
+      :key="item.cmd || item.action"
       type="button"
       class="agent-quick-bar__chip"
+      :class="{ 'agent-quick-bar__chip--alert': item.action === 'patrol' }"
       :disabled="loading"
-      @click="$emit('select', item.cmd)"
+      @click="onChip(item)"
     >
       {{ item.label }}
     </button>
@@ -19,21 +20,40 @@ import { computed } from 'vue'
 
 const props = defineProps({
   loading: { type: Boolean, default: false },
-  show: { type: Boolean, default: true }
+  show: { type: Boolean, default: true },
+  patrolPending: { type: Boolean, default: false }
 })
 
-defineEmits(['select'])
+const emit = defineEmits(['select', 'patrol'])
 
-/** 只保留能真实落到工具链、答辩常演示的短指令；去掉空口号与过窄场景 */
-const actions = [
+/** 五条黄金演示路径：巡检 / 磁盘 / 负载 / 清理预览 / 确认或续办 */
+const baseActions = [
   { label: '一键巡检', cmd: '一键巡检本机健康状态' },
   { label: '查磁盘', cmd: '检查磁盘使用情况并扫描占用热点' },
   { label: '查负载进程', cmd: '查看系统负载和占用最高的进程' },
-  { label: '看最近日志', cmd: '分析最近的系统日志' },
+  { label: '清理预览', cmd: '预览清理 7 天前的临时文件' },
   { label: '确认执行', cmd: '确认执行' }
 ]
 
+const actions = computed(() => {
+  if (!props.patrolPending) {
+    return baseActions
+  }
+  return [
+    { label: '处理巡检待办', action: 'patrol' },
+    ...baseActions.filter(a => a.label !== '确认执行')
+  ]
+})
+
 const visible = computed(() => props.show)
+
+function onChip (item) {
+  if (item.action === 'patrol') {
+    emit('patrol')
+    return
+  }
+  emit('select', item.cmd)
+}
 </script>
 
 <style scoped>
@@ -67,6 +87,12 @@ const visible = computed(() => props.show)
 .agent-quick-bar__chip:hover:not(:disabled) {
   background: #ccfbf1;
   border-color: rgba(13, 148, 136, 0.45);
+}
+
+.agent-quick-bar__chip--alert {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(254, 243, 199, 0.65);
+  color: #b45309;
 }
 
 .agent-quick-bar__chip:disabled {

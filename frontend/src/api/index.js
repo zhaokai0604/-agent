@@ -10,18 +10,11 @@ const viteAwardBase =
     ? String(import.meta.env.VITE_AWARD_LOG_BASE_URL).trim().replace(/\/$/, '')
     : ''
 
-/** 管理面可显式指向单独端口；不填时按当前 host + 管理端口推导 */
-const viteManagementBase =
-  typeof import.meta !== 'undefined' && import.meta.env?.VITE_AWARD_LOG_MANAGEMENT_BASE_URL
-    ? String(import.meta.env.VITE_AWARD_LOG_MANAGEMENT_BASE_URL).trim().replace(/\/$/, '')
-    : ''
-
-const viteManagementPort =
-  typeof import.meta !== 'undefined' && import.meta.env?.VITE_AWARD_LOG_MANAGEMENT_PORT
-    ? String(import.meta.env.VITE_AWARD_LOG_MANAGEMENT_PORT).trim()
-    : ''
-
-/** 解析 API 基址：dev 始终与当前页同源（走 Vite 代理）；生产用 VITE_AWARD_LOG_BASE_URL */
+/**
+ * 解析 API 基址（单端口 8088）：
+ * - dev：当前页同源 + /award-log（Vite 代理到 8088）
+ * - 生产：VITE_AWARD_LOG_BASE_URL 或当前页同源 + /award-log
+ */
 function buildRuntimeBaseUrl() {
   if (typeof window !== 'undefined' && import.meta.env?.DEV) {
     const { protocol, hostname, port } = window.location
@@ -42,18 +35,8 @@ function buildRuntimeBaseUrl() {
   return `${protocol}//${hostname}${portPart}/award-log`
 }
 
+/** 管理类接口与业务同基址（单端口，不再分流 8089） */
 function buildManagementBaseUrl() {
-  if (viteManagementBase) {
-    return viteManagementBase
-  }
-  if (viteManagementPort) {
-    if (typeof window === 'undefined') {
-      return `http://localhost:${viteManagementPort}/award-log`
-    }
-    const { protocol, hostname } = window.location
-    return `${protocol}//${hostname}:${viteManagementPort}/award-log`
-  }
-  // dev / prod-kylin：管理面与业务面同走 Vite 代理或 Nginx → /award-log（默认单端口 8088）
   return buildRuntimeBaseUrl()
 }
 
@@ -87,46 +70,6 @@ function createClient(baseUrlResolver) {
 const request = createClient(buildRuntimeBaseUrl)
 const managementRequest = createClient(buildManagementBaseUrl)
 
-const MANAGEMENT_ACCESS_PATHS = [
-  '/admin/',
-  '/api/mcp/',
-  '/api/assistant/',
-  '/api/audit/',
-  '/api/security/',
-  '/api/system-config/',
-  '/api/agent/path-policy',
-  '/api/runbook/',
-  '/api/ops/',
-  '/api/ops-',
-  '/api/ops-trace/',
-  '/api/performance/',
-  '/api/collector/',
-  '/api/kafka/',
-  '/api/v1/model/',
-  '/api/platform/info',
-  '/api/platform/readiness',
-  '/api/platform/backend-probe'
-]
-
-const BUSINESS_ACCESS_HINTS = [
-  '/log/',
-  '/api/profile/',
-  '/api/alarm/',
-  '/api/alarm-rule/',
-  '/api/elasticsearch/',
-  '/api/v1/knowledge/',
-  '/api/decision-feedback/',
-  '/api/platform/acceptance'
-]
-
-function isManagementPath(url = '') {
-  return MANAGEMENT_ACCESS_PATHS.some(prefix => url.startsWith(prefix))
-}
-
-function isBusinessHint(url = '') {
-  return BUSINESS_ACCESS_HINTS.some(prefix => url.startsWith(prefix))
-}
-
 function buildApiError(message, data) {
   const wrapped = new Error(message || '请求失败')
   wrapped.securityCode = data?.securityCode
@@ -134,7 +77,7 @@ function buildApiError(message, data) {
   return wrapped
 }
 
-function attachInterceptors(client, surface) {
+function attachInterceptors(client) {
   client.interceptors.response.use(
     res => {
       if (res.config?.responseType === 'blob') {
@@ -162,12 +105,14 @@ function attachInterceptors(client, surface) {
     error => {
       const status = error.response?.status
       const securityCode = error.response?.data?.securityCode
-      const reqUrl = String(error.config?.url || '')
-      if (status === 403 && securityCode === 'MANAGEMENT_PORT_REQUIRED' && surface === 'business' && isManagementPath(reqUrl)) {
-        return managementRequest.request(error.config)
-      }
-      if ((status === 403 || status === 404) && securityCode === 'BUSINESS_PORT_REQUIRED' && surface === 'management' && isBusinessHint(reqUrl)) {
-        return request.request(error.config)
+      // 单端口架构下不应再出现跨端口重试；若仍收到旧双端口 403，给出明确提示
+      if (status === 403 && (securityCode === 'MANAGEMENT_PORT_REQUIRED' || securityCode === 'BUSINESS_PORT_REQUIRED')) {
+        const hint =
+          '检测到双端口隔离响应，但当前应为单端口 8088。请确认后端 app.management.enabled=false 并重启。'
+        if (!error.config?.silent) {
+          ElMessage.error(hint)
+        }
+        return Promise.reject(buildApiError(hint, error.response?.data))
       }
       const errMsg = formatApiError(error)
       if (status === 401) {
@@ -184,8 +129,8 @@ function attachInterceptors(client, surface) {
   )
 }
 
-attachInterceptors(request, 'business')
-attachInterceptors(managementRequest, 'management')
+attachInterceptors(request)
+attachInterceptors(managementRequest)
 
 export { formatApiError }
 
@@ -272,6 +217,14 @@ export const getPerformanceMultiDimension = (startTime, endTime, interval = 10) 
   })
 
 export const getAssistantContext = () => managementRequest.get('/api/assistant/context')
+export const getAssistantModels = () => managementRequest.get('/api/assistant/models')
+export const getAssistantStatePreview = (message, history = [], options = {}) =>
+  managementRequest.post('/api/assistant/state/preview', {
+    message,
+    history: Array.isArray(history) ? history : [],
+    useToolAgent: options.useToolAgent !== false,
+    confirmRemediation: options.confirmRemediation === true
+  })
 
 /** 统一运维助手：流式自然语言对话（含可选多轮 history） */
 // DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
@@ -294,6 +247,7 @@ export const assistantChatStream = (message, history = [], options = {}) =>
       history: Array.isArray(history) ? history : [],
       useToolAgent: options.useToolAgent !== false,
       confirmRemediation: options.confirmRemediation === true,
+      modelProfile: options.modelProfile ? String(options.modelProfile) : undefined,
       targetHostId: options.targetHostId != null && options.targetHostId !== ''
         ? Number(options.targetHostId)
         : undefined
@@ -497,13 +451,16 @@ export const confirmMcpExecute = (
   parameters,
   confirmCode = '确认执行',
   userMessage = '',
-  confirmationId = ''
+  confirmationId = '',
+  capabilityToken = ''
 ) => {
   const body = { toolName, parameters, confirmCode }
   const um = typeof userMessage === 'string' ? userMessage.trim() : ''
   if (um) body.userMessage = um
   const cid = typeof confirmationId === 'string' ? confirmationId.trim() : ''
   if (cid) body.confirmationId = cid
+  const token = typeof capabilityToken === 'string' ? capabilityToken.trim() : ''
+  if (token) body.capabilityToken = token
   return managementRequest.post('/api/mcp/confirmExecute', body)
 }
 
@@ -512,11 +469,46 @@ export const getMcpTools = () => managementRequest.get('/api/mcp/tools')
 /** 一键安全自检（探针走真实安全门，不执行系统命令） */
 export const getSecuritySelfCheck = () => managementRequest.get('/api/security/self-check')
 
+/** 当前安全策略快照（路径策略版本 / 风险阈值 / 治理开关） */
+export const getSecurityPolicySnapshot = () => managementRequest.get('/api/security/policy-snapshot')
+
+/** 单工具策略回放 */
+export const replaySecurityPolicy = (toolName, parameters = {}, userMessage = '', profile = 'INITIAL_REQUEST') =>
+  managementRequest.post('/api/security/policy-replay', {
+    toolName,
+    parameters,
+    userMessage,
+    profile
+  })
+
+/** 多步计划效果图裁决 */
+export const replaySecurityPlan = (steps = []) =>
+  managementRequest.post('/api/security/policy-replay/plan', { steps })
+
+/** 治理覆盖前后对比 */
+export const compareSecurityPolicy = (toolName, parameters = {}, userMessage = '', profile = 'INITIAL_REQUEST') =>
+  managementRequest.post('/api/security/policy-replay/compare', {
+    toolName,
+    parameters,
+    userMessage,
+    profile
+  })
+
+/** 按审计 traceId 回放裁决 */
+export const replaySecurityAudit = (traceId) =>
+  managementRequest.get(`/api/security/policy-replay/audit/${encodeURIComponent(traceId || '')}`)
+
 export const getPatrolHistory = (days = 7, limit = 50) =>
   managementRequest.get('/api/ops/patrol/history', { params: { days, limit } })
 
 export const getPatrolHistoryTrend = (days = 7, config = {}) =>
   managementRequest.get('/api/ops/patrol/history/trend', { ...config, params: { ...(config.params || {}), days } })
+
+export const getPatrolMetricsTrend = (days = 7, limit = 500, config = {}) =>
+  managementRequest.get('/api/ops/patrol/history/metrics-trend', {
+    ...config,
+    params: { ...(config.params || {}), days, limit }
+  })
 
 /** 运维效果评分仪表盘 */
 export const getOpsEffectDashboard = (days = 7) =>
@@ -537,6 +529,10 @@ export const getOpsFailureInsights = (q = '', limit = 12) =>
     params: { limit, ...(q ? { q } : {}) }
   })
 
+/** 工作台本地拦截后上报 Reflexion 教训 */
+export const captureOpsFailureInsight = (payload) =>
+  managementRequest.post('/api/ops/workflow/failure-insights/capture', payload, { silent: true })
+
 export const induceOpsWorkflowFromAudit = (limit = 20) =>
   managementRequest.post('/api/ops/workflow/induce-from-audit', null, { params: { limit } })
 
@@ -548,6 +544,8 @@ export const runAutonomousOps = (forceRemediate = false, readOnly = false) =>
 
 // 知识库（RAG）
 export const getKnowledgeStatus = () => request.get('/api/v1/knowledge/status')
+
+export const seedKnowledgeBuiltin = () => request.post('/api/v1/knowledge/seed')
 
 export const listKnowledgeDocuments = (page = 1, pageSize = 20) =>
   request.get('/api/v1/knowledge/documents', { params: { page, pageSize } })

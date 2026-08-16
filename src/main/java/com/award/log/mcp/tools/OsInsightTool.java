@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -88,11 +89,7 @@ public class OsInsightTool extends AbstractCommandExecutor {
     ) throws JsonProcessingException {
         long start = System.currentTimeMillis();
         if (pid == null || pid < 1 || pid > 4_194_304) {
-            return objectMapper.writeValueAsString(Map.of(
-                    "success", false,
-                    "error", "无效 PID",
-                    "tool", "lsof"
-            ));
+            return McpToolResponses.error(objectMapper, "无效 PID", start);
         }
         if (OsRuntime.isWindows()) {
             String ps = "$p=Get-Process -Id " + pid + " -ErrorAction SilentlyContinue;"
@@ -120,7 +117,7 @@ public class OsInsightTool extends AbstractCommandExecutor {
             case "journal", "journalctl" -> queryJournalLogs(sinceMinutes, maxLines, jsonOutput);
             case "ss", "sockets" -> listListeningSockets();
             case "lsof", "openfiles" -> listProcessOpenFiles(pid);
-            default -> objectMapper.writeValueAsString(Map.of("success", false, "error", "未知 operation: " + operation));
+            default -> McpToolResponses.error(objectMapper, "未知 operation: " + operation, System.currentTimeMillis());
         };
     }
 
@@ -140,6 +137,15 @@ public class OsInsightTool extends AbstractCommandExecutor {
         } else {
             body.put("error", r.error() != null ? r.error() : ("exit=" + r.exitCode()));
         }
-        return objectMapper.writeValueAsString(body);
+        long duration = System.currentTimeMillis() - startTime;
+        String dataJson = objectMapper.writeValueAsString(body);
+        if (r.success()) {
+            return McpToolResponses.success(objectMapper, dataJson, duration);
+        }
+        String errMsg = r.error() != null ? r.error() : ("exit=" + r.exitCode());
+        if (r.output() != null && !r.output().isBlank()) {
+            return McpToolResponses.warn(objectMapper, dataJson, duration);
+        }
+        return McpToolResponses.error(objectMapper, errMsg, startTime);
     }
 }

@@ -20,9 +20,31 @@ export function parseRemediationPlan (markdown) {
   }
 }
 
+/** A diagnostic result with no findings must never expose a pending write plan. */
+export function hasNoActionableFinding (markdown) {
+  const text = typeof markdown === 'string' ? markdown : ''
+  return /发现项\s*[：:]\s*[`*：:]?\s*0\b/i.test(text)
+    || /本轮.{0,24}(?:没有|未|无).{0,24}(?:可编排|可执行|自动修复|修复步骤)/i.test(text)
+    || /(?:未发现|没有发现|无).{0,24}(?:可执行修复|需要自动处置|修复步骤)/i.test(text)
+}
+
 /** 判断助手回复是否包含可确认的处置计划 */
 export function hasActionableRemediationPlan (markdown) {
+  // 巡检明确没有发现或没有可执行修复时，不能把模型/工具的泛化建议显示成待执行方案。
+  if (hasNoActionableFinding(markdown)) {
+    return false
+  }
   const plan = parseRemediationPlan(markdown)
   if (!plan) return false
   return plan.previewOnly || /清理|删除|重启|修复|执行|remediat/i.test(plan.body)
+}
+
+/** 只有存在待确认写工具时，工具计划才是处置方案；其余都是只读诊断计划。 */
+export function isRemediationToolPlan (event) {
+  if (!event || typeof event !== 'object') return false
+  if (event.planKind === 'DIAGNOSIS') return false
+  const pending = Array.isArray(event.pendingWriteTools)
+    ? event.pendingWriteTools.filter(Boolean)
+    : []
+  return pending.length > 0
 }

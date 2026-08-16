@@ -5,6 +5,7 @@ import com.award.log.util.OsRuntime;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -12,7 +13,11 @@ import java.util.stream.Collectors;
  */
 public final class OpsReportFormat {
 
-    public static final String CONFIRM_EXECUTE_HINT = "confirm execute";
+    /** 产品确认口令（与前端 / OpsIntentRouter 一致；英文常量保留兼容别名） */
+    public static final String CONFIRM_EXECUTE_HINT_ZH = "确认执行";
+
+    /** @deprecated 使用 {@link #CONFIRM_EXECUTE_HINT_ZH}；值已统一为中文口令 */
+    public static final String CONFIRM_EXECUTE_HINT = CONFIRM_EXECUTE_HINT_ZH;
 
     private OpsReportFormat() {
     }
@@ -193,12 +198,57 @@ public final class OpsReportFormat {
     }
 
     public static String previewPendingFooter() {
-        return previewPendingFooter("auto-remediation");
+        return previewPendingFooter("自动修复");
     }
 
     public static String previewPendingFooter(String actionLabel) {
-        return "> Some items are still preview-only. Reply **\"" + CONFIRM_EXECUTE_HINT
-                + "\"** to continue with " + actionLabel + " where policy allows.\n";
+        return "> 部分步骤仍为预览。请回复 **「" + CONFIRM_EXECUTE_HINT_ZH
+                + "」** 以继续执行 " + actionLabel + "（仅在策略允许范围内）。\n";
+    }
+
+    /**
+     * 修后验效摘要（中文），供编排收尾展示。
+     */
+    public static String effectSectionMarkdown(Map<String, Object> effect) {
+        if (effect == null || effect.isEmpty()) {
+            return "";
+        }
+        Object score = effect.get("healingScore");
+        Object verdict = effect.get("verdict");
+        String verdictZh = switch (String.valueOf(verdict == null ? "" : verdict)) {
+            case "effective" -> "有效";
+            case "partial" -> "部分有效";
+            case "uncertain" -> "尚不确定";
+            default -> String.valueOf(verdict);
+        };
+        double diskDelta = effect.get("diskUsageDeltaPct") instanceof Number n ? n.doubleValue() : 0.0;
+        double cpuDelta = effect.get("cpuUsageDeltaPct") instanceof Number n ? n.doubleValue() : 0.0;
+        return "### 修后验效\n\n"
+                + "- 愈合评分：**" + score + "/100**（" + verdictZh + "）\n"
+                + String.format(Locale.ROOT, "- 磁盘占用变化：%.2f 个百分点\n", diskDelta)
+                + String.format(Locale.ROOT, "- CPU 占用变化：%.2f 个百分点\n\n", cpuDelta);
+    }
+
+    /**
+     * 供前端 RemediationPlanCard 解析的处置计划章节（Plan-then-Act）。
+     */
+    public static String remediationPlanMarkdown(List<String> items) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n## 处置计划\n\n");
+        if (items == null || items.isEmpty()) {
+            sb.append("- 只读采集后给出建议；写操作默认预览\n");
+        } else {
+            for (String item : items) {
+                if (item == null || item.isBlank()) {
+                    continue;
+                }
+                sb.append("- ").append(item.trim()).append("\n");
+            }
+        }
+        sb.append("\n> 以上为**预览/待确认**计划，默认不会真实写入。回复 **「")
+                .append(CONFIRM_EXECUTE_HINT_ZH)
+                .append("」** 后在白名单与治理策略允许范围内落地。\n");
+        return sb.toString();
     }
 
     public static String executedFooter() {

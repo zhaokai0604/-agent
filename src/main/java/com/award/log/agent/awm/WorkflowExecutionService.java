@@ -9,6 +9,7 @@ import com.award.log.mcp.dispatch.McpToolDispatcher;
 import com.award.log.security.McpToolSurface;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.security.WriteExecutionCoordinator;
+import com.award.log.security.effect.PlanEffectGate;
 import com.award.log.util.OpsPathExtractSupport;
 import com.award.log.util.RuntimePlatform;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -44,6 +45,7 @@ public class WorkflowExecutionService {
     private final OpsPathPolicy opsPathPolicy;
     private final RuntimePlatform runtimePlatform;
     private final WorkflowMemoryService workflowMemoryService;
+    private final PlanEffectGate planEffectGate;
 
     @Value("${agent.assistant.orchestrator.log-clean-days:30}")
     private int logCleanDays;
@@ -155,7 +157,26 @@ public class WorkflowExecutionService {
         boolean failed = false;
         boolean blocked = false;
 
-        for (int i = 0; i < workflow.steps().size(); i++) {
+        PlanEffectGate.PlanDecision planDecision = evaluateWorkflowPlan(workflow, variables);
+        boolean planForcePreview = planDecision.needsConfirm() && !request.forceExecute();
+        if (planDecision.blocked()) {
+            StepResult blockedStep = new StepResult(
+                    "PlanEffectGate",
+                    "SKIP",
+                    false,
+                    false,
+                    false,
+                    true,
+                    planDecision.message() + " [" + planDecision.code() + "]",
+                    Map.of("planDecision", planDecision.toMap()),
+                    null
+            );
+            results.add(blockedStep);
+            recordStructuredAuditStep(request.auditSteps(), workflow, -1, blockedStep);
+            return new WorkflowRunResult(workflow, results, false, false, false, true, true);
+        }
+
+        for (int i = 0; i < (workflow.steps() == null ? 0 : workflow.steps().size()); i++) {
             OpsWorkflowStep workflowStep = workflow.steps().get(i);
             PreparedInvocation invocation = prepareInvocation(workflow, workflowStep, variables);
             if (invocation.abortReason() != null) {
@@ -178,6 +199,10 @@ public class WorkflowExecutionService {
             }
 
             WriteResolution resolution = resolveWriteMode(workflow, i, invocation, request);
+            if (planForcePreview && "EXECUTE".equals(resolution.mode()) && AwmToolProfile.isWrite(invocation.toolName())) {
+                resolution = new WriteResolution("PREVIEW",
+                        "计划级门控要求确认：" + planDecision.code() + "；已降级为预览");
+            }
             if ("SKIP".equals(resolution.mode())) {
                 StepResult stepResult = new StepResult(
                         invocation.toolName(),
@@ -221,6 +246,23 @@ public class WorkflowExecutionService {
                 workflow, List.copyOf(results), anyExecuted, anyPreviewed, anyReadSucceeded, failed, blocked);
         persistRun(request, result);
         return result;
+    }
+
+    private PlanEffectGate.PlanDecision evaluateWorkflowPlan(OpsWorkflow workflow, Map<String, Object> variables) {
+        if (planEffectGate == null || workflow == null || workflow.steps() == null || workflow.steps().isEmpty()) {
+            return new PlanEffectGate.PlanDecision(
+                    PlanEffectGate.DecisionType.ALLOW, "PLAN_SKIP", "无计划门控",
+                    0, 0, 0, false, List.of());
+        }
+        List<PlanEffectGate.PlannedCall> calls = new ArrayList<>();
+        for (OpsWorkflowStep workflowStep : workflow.steps()) {
+            PreparedInvocation invocation = prepareInvocation(workflow, workflowStep, variables);
+            if (invocation.abortReason() != null) {
+                continue;
+            }
+            calls.add(new PlanEffectGate.PlannedCall(invocation.toolName(), invocation.parameters()));
+        }
+        return planEffectGate.evaluate(calls);
     }
 
     private void persistRun(ExecutionRequest request, WorkflowRunResult result) {

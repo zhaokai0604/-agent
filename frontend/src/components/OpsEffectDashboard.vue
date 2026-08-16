@@ -116,6 +116,13 @@
               </template>
               <div ref="patrolTrendRef" class="chart-panel__box" />
             </el-card>
+            <el-card class="chart-panel" shadow="never">
+              <template #header>
+                <span class="chart-panel__title">资源指标趋势</span>
+                <span v-if="metricTrendCount" class="chart-panel__meta">{{ metricTrendCount }} 点</span>
+              </template>
+              <div ref="metricTrendRef" class="chart-panel__box" />
+            </el-card>
           </div>
         </section>
 
@@ -162,10 +169,12 @@ const gaugeRef = ref(null)
 const radarRef = ref(null)
 const auditTrendRef = ref(null)
 const patrolTrendRef = ref(null)
+const metricTrendRef = ref(null)
 let gaugeChart = null
 let radarChart = null
 let auditChart = null
 let patrolChart = null
+let metricChart = null
 let echartsApi = null
 
 async function echarts() {
@@ -219,6 +228,7 @@ const recentHealing = computed(() => {
 
 const auditDayCount = computed(() => data.value?.trends?.auditByDay?.length || 0)
 const patrolDayCount = computed(() => data.value?.trends?.patrolByDay?.length || 0)
+const metricTrendCount = computed(() => data.value?.trends?.metricTrend?.length || 0)
 
 function formatReleasedGb(v) {
   const n = Number(v)
@@ -472,16 +482,82 @@ async function renderPatrolTrend() {
   }, true)
 }
 
+function formatMetricTimestamp(value) {
+  if (!value) return ''
+  const text = String(value).replace('T', ' ')
+  return text.length > 16 ? text.slice(5, 16) : text
+}
+
+async function renderMetricTrend() {
+  if (!metricTrendRef.value || !data.value) return
+  const ec = await echarts()
+  if (!metricChart) metricChart = ec.init(metricTrendRef.value)
+  const rows = data.value.trends?.metricTrend || []
+  metricChart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['CPU', 'Memory', 'Disk'], bottom: 0, textStyle: { fontSize: 11 } },
+    grid: { left: 44, right: 16, top: 28, bottom: 52 },
+    graphic: rows.length ? undefined : [chartEmptyGraphic('No resource trend data')],
+    xAxis: {
+      type: 'category',
+      data: rows.map((r) => formatMetricTimestamp(r.timestamp)),
+      axisLabel: { color: '#64748b', fontSize: 10 },
+      axisTick: { alignWithLabel: true }
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      splitLine: { lineStyle: { color: '#f1f5f9' } },
+      axisLabel: { color: '#64748b', fontSize: 10, formatter: '{value}%' }
+    },
+    series: [
+      {
+        name: 'CPU',
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        data: rows.map((r) => r.cpuUsagePct ?? null),
+        itemStyle: { color: '#0d9488' },
+        lineStyle: { width: 2 }
+      },
+      {
+        name: 'Memory',
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        data: rows.map((r) => r.memoryUsagePct ?? null),
+        itemStyle: { color: '#2563eb' },
+        lineStyle: { width: 2 }
+      },
+      {
+        name: 'Disk',
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        data: rows.map((r) => r.diskUsagePct ?? null),
+        itemStyle: { color: '#d97706' },
+        lineStyle: { width: 2 }
+      }
+    ]
+  }, true)
+}
+
 function renderCharts() {
   nextTick(() => {
     renderGauge()
     renderRadar()
     renderAuditTrend()
     renderPatrolTrend()
+    renderMetricTrend()
     gaugeChart?.resize()
     radarChart?.resize()
     auditChart?.resize()
     patrolChart?.resize()
+    metricChart?.resize()
   })
 }
 
@@ -503,6 +579,7 @@ function onResize() {
   radarChart?.resize()
   auditChart?.resize()
   patrolChart?.resize()
+  metricChart?.resize()
 }
 
 watch(data, () => renderCharts())
@@ -518,6 +595,7 @@ onUnmounted(() => {
   radarChart?.dispose()
   auditChart?.dispose()
   patrolChart?.dispose()
+  metricChart?.dispose()
 })
 </script>
 

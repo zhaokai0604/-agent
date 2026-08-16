@@ -4,8 +4,8 @@
       <transition name="el-fade-in-linear">
         <div v-if="!reportData && taskStatus.status !== 'PROCESSING' && taskStatus.status !== 'FAILED'" class="upload-section">
           <OpsPageHeader
-            title="异常诊断"
-            subtitle="上传系统日志，自动识别异常并生成诊断报告"
+            title="观测证据分析"
+            subtitle="导入日志证据，自动识别异常并生成可交给 agent 继续推理的诊断报告"
           />
 
           <el-card shadow="never" class="upload-panel">
@@ -23,8 +23,8 @@
                 >
                   <input type="file" ref="fileInput" class="hidden-input" @change="handleFileSelect">
                   <el-icon class="upload-icon"><upload-filled /></el-icon>
-                  <div class="upload-hint">点击或拖拽系统日志到此处</div>
-                  <div class="upload-sub">单文件上传，分析完成后可导出 CSV / HTML 报告</div>
+                  <div class="upload-hint">点击或拖拽日志证据到此处</div>
+                  <div class="upload-sub">单文件证据输入，分析完成后可导出 CSV / HTML 报告</div>
                 </div>
               </el-col>
               <el-col :xs="24" :lg="9">
@@ -40,15 +40,15 @@
                     </div>
                   </div>
                   <div class="upload-guide__block">
-                    <div class="upload-guide__title">分析流程</div>
+                    <div class="upload-guide__title">证据流程</div>
                     <ol class="upload-guide__steps">
                       <li>Drain 模板挖掘与异常检测</li>
                       <li>生成健康度与风险分布报告</li>
-                      <li>可对单条异常发起 AI 诊断</li>
+                      <li>可把单条异常带入 agent 继续诊断</li>
                     </ol>
                   </div>
                   <div class="upload-guide__tip">
-                    建议使用脱敏后的模拟日志；敏感字段会在展示层脱敏处理。
+                    真实环境建议先脱敏；敏感字段会在展示层脱敏处理。
                   </div>
                 </div>
               </el-col>
@@ -549,7 +549,7 @@ const handleGlobalDiagnosis = async () => {
     try {
         const taskStatus = await getTaskStatus(taskId.value)
         if (taskStatus.status !== 'COMPLETED') {
-            ElMessage.warning('请等待日志分析完成后再进行AI诊断')
+            ElMessage.warning('请等待证据分析完成后再进行 AI 诊断')
             return
         }
     } catch (error) {

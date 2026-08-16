@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -85,8 +86,8 @@ public class FirewallTool extends AbstractCommandExecutor {
         body.put("durationMs", System.currentTimeMillis() - start);
 
         long duration = System.currentTimeMillis() - start;
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
+        String dataJson = objectMapper.writeValueAsString(body);
+        return McpToolResponses.successOrWarn(objectMapper, dataJson, duration, anySuccess);
     }
 
     private String wrap(String tool, List<String> cmd, CommandResult r, long start, boolean ok)
@@ -104,9 +105,15 @@ public class FirewallTool extends AbstractCommandExecutor {
             body.put("error", r.error());
         }
         long duration = System.currentTimeMillis() - start;
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(ok || r.output() != null, objectMapper.writeValueAsString(body),
-                        ok ? null : r.error(), duration, false));
+        String dataJson = objectMapper.writeValueAsString(body);
+        if (ok) {
+            return McpToolResponses.success(objectMapper, dataJson, duration);
+        }
+        if (r.output() != null && !r.output().isBlank()) {
+            return McpToolResponses.warn(objectMapper, dataJson, duration);
+        }
+        String errMsg = r.error() != null && !r.error().isBlank() ? r.error() : "防火墙状态查询失败";
+        return McpToolResponses.error(objectMapper, errMsg, start);
     }
 
     private record Probe(String name, List<String> command) {}

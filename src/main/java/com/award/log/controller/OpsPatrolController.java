@@ -57,6 +57,17 @@ public class OpsPatrolController {
         return Result.success(patrolHistoryService.countByDay(days));
     }
 
+    @Operation(summary = "资源指标时序（CPU、内存、磁盘、负载、僵尸进程）")
+    @GetMapping("/history/metrics-trend")
+    public Result<List<Map<String, Object>>> patrolMetricsTrend(
+            @RequestParam(name = "days", defaultValue = "7") int days,
+            @RequestParam(name = "limit", defaultValue = "500") int limit) {
+        if (patrolHistoryService == null) {
+            return Result.success(List.of());
+        }
+        return Result.success(patrolHistoryService.metricsTrend(days, limit));
+    }
+
     @Operation(summary = "最近一次巡检生成的多维关联快照（每轮更新，无告警时也有数据）")
     @GetMapping("/correlation/latest")
     public Result<Map<String, Object>> latestCorrelation() {

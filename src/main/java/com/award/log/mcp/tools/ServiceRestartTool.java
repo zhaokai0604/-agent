@@ -2,6 +2,7 @@ package com.award.log.mcp.tools;
 
 import com.award.log.config.AgentOpsProperties;
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.ChatWriteExecutionPolicy;
 import com.award.log.util.OsRuntime;
@@ -66,12 +67,13 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
     ) throws JsonProcessingException {
         long startTime = System.currentTimeMillis();
         if (serviceName == null || serviceName.isBlank()) {
-            return buildErrorResponse("serviceName 不能为空", startTime);
+            return McpToolResponses.error(objectMapper, "serviceName 不能为空", startTime);
         }
         String unit = serviceName.trim().toLowerCase(Locale.ROOT).replace(".service", "");
         Set<String> allowlist = currentAllowlist();
         if (!allowlist.contains(unit)) {
-            return buildErrorResponse("服务不在允许重启列表内（agent.service-restart.allowlist）。当前允许: " + allowlist,
+            return McpToolResponses.error(objectMapper,
+                    "服务不在允许重启列表内（agent.service-restart.allowlist）。当前允许: " + allowlist,
                     startTime);
         }
 
@@ -80,7 +82,8 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
         boolean isDryRun = write.dryRun();
         boolean confirmRestartResolved = write.confirmRestart();
         if (!isDryRun && !confirmRestartResolved) {
-            return buildErrorResponse("真实重启需 dryRun=false 且 confirmRestart=true（建议先经过 MCP 二次确认）", startTime);
+            return McpToolResponses.error(objectMapper,
+                    "真实重启需 dryRun=false 且 confirmRestart=true（建议先经过 MCP 二次确认）", startTime);
         }
 
         log.info("[ServiceRestart] unit={} dryRun={}", unit, isDryRun);
@@ -94,24 +97,26 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
             if (isDryRun) {
                 String plan = "将执行: systemctl restart " + svc + "（当前为预览，未执行）";
                 String data = "{\"mode\":\"DRY-RUN\",\"service\":\"" + svc + "\",\"plan\":\"" + escapeJson(plan) + "\"}";
-                return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+                return McpToolResponses.success(objectMapper, data, System.currentTimeMillis() - startTime);
             }
 
             AbstractCommandExecutor.CommandResult r = minPrivilegeExecutor.executeSafely(
                     List.of("systemctl", "restart", svc), 120_000L);
             if (isSimulatedDryRun(r)) {
-                return buildErrorResponse("全局演练模式已启用：systemctl restart 被模拟执行，服务未实际重启", startTime);
+                return McpToolResponses.error(objectMapper,
+                        "全局演练模式已启用：systemctl restart 被模拟执行，服务未实际重启", startTime);
             }
             if (!r.success()) {
-                return buildErrorResponse("服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
+                return McpToolResponses.error(objectMapper,
+                        "服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
             }
             String data = String.format(Locale.ROOT,
                     "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"stderr\":\"%s\"}",
                     svc, true, escapeJson(r.error() == null ? "" : r.error()));
-            return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+            return McpToolResponses.success(objectMapper, data, System.currentTimeMillis() - startTime);
         } catch (Exception e) {
             log.error("[ServiceRestart] 异常", e);
-            return buildErrorResponse("服务重启失败: " + e.getMessage(), startTime);
+            return McpToolResponses.error(objectMapper, "服务重启失败: " + e.getMessage(), startTime);
         }
     }
 
@@ -120,21 +125,23 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
         if (isDryRun) {
             String data = "{\"mode\":\"DRY-RUN\",\"service\":\"" + unit + "\",\"plan\":\"将尝试 Restart-Service -Name "
                     + unit + "（预览）\",\"platform\":\"windows\"}";
-            return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+            return McpToolResponses.success(objectMapper, data, System.currentTimeMillis() - startTime);
         }
         String ps = "Restart-Service -Name '" + unit.replace("'", "''") + "' -Force -ErrorAction Stop";
         AbstractCommandExecutor.CommandResult r = minPrivilegeExecutor.executeSafely(
                 List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 120_000L);
         if (isSimulatedDryRun(r)) {
-            return buildErrorResponse("全局演练模式已启用：Restart-Service 被模拟执行，服务未实际重启", startTime);
+            return McpToolResponses.error(objectMapper,
+                    "全局演练模式已启用：Restart-Service 被模拟执行，服务未实际重启", startTime);
         }
         if (!r.success()) {
-            return buildErrorResponse("服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
+            return McpToolResponses.error(objectMapper,
+                    "服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
         }
         String data = String.format(Locale.ROOT,
                 "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"platform\":\"windows\",\"stderr\":\"%s\"}",
                 unit, true, escapeJson(r.error() == null ? "" : r.error()));
-        return buildSuccessResponse(data, System.currentTimeMillis() - startTime, false);
+        return McpToolResponses.success(objectMapper, data, System.currentTimeMillis() - startTime);
     }
 
     private boolean isSimulatedDryRun(AbstractCommandExecutor.CommandResult result) {
@@ -146,14 +153,5 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
             return "";
         }
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<>(true, data, null, duration, cacheHit));
-    }
-
-    private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
     }
 }

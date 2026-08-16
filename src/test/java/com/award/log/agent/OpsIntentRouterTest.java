@@ -71,6 +71,20 @@ class OpsIntentRouterTest {
     }
 
     @Test
+    void softCleanupPhrasesRouteDiskCleanup() {
+        assertEquals(OpsIntentRouter.Playbook.DISK_CLEANUP, router.resolve("帮我清理"));
+        assertEquals(OpsIntentRouter.Playbook.DISK_CLEANUP, router.resolve("清理一下"));
+        assertFalse(router.forceRemediate("帮我清理"));
+    }
+
+    @Test
+    void patrolContinuationBeatsBareConfirmExecute() {
+        assertEquals(OpsIntentRouter.Playbook.PATROL_CONTINUATION,
+                router.resolve("继续处理巡检待办，确认执行"));
+        assertTrue(router.forceRemediate("继续处理巡检待办，确认执行"));
+    }
+
+    @Test
     void forceRemediateOnDirectCleanupPhrases() {
         assertTrue(router.forceRemediate("确认执行"));
         assertTrue(router.forceRemediate("直接删除"));
@@ -86,5 +100,32 @@ class OpsIntentRouterTest {
     void forceRemediateFalseWhenPreviewOnly() {
         assertFalse(router.forceRemediate("仅预览清理临时文件"));
         assertFalse(router.forceRemediate("帮我看看磁盘怎么样"));
+    }
+
+    @Test
+    void rulesNoneKeepsPureRulesWhenNoLlm() {
+        assertEquals(OpsIntentRouter.Playbook.NONE, router.resolveByRules("今天天气怎么样"));
+        assertEquals(OpsIntentRouter.Playbook.NONE, router.resolve("今天天气怎么样"));
+    }
+
+    @Test
+    void llmFallbackUsedOnlyWhenRulesMiss() {
+        OpsIntentRouter wired = new OpsIntentRouter();
+        LlmPlaybookClassifier fake = new LlmPlaybookClassifier(new com.fasterxml.jackson.databind.ObjectMapper()) {
+            @Override
+            public boolean isAvailable() {
+                return true;
+            }
+
+            @Override
+            public java.util.Optional<OpsIntentRouter.Playbook> classify(String userMessage, String contextHint) {
+                return java.util.Optional.of(OpsIntentRouter.Playbook.DISK_CLEANUP);
+            }
+        };
+        wired.setLlmPlaybookClassifier(fake);
+        // 规则已命中 → 仍走规则，不因 LLM 改写
+        assertEquals(OpsIntentRouter.Playbook.CPU_PRESSURE, wired.resolve("CPU占用过高怎么办"));
+        // 规则未命中 → 语义兜底
+        assertEquals(OpsIntentRouter.Playbook.DISK_CLEANUP, wired.resolve("盘子装不下东西了赶紧腾空"));
     }
 }

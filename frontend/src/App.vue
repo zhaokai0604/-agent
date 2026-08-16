@@ -125,7 +125,7 @@
 
               :icon="Odometer"
 
-              title="本机态势"
+              title="本机负载"
 
               @click="contextDrawerOpen = true"
 
@@ -134,7 +134,7 @@
             <div v-if="!isAgentWorkspace" class="toolbar-actions">
               <RuntimeModeBar compact />
 
-              <el-tooltip placement="bottom" content="快捷键：1 对话 · 2 工具 · 3 审计 · 4 AWM · 5 日志 · 6 历史 · 7 仪表盘 · 8 效果 · 9 配置">
+              <el-tooltip placement="bottom" content="快捷键：1 对话 · 2 工具 · 3 审计 · 4 链路 · 5 日志 · 6 历史 · 7 看板 · 8 配置">
 
                 <el-button text circle size="small" :icon="QuestionFilled" aria-label="快捷键说明" />
 
@@ -209,7 +209,7 @@
 
 
 
-          <OpsContextPanel v-if="isAgentWorkspace && !isMobile && activeTab !== 'ops-live-wall'" />
+          <OpsContextPanel v-if="isAgentWorkspace && !isMobile" />
 
         </div>
 
@@ -223,7 +223,7 @@
 
         destroy-on-close
 
-        title="本机态势"
+        title="本机负载"
 
         direction="rtl"
 
@@ -271,7 +271,6 @@ import {
 
   Menu,
 
-  Monitor,
 
   Odometer,
 
@@ -285,11 +284,11 @@ import {
 
   Setting,
 
-  TrendCharts,
 
   Collection,
 
-  EditPen,
+
+  Lock,
 
   User
 
@@ -342,7 +341,7 @@ const ToolConsole = defineTabAsyncComponent(() => import('./components/ToolConso
 
 const AuditCenter = defineTabAsyncComponent(() => import('./components/AuditCenter.vue'))
 
-const OpsEffectDashboard = defineTabAsyncComponent(() => import('./components/OpsEffectDashboard.vue'))
+const SecurityCockpit = defineTabAsyncComponent(() => import('./components/SecurityCockpit.vue'))
 
 const SystemConfigCenter = defineTabAsyncComponent(() => import('./components/SystemConfigCenter.vue'))
 
@@ -352,11 +351,7 @@ const KnowledgeBase = defineTabAsyncComponent(() => import('./components/Knowled
 
 const EnvironmentStatus = defineTabAsyncComponent(() => import('./components/EnvironmentStatus.vue'))
 
-const OpsLiveWall = defineTabAsyncComponent(() => import('./components/OpsLiveWall.vue'))
-
 const OpsTraceCenter = defineTabAsyncComponent(() => import('./components/OpsTraceCenter.vue'))
-
-const DecisionFeedbackCenter = defineTabAsyncComponent(() => import('./components/DecisionFeedbackCenter.vue'))
 
 
 
@@ -384,11 +379,11 @@ const contextDrawerOpen = ref(false)
 
 const tabConfig = {
 
-  'ops-chat': { label: 'Agent 对话', component: OpsChatInterface, icon: ChatLineSquare },
+  'ops-chat': { label: '运维对话', component: OpsChatInterface, icon: ChatLineSquare },
 
-  'agent-skills': { label: '运维技能', component: AgentSkillsPage, icon: Grid },
+  'agent-skills': { label: '工具与技能', component: AgentSkillsPage, icon: Grid },
 
-  'mcp-tools': { label: '工具控制台', component: ToolConsole, icon: Connection },
+  'mcp-tools': { label: 'MCP 工具台', component: ToolConsole, icon: Connection },
 
   audit: { label: '统一审计中心', component: AuditCenter, icon: List },
 
@@ -396,19 +391,18 @@ const tabConfig = {
 
   'ops-trace': { label: 'AWM 记忆与链路', component: OpsTraceCenter, icon: Collection },
 
-  'ops-effect': { label: '运维效果评分', component: OpsEffectDashboard, icon: TrendCharts },
 
-  'decision-feedback': { label: '决策反馈', component: DecisionFeedbackCenter, icon: EditPen },
+  'security-cockpit': { label: '安全驾驶舱', component: SecurityCockpit, icon: Lock },
+
 
   'environment-status': { label: '环境状态', component: EnvironmentStatus, icon: Platform },
 
-  'ops-live-wall': { label: '运行态势', component: OpsLiveWall, icon: Monitor },
 
-  analysis: { label: '日志分析', component: LogAnalysis, icon: DataLine },
+  analysis: { label: '观测证据', component: LogAnalysis, icon: DataLine },
 
   history: { label: '任务记录', component: HistoryList, icon: Clock },
 
-  dashboard: { label: '日志分析仪表盘', component: LogAnalysisDashboard, icon: PieChart },
+  dashboard: { label: '证据趋势看板', component: LogAnalysisDashboard, icon: PieChart },
 
   knowledge: { label: '知识库', component: KnowledgeBase, icon: Reading },
 
@@ -424,9 +418,9 @@ const defaultTab = 'ops-chat'
 
 const NAV_GROUP_ORDER = [
 
-  { title: '工作台 · 工具 · 审计', keys: ['ops-chat', 'agent-skills', 'mcp-tools', 'audit', 'ops-trace', 'ops-effect', 'decision-feedback', 'environment-status', 'ops-live-wall'] },
+  { title: '任务 · 工具 · 审计', keys: ['ops-chat', 'agent-skills', 'mcp-tools', 'audit', 'ops-trace', 'security-cockpit', 'environment-status'] },
 
-  { title: '日志与分析', keys: ['analysis', 'history', 'dashboard', 'knowledge'] },
+  { title: '观测与证据', keys: ['analysis', 'history', 'dashboard', 'knowledge'] },
 
   { title: '账号与配置', keys: ['system-config', 'profile-center'] }
 
@@ -476,9 +470,7 @@ const shortcutTabMap = {
 
   '7': 'dashboard',
 
-  '8': 'ops-effect',
-
-  '9': 'system-config'
+  '8': 'system-config'
 
 }
 

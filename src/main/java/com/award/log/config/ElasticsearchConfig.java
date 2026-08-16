@@ -16,6 +16,6 @@ import org.springframework.data.elasticsearch.repository.config.EnableElasticsea
 public class ElasticsearchConfig {
 
     // Elasticsearch的连接配置已在application.yml中定义
-    // 这里只在显式启用 Elasticsearch 时注册 Repository，避免纯 MariaDB 生产部署启动失败
+    // 这里只在显式启用 Elasticsearch 时注册 Repository，避免纯 MySQL/MariaDB 生产部署启动失败
 
 }

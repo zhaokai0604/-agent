@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.McpNestedResultSupport;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.util.OsRuntime;
 import com.award.log.util.WindowsDriveSupport;
@@ -54,8 +55,10 @@ public class DiskAnalyzeTool {
             }
         }
         out.put("hint", "结合 overview 各盘使用率与 Temp/热点目录定位垃圾文件；高占用盘优先清理 Temp 与白名单目录。");
-        out.put("durationMs", System.currentTimeMillis() - t0);
-        return objectMapper.writeValueAsString(out);
+        long duration = System.currentTimeMillis() - t0;
+        out.put("durationMs", duration);
+        String dataJson = objectMapper.writeValueAsString(out);
+        return McpToolResponses.success(objectMapper, dataJson, duration);
     }
 
     private List<Map<String, Object>> buildWindowsMultiDriveAnalysis(Integer topN) throws JsonProcessingException {

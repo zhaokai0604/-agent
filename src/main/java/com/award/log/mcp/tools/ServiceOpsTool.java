@@ -48,10 +48,7 @@ public class ServiceOpsTool {
     }
 
     private String unknownOperation(String op) throws JsonProcessingException {
-        long t = System.currentTimeMillis();
         return objectMapper.writeValueAsString(
-                new ToolResult<>(false, null,
-                        "未知 operation: " + op + "；可选 failed|status|restart",
-                        System.currentTimeMillis() - t, false));
+                ToolResult.error("未知 operation: " + op + "；可选 failed|status|restart", 0L));
     }
 }

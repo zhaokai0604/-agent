@@ -338,7 +338,8 @@ class AssistantOrchestratorTest {
     @Test
     void patrolContinuationExecutesPendingProposal() {
         ReflectionTestUtils.setField(orchestrator, "opsAutoRemediationService", opsAutoRemediationService);
-        when(opsIntentRouter.resolve("继续巡检")).thenReturn(OpsIntentRouter.Playbook.PATROL_CONTINUATION);
+        when(opsIntentRouter.resolve("继续处理巡检待办，确认执行")).thenReturn(OpsIntentRouter.Playbook.PATROL_CONTINUATION);
+        when(opsIntentRouter.forceRemediate("继续处理巡检待办，确认执行")).thenReturn(true);
         when(opsAutoRemediationService.getPendingProposalView()).thenReturn(Map.of(
                 "hasPending", true,
                 "proposalId", "p-1",
@@ -348,7 +349,7 @@ class AssistantOrchestratorTest {
                 "resultSummary", "已执行巡检修复动作 1 个，成功 1 个。服务重启 `nginx` 执行成功。",
                 "actions", List.of(Map.of("tool", "ServiceRestartTool", "path", "nginx", "success", true))));
 
-        AssistantOrchestrator.RunResult result = orchestrator.run("继续巡检", McpToolSurface.FULL, RiskLevel.LOW);
+        AssistantOrchestrator.RunResult result = orchestrator.run("继续处理巡检待办，确认执行", McpToolSurface.FULL, RiskLevel.LOW);
 
         assertTrue(result.markdown().contains("p-1"));
         assertTrue(result.markdown().contains("服务重启 `nginx` 执行成功"));

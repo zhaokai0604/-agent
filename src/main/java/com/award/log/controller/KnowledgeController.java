@@ -27,6 +27,12 @@ public class KnowledgeController {
         return Result.success(knowledgeBaseService.getStatus());
     }
 
+    @Operation(summary = "空库时写入内置 Runbook（刷新可触发）")
+    @PostMapping("/seed")
+    public Result<Map<String, Object>> seed() {
+        return Result.success(knowledgeBaseService.seedBuiltinIfEmpty());
+    }
+
     @Operation(summary = "文档列表（按 documentId 聚合）")
     @GetMapping("/documents")
     public Result<Map<String, Object>> documents(

@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
 import com.award.log.util.OsRuntime;
@@ -99,11 +100,11 @@ public class SystemLoadTool extends AbstractCommandExecutor {
             log.info("系统负载检查完成，CPU: {}%, 内存: {}%, 负载: {}/{}/{}, 耗时: {}ms",
                 cpuUsage, memUsage, loadAvg[0], loadAvg[1], loadAvg[2], duration);
 
-            return buildSuccessResponse(dataJson, duration, false);
+            return McpToolResponses.success(objectMapper, dataJson, duration);
 
         } catch (Exception e) {
             log.error("执行系统负载检查时发生异常", e);
-            return buildErrorResponse("执行系统负载检查时发生异常: " + e.getMessage(), startTime);
+            return McpToolResponses.error(objectMapper, "执行系统负载检查时发生异常: " + e.getMessage(), startTime);
         }
     }
 
@@ -202,14 +203,5 @@ public class SystemLoadTool extends AbstractCommandExecutor {
 
     private String toJson(Map<String, Object> map) throws JsonProcessingException {
         return objectMapper.writeValueAsString(map);
-    }
-
-    private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<>(true, data, null, duration, cacheHit));
-    }
-
-    private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
     }
 }

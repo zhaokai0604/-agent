@@ -1,5 +1,6 @@
 package com.award.log.mcp.tools;
 
+import com.award.log.mcp.McpToolResponses;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -77,12 +78,11 @@ public class PortHealthTool {
 
         long duration = System.currentTimeMillis() - start;
         log.info("端口探测 {}:{} reachable={} 耗时={}ms", targetHost, port, reachable, duration);
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(data), null, duration, false));
+        String dataJson = objectMapper.writeValueAsString(data);
+        return McpToolResponses.successOrWarn(objectMapper, dataJson, duration, reachable);
     }
 
     private String buildError(String msg, long start) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, msg, System.currentTimeMillis() - start, false));
+        return McpToolResponses.error(objectMapper, msg, start);
     }
 }

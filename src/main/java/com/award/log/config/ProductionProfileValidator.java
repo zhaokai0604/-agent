@@ -66,10 +66,13 @@ public class ProductionProfileValidator implements ApplicationRunner {
             if ("true".equalsIgnoreCase(minPriv)) {
                 log.warn("[prod-kylin] agent.min-privilege.enabled=true：请确认 award-agent 用户与 sudoers 已配置，否则写操作易失败");
             }
-            String profiles = environment.getProperty("spring.profiles.active", "");
-            if (!StringUtils.hasText(profiles) || "dev".equalsIgnoreCase(profiles.trim())) {
+            String profilesProp = environment.getProperty("spring.profiles.active", "");
+            // 以 getActiveProfiles() 为准；Mock/容器注入可能不写 property 字符串
+            boolean activeLooksProd = Arrays.stream(environment.getActiveProfiles())
+                    .anyMatch(p -> "prod".equalsIgnoreCase(p) || "kylin".equalsIgnoreCase(p));
+            if (!activeLooksProd && (!StringUtils.hasText(profilesProp) || "dev".equalsIgnoreCase(profilesProp.trim()))) {
                 throw new IllegalStateException(
-                        "[prod] 检测到生产 Profile 组下 spring.profiles.active 异常为 [" + profiles
+                        "[prod] 检测到生产 Profile 组下 spring.profiles.active 异常为 [" + profilesProp
                                 + "]。麒麟交付请使用 prod-kylin，并确认 /etc/threshcore/threshcore.env 已加载。");
             }
         }

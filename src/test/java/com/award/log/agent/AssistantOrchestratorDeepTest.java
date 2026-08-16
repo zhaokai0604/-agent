@@ -131,7 +131,8 @@ class AssistantOrchestratorDeepTest {
                 ReflectionTestUtils.invokeMethod(AssistantOrchestrator.class, "mentionsTemp", "please clean temp")));
         assertFalse(Boolean.TRUE.equals(
                 ReflectionTestUtils.invokeMethod(AssistantOrchestrator.class, "mentionsTemp", "inspect logs only")));
-        assertTrue(Boolean.TRUE.equals(
+        // parseToolSuccess 走 WriteToolResultSupport：仅 success=true 不够，需真实写证据字段
+        assertFalse(Boolean.TRUE.equals(
                 ReflectionTestUtils.invokeMethod(orchestrator, "parseToolSuccess", "{\"success\":true}")));
         assertFalse(Boolean.TRUE.equals(
                 ReflectionTestUtils.invokeMethod(orchestrator, "parseToolSuccess", "{\"success\":false,\"error\":\"denied\"}")));
@@ -302,9 +303,10 @@ class AssistantOrchestratorDeepTest {
         when(opsIntentRouter.resolve("continue patrol")).thenReturn(OpsIntentRouter.Playbook.PATROL_CONTINUATION);
 
         AssistantOrchestrator.RunResult unavailable = orchestrator.run("continue patrol", McpToolSurface.FULL, RiskLevel.LOW);
-        assertTrue(unavailable.markdown().contains("trace"));
+        assertTrue(unavailable.markdown().contains("没有待执行方案") || unavailable.markdown().contains("未启用"));
 
         ReflectionTestUtils.setField(orchestrator, "opsAutoRemediationService", opsAutoRemediationService);
+        when(opsIntentRouter.forceRemediate("continue patrol")).thenReturn(true);
         when(opsAutoRemediationService.getPendingProposalView()).thenReturn(Map.of(
                 "hasPending", true,
                 "proposalId", "p-2",

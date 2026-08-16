@@ -16,9 +16,12 @@ public class HighRiskCommandDetector {
     private static final Pattern HIGH_RISK_PATTERN = Pattern.compile(
             "(rm\\s+-rf\\s+/|rm\\s+-rf\\s+\\/\\s*\\*|chmod\\s+-R?\\s*777\\s+/|dd\\s+if=/dev/(zero|random)|\\bmkfs\\.?\\b|fork\\s+bomb|sudo\\s+(rm|mkfs|dd|shutdown|reboot)|"
                     + ":\\(\\)\\{\\s*:\\|:&\\s*\\};:|\\bcurl\\b[^\\n]{0,400}\\|\\s*(ba)?sh|\\bwget\\b[^\\n]{0,400}\\|\\s*(ba)?sh|"
-                    + "powershell(\\.exe)?[^\\n]{0,200}-enc\\s|certutil\\s+-decode|regsvr32[^\\n]{0,200}https?://)",
-            Pattern.CASE_INSENSITIVE
-    );
+                    + "\\bcurl\\b[^\\n]{0,300}-o\\s+\\S+[^\\n]{0,160}(&&|;|\\n)[^\\n]{0,120}(\\b(ba)?sh\\b|chmod\\s+\\+x|/tmp/\\S+\\.(sh|bash|py))|"
+                    + "\\bwget\\b[^\\n]{0,300}(-O\\s+\\S+)?[^\\n]{0,160}(&&|;|\\n)[^\\n]{0,120}(\\b(ba)?sh\\b|chmod\\s+\\+x|/tmp/\\S+\\.(sh|bash|py))|"
+                    + "chmod\\s+\\+x\\s+/tmp/\\S+|\\b(ba)?sh\\s+/tmp/\\S+|"
+                    + "powershell(\\.exe)?[^\\n]{0,200}-enc\\s|certutil\\s+-decode|regsvr32[^\\n]{0,200}https?://|"
+                    + "((?:ba)?sh|source)\\s*<\\s*\\(\\s*(?:curl|wget)\\b)",
+            Pattern.CASE_INSENSITIVE);
 
     private final RuleExpressionEvaluator ruleExpressionEvaluator;
     private final Map<String, HighRiskCommandRule> ruleCache = new ConcurrentHashMap<>();

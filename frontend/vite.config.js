@@ -6,10 +6,8 @@ const rootDir = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, rootDir, '')
-  const proxyTarget = env.VITE_DEV_PROXY_TARGET || 'http://localhost:8088'
-  // 默认与业务面同端口；需双端口联调时可设 VITE_DEV_MANAGEMENT_PROXY_TARGET=http://localhost:8089
-  const managementProxyTarget =
-    env.VITE_DEV_MANAGEMENT_PROXY_TARGET || env.VITE_AWARD_LOG_MANAGEMENT_BASE_URL || proxyTarget
+  // 单端口：业务 + 登录 + MCP + Agent 全部代理到 8088
+  const proxyTarget = env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:8088'
 
   return {
     root: rootDir,
@@ -55,15 +53,10 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api/, '/award-log/api')
         },
         '/mcp': {
-          target: managementProxyTarget,
+          target: proxyTarget,
           changeOrigin: true,
           ws: true,
           rewrite: (path) => path.replace(/^\/mcp/, '/award-log/api/mcp')
-        },
-        '^/award-log/(admin|api/mcp|api/assistant|api/security|api/system-config|api/agent/path-policy|api/runbook|api/ops|api/ops-|api/ops-trace|api/performance|api/collector|api/kafka|api/v1/model|api/platform/info|api/platform/readiness|api/platform/backend-probe|ws/)': {
-          target: managementProxyTarget,
-          changeOrigin: true,
-          ws: true
         }
       }
     }

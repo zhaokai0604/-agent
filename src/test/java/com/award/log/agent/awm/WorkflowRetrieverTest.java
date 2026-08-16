@@ -93,6 +93,30 @@ class WorkflowRetrieverTest {
     }
 
     @Test
+    void bestMatchBoostsTempAndLagSynonyms() {
+        WorkflowRetriever retriever = new WorkflowRetriever(workflowMemoryService);
+        OpsWorkflow disk = new OpsWorkflow(
+                "disk-pressure-remediation",
+                "disk",
+                List.of("DISK_PRESSURE"),
+                "disk",
+                "清理临时目录",
+                List.of(OpsWorkflowStep.of("x", "x", "DiskTool", Map.of())),
+                "seed",
+                null,
+                1,
+                true
+        );
+        when(workflowMemoryService.isEnabled()).thenReturn(true);
+        when(workflowMemoryService.listByDomain("disk")).thenReturn(List.of(disk));
+
+        OpsWorkflow best = retriever.bestMatch("disk", List.of("DISK_PRESSURE"), "临时目录占用过高");
+
+        assertEquals("disk-pressure-remediation", best.workflowId());
+        verify(workflowMemoryService).listByDomain("disk");
+    }
+
+    @Test
     void recordHitDelegatesToMemoryService() {
         WorkflowRetriever retriever = new WorkflowRetriever(workflowMemoryService);
         OpsWorkflow workflow = new OpsWorkflow(

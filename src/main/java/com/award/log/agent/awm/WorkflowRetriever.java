@@ -66,29 +66,46 @@ public class WorkflowRetriever {
         }
         if (userMessage != null && !userMessage.isBlank()) {
             String msg = userMessage.toLowerCase(Locale.ROOT);
-            if (msg.contains("磁盘") || msg.contains("空间") || msg.contains("disk")) {
+            if (containsAny(msg, "磁盘", "空间", "disk", "c盘", "临时", "tmp", "temp", "日志", "清理", "clean")) {
                 if ("disk".equals(wf.domainTag())) {
                     score += 2.0;
                 }
             }
-            if (msg.contains("清理") || msg.contains("clean")) {
+            if (containsAny(msg, "清理", "clean", "释放", "删掉临时", "清垃圾")) {
                 if (wf.workflowId() != null && wf.workflowId().contains("remediation")) {
                     score += 1.5;
                 }
             }
-            if (msg.contains("cpu") || msg.contains("负载") || msg.contains("进程")) {
+            if (containsAny(msg, "cpu", "负载", "进程", "卡顿", "占用过高", "性能", "慢")) {
                 if ("cpu".equals(wf.domainTag())) {
                     score += 2.0;
                 }
             }
-            if (msg.contains("服务") || msg.contains("systemd") || msg.contains("重启") || msg.contains("failed")) {
+            if (containsAny(msg, "服务", "systemd", "重启", "failed", "挂了", "unit")) {
                 if ("service".equals(wf.domainTag())) {
                     score += 2.0;
+                }
+            }
+            if (wf.title() != null) {
+                String title = wf.title().toLowerCase(Locale.ROOT);
+                for (String token : msg.split("[\\s,，。；;]+")) {
+                    if (token.length() >= 2 && title.contains(token)) {
+                        score += 0.4;
+                    }
                 }
             }
         }
         score += Math.min(5, wf.utilityCount()) * 0.2;
         return score;
+    }
+
+    private static boolean containsAny(String msg, String... keys) {
+        for (String key : keys) {
+            if (msg.contains(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private record Scored(OpsWorkflow workflow, double score) {

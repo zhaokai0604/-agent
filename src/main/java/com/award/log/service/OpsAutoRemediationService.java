@@ -1025,7 +1025,9 @@ public class OpsAutoRemediationService {
                 int deleted = data.path("filesDeleted").asInt(-1);
                 int found = data.path("filesFound").asInt(-1);
                 int protectedSkipped = data.path("protectedSkipped").asInt(0);
+                int lockedSkipped = data.path("lockedSkipped").asInt(0);
                 long bytesFreed = data.path("bytesFreed").asLong(-1);
+                String businessEffect = data.path("businessEffect").asText("");
                 StringBuilder sb = new StringBuilder();
                 if (deleted >= 0) {
                     sb.append("删除 ").append(deleted).append(" 个文件");
@@ -1043,6 +1045,18 @@ public class OpsAutoRemediationService {
                         sb.append("，");
                     }
                     sb.append("跳过受保护文件 ").append(protectedSkipped).append(" 个");
+                }
+                if (bytesFreed == 0 && "NO_EFFECT".equalsIgnoreCase(businessEffect)) {
+                    if (sb.length() > 0) {
+                        sb.append("；");
+                    }
+                    sb.append("未释放空间");
+                }
+                if (lockedSkipped > 0) {
+                    if (sb.length() > 0) {
+                        sb.append("；");
+                    }
+                    sb.append("跳过被占用文件 ").append(lockedSkipped).append(" 个");
                 }
                 String message = data.path("message").asText("");
                 if (sb.length() == 0 && !message.isBlank()) {
@@ -1111,7 +1125,25 @@ public class OpsAutoRemediationService {
         }
         try {
             JsonNode n = objectMapper.readTree(json);
-            return n.path("success").asBoolean(false);
+            if (!n.path("success").asBoolean(false)) {
+                return false;
+            }
+            String status = n.path("status").asText("SUCCESS");
+            if ("WARN".equalsIgnoreCase(status) || "ERROR".equalsIgnoreCase(status)) {
+                return false;
+            }
+            JsonNode data = n.path("data");
+            if (data.isTextual()) {
+                data = objectMapper.readTree(data.asText());
+            }
+            String effect = data.path("businessEffect").asText("");
+            String mode = data.path("mode").asText("");
+            if ("NO_EFFECT".equalsIgnoreCase(effect)
+                    || "NOOP".equalsIgnoreCase(mode)
+                    || "SKIP".equalsIgnoreCase(mode)) {
+                return false;
+            }
+            return true;
         } catch (Exception e) {
             return !json.contains("\"success\":false");
         }

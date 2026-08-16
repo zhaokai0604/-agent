@@ -15,7 +15,8 @@ const PHASE_LABELS = {
   intent: '意图识别',
   route: '路由选择',
   tool: '工具调用',
-  result: '结果汇总'
+  result: '结果汇总',
+  cot: '分析推理'
 }
 
 export function traceStepTitle (step) {
@@ -23,6 +24,11 @@ export function traceStepTitle (step) {
   const phase = String(step.phase || step.title || '').trim()
   if (!phase) return step.step != null ? `步骤 ${step.step}` : '步骤'
   const key = phase.toLowerCase().replace(/[\s-]+/g, '')
+  if (key === 'cot') {
+    const detail = String(step.detail || step.message || step.summary || '')
+    const matched = detail.match(/^\[Step\s*\d+\s*-\s*([^\]]+)\]/i)
+    if (matched?.[1]) return step.step != null ? `[${step.step}] ${matched[1].trim()}` : matched[1].trim()
+  }
   const localized = PHASE_LABELS[key] || PHASE_LABELS[phase.toLowerCase()]
   if (localized) {
     return step.step != null ? `[${step.step}] ${localized}` : localized

@@ -48,6 +48,19 @@ public class OpsRuntimeService {
         return runResolved(userMessage, surface, intentRisk, playbook);
     }
 
+    /** 使用已解析的剧本，避免二次分类导致软落空窗。 */
+    public OpsRunResult runPlaybook(
+            OpsIntentRouter.Playbook playbook,
+            String userMessage,
+            McpToolSurface surface,
+            RiskLevel intentRisk) {
+        return runResolved(
+                userMessage,
+                surface,
+                intentRisk,
+                playbook == null ? OpsIntentRouter.Playbook.NONE : playbook);
+    }
+
     private OpsRunResult runResolved(
             String userMessage,
             McpToolSurface surface,
@@ -59,7 +72,13 @@ public class OpsRuntimeService {
                 AssistantOrchestrator.RunResult result = assistantOrchestrator.run(userMessage, surface, intentRisk);
                 yield new OpsRunResult(result.markdown(), result.traceId(), result.streamMeta());
             }
-            case NONE -> new OpsRunResult("未匹配到可执行的运维剧本。请换成更具体的说法，例如「全面检查本机」「检查系统状态」「扫描磁盘占用」或「CPU 占用过高」。", null, Map.of());
+            case NONE -> new OpsRunResult(
+                    "",
+                    null,
+                    Map.of(
+                            "softFallback", true,
+                            "softFallbackReason", "PLAYBOOK_NONE",
+                            "hintZh", "未匹配固定运维剧本，改走工具增强诊断"));
         };
     }
 

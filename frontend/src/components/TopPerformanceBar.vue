@@ -33,7 +33,7 @@
     <span v-else-if="updatedAt" class="updated">{{ updatedAt }}</span>
 
     <div
-      v-show="patrolTrendHasData"
+      v-if="!lite && patrolTrendHasData"
       ref="patrolTrendRef"
       class="patrol-trend-chart"
       title="近7日巡检告警频次（按日）"
@@ -50,10 +50,20 @@
       <el-icon><Lock /></el-icon>
       安全自检
     </el-button>
+    <el-button
+      size="small"
+      type="primary"
+      plain
+      class="sec-check-btn"
+      title="打开安全驾驶舱（策略回放 / 计划效果图）"
+      @click="openSecurityCockpit"
+    >
+      驾驶舱
+    </el-button>
     <SecuritySelfCheckDialog v-model="securityCheckVisible" />
 
     <el-popover
-      v-if="showPatrolPopover"
+      v-if="!lite && showPatrolPopover"
       placement="bottom-end"
       :width="440"
       trigger="click"
@@ -147,13 +157,20 @@
 <script setup>
 import { reactive, ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 
-defineProps({
+const props = defineProps({
   layout: {
     type: String,
     default: 'horizontal',
     validator: value => ['horizontal', 'vertical'].includes(value)
+  },
+  lite: {
+    type: Boolean,
+    default: false
   }
 })
+
+const layout = computed(() => props.layout)
+const lite = computed(() => props.lite)
 import { Odometer, Lock } from '@element-plus/icons-vue'
 import SecuritySelfCheckDialog from './SecuritySelfCheckDialog.vue'
 import { ElMessage } from 'element-plus'
@@ -203,6 +220,11 @@ const metricsMap = reactive({
 })
 
 const securityCheckVisible = ref(false)
+
+function openSecurityCockpit() {
+  window.dispatchEvent(new CustomEvent('ops-navigate-tab', { detail: { tab: 'security-cockpit' } }))
+}
+
 const updatedAt = ref('')
 const errorHint = ref('')
 const patrolHint = ref('')
@@ -808,6 +830,10 @@ function startFeed () {
   }
   loadPlatformEnv()
   tick()
+  if (props.lite) {
+    timer = setInterval(tick, 60000)
+    return
+  }
   runLightPatrolTick(true)
   timer = setInterval(tick, INTERVAL_MS)
   patrolTimer = setInterval(fetchPatrolRealtime, PATROL_POLL_MS)

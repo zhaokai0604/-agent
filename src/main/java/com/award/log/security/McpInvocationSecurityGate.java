@@ -1,17 +1,22 @@
 package com.award.log.security;
 
+import com.award.log.governance.GovernanceAdmissionVerdict;
+import com.award.log.governance.OpsGovernanceService;
 import com.award.log.mcp.McpToolCatalog;
+import com.award.log.mcp.WriteToolResultSupport;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Locale;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * MCP / Agent 工具调用的统一安全裁决：输入尺度、注入、意图分级、高危命令串。
+ * MCP / Agent 工具调用的统一安全裁决：输入尺度、注入、意图分级、高危命令串、资产治理硬覆盖。
  * <p>
  * {@link McpSecurityProfile} 区分「首次请求」「已二次确认」「延时任务」三种信任边界，
  * 避免 confirmExecute / 延时路径被 MEDIUM 风险重复绊住。
@@ -21,7 +26,21 @@ import java.util.regex.Pattern;
 public class McpInvocationSecurityGate {
 
     private static final Pattern DESTRUCTIVE_UTTERANCE_CN = Pattern.compile(
-            "删除.{0,16}(整个|全部|所有|根|系统)|删.{0,4}(整个|全部|所有).{0,12}(系统|根|盘|文件)|清空.{0,8}(系统|根|盘)",
+            "删除.{0,16}(整个|全部|所有|根|系统)|删.{0,4}(整个|全部|所有).{0,12}(系统|根|盘|文件)|清空.{0,8}(系统|根|盘)|"
+                    + "格式化.{0,12}(磁盘|硬盘|新盘|分区|整盘)|整盘|抹盘|wipe|mkfs|"
+                    + "根目录.{0,16}(清理|清空|删除)|清理.{0,12}根目录|全面.{0,8}根|"
+                    + "清理.{0,20}(/var/lib/mysql|数据库)|删库|drop\\s+database|"
+                    + "忽略.{0,16}(路径|安全|限制|规则|检查)|绕过.{0,12}(路径|安全|策略|检查)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern MUTATION_VERB_CN = Pattern.compile(
+            "清理|删除|清空|抹掉|铲掉|格式化|wipe|clean|delete|purge|format",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern SENSITIVE_PATH_HINT = Pattern.compile(
+            "/etc(/passwd|/shadow|/sudoers)?|/boot|/var/lib/(mysql|pgsql|docker|kubelet)|/dev(/sd[a-z]|/nvme)?|"
+                    + "\\bpasswd\\b|根目录|整盘|iptables|firewalld|sshd|/\\s*$|路径是\\s*/[^\\s，。]+",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern DESTRUCTIVE_ACTION_PARAM = Pattern.compile(
+            "^(clean|clean_all|cleanup|delete|format|wipe|purge|rm|drop)$",
             Pattern.CASE_INSENSITIVE);
 
     /** 在 {@link McpToolSurface#READ_ONLY} 会话面下禁止的工具（含可配置追加项） */
@@ -32,6 +51,7 @@ public class McpInvocationSecurityGate {
     private final IntentRiskFilter intentRiskFilter;
     private final HighRiskCommandDetector highRiskCommandDetector;
     private final AgenticRiskScoreEngine agenticRiskScoreEngine;
+    private final OpsGovernanceService opsGovernanceService;
 
     private final int maxInstructionLength;
     private final int maxParameterEntries;
@@ -44,6 +64,7 @@ public class McpInvocationSecurityGate {
             AgenticRiskScoreEngine agenticRiskScoreEngine,
             McpToolCatalog mcpToolCatalog,
             ReadOnlySurfaceDenylist readOnlySurfaceDenylist,
+            @Autowired(required = false) OpsGovernanceService opsGovernanceService,
             @Value("${agent.security.max-instruction-length:16384}") int maxInstructionLength,
             @Value("${agent.security.max-parameter-entries:48}") int maxParameterEntries,
             @Value("${agent.security.max-single-string-param-chars:131072}") int maxSingleStringParamChars
@@ -54,6 +75,7 @@ public class McpInvocationSecurityGate {
         this.agenticRiskScoreEngine = agenticRiskScoreEngine;
         this.mcpToolCatalog = mcpToolCatalog;
         this.readOnlySurfaceDenylist = readOnlySurfaceDenylist;
+        this.opsGovernanceService = opsGovernanceService;
         this.maxInstructionLength = Math.max(4096, maxInstructionLength);
         this.maxParameterEntries = Math.max(8, maxParameterEntries);
         this.maxSingleStringParamChars = Math.max(4096, maxSingleStringParamChars);
@@ -146,7 +168,7 @@ public class McpInvocationSecurityGate {
             return GateDecision.block("HIGH_INTENT", "安全拦截：高风险意图，禁止自动执行",
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
-        if (isDestructiveUtteranceMismatch(userUtterance, toolName)) {
+        if (isDestructiveUtteranceMismatch(userUtterance, toolName, parameters, riskText)) {
             return GateDecision.block("INTENT_TOOL_MISMATCH",
                     "安全拦截：用户表述为破坏性/删除类操作，与只读观测工具不匹配，已拒绝以防误导读",
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
@@ -162,25 +184,100 @@ public class McpInvocationSecurityGate {
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
 
-        boolean needByScore = (profile == McpSecurityProfile.INITIAL_REQUEST
+        // L4 资产治理硬覆盖：FORBIDDEN 优先于风险分 ALLOW；CONFIRM_ONLY 在真实写时强制确认
+        OpsGovernanceService.GovernanceEvaluation governance = null;
+        if (opsGovernanceService != null && opsGovernanceService.isEnabled()) {
+            governance = opsGovernanceService.evaluateToolCall(toolName, parameters);
+            scoreResult = mergeGovernanceRisk(scoreResult, governance);
+            if (governance.verdict() == GovernanceAdmissionVerdict.FORBIDDEN) {
+                return GateDecision.block("GOVERNANCE_FORBIDDEN",
+                        "治理准入拒绝：" + governance.reason()
+                                + "（tier=" + governance.assetTier().name() + ", target=" + governance.target() + "）",
+                        scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
+            }
+        }
+
+        // 写工具预览：显式 dryRun=true 不因评分/中等意图强制确认。
+        // 服务重启缺省视为真实写（除非显式 dryRun=true），避免 LLM 省略 dryRun 旁路确认。
+        boolean explicitDryRun = Boolean.TRUE.equals(coerceBoolParam(parameters, "dryRun"));
+        boolean previewOnlyWrite;
+        if (isServiceRestartToolName(toolName)) {
+            previewOnlyWrite = explicitDryRun;
+        } else {
+            previewOnlyWrite = isWriteToolName(toolName)
+                    && !WriteToolResultSupport.requestedRealWrite(parameters);
+        }
+        boolean needByScore = !previewOnlyWrite
+                && (profile == McpSecurityProfile.INITIAL_REQUEST
                 || profile == McpSecurityProfile.CHAT_AGENT_TOOL)
                 && scoreResult.total() >= autoMax
                 && scoreResult.total() <= confirmMax;
-        boolean needByIntent = (profile == McpSecurityProfile.INITIAL_REQUEST
+        boolean needByIntent = !previewOnlyWrite
+                && (profile == McpSecurityProfile.INITIAL_REQUEST
                 || profile == McpSecurityProfile.CHAT_AGENT_TOOL)
                 && intentRisk == RiskLevel.MEDIUM;
-        if (needByScore || needByIntent) {
-            String extra = needByIntent && !needByScore ? "意图为中等风险；" : "";
+        boolean needByGovernance = governance != null
+                && governance.verdict() == GovernanceAdmissionVerdict.CONFIRM_ONLY
+                && !previewOnlyWrite
+                && (profile == McpSecurityProfile.INITIAL_REQUEST
+                || profile == McpSecurityProfile.CHAT_AGENT_TOOL);
+        if (needByScore || needByIntent || needByGovernance) {
+            String extra = needByGovernance && !needByScore && !needByIntent
+                    ? "治理要求人工确认（" + governance.reason() + "）；"
+                    : (needByIntent && !needByScore ? "意图为中等风险；" : "");
             String msg = String.format(Locale.ROOT,
                     "Agentic 风险分 %.1f/10（<%.0f 倾向自动，[%.0f,%.0f] 为确认区间）。%s请在界面点击确认后执行。",
                     scoreResult.total(), autoMax, autoMax, confirmMax, extra);
             return GateDecision.needConfirm(
-                    needByIntent ? intentRisk : RiskLevel.MEDIUM,
+                    needByGovernance || needByIntent ? RiskLevel.MEDIUM : RiskLevel.MEDIUM,
                     msg,
                     scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
         }
 
         return GateDecision.allow(intentRisk, scoreResult.total(), scoreResult.dimensions(), scoreResult.explanation());
+    }
+
+    private AgenticRiskScoreEngine.ScoreResult mergeGovernanceRisk(
+            AgenticRiskScoreEngine.ScoreResult scoreResult,
+            OpsGovernanceService.GovernanceEvaluation governance) {
+        if (scoreResult == null || governance == null
+                || governance.verdict() == GovernanceAdmissionVerdict.ALLOW_AUTO) {
+            return scoreResult;
+        }
+        Map<String, Double> dims = new LinkedHashMap<>(scoreResult.dimensions());
+        double governanceSensitivity = governanceSensitivity(governance);
+        dims.put("governancePathSensitivity", governanceSensitivity);
+        double total = scoreResult.total();
+        if (governance.verdict() == GovernanceAdmissionVerdict.FORBIDDEN) {
+            total = 10.0;
+        } else if (governance.verdict() == GovernanceAdmissionVerdict.CONFIRM_ONLY) {
+            total = Math.max(total, Math.min(agenticRiskScoreEngine.getConfirmMax(), total + 2.0));
+        }
+        String explanation = scoreResult.explanation()
+                + String.format(Locale.ROOT, "；治理准入=%s，资产分级=%s，目标=%s，原因=%s",
+                governance.verdict().name(), governance.assetTier().name(), governance.target(), governance.reason());
+        return new AgenticRiskScoreEngine.ScoreResult(round1(total), Map.copyOf(dims), explanation);
+    }
+
+    private static double governanceSensitivity(OpsGovernanceService.GovernanceEvaluation governance) {
+        String reason = governance.reason() == null ? "" : governance.reason();
+        String target = governance.target() == null ? "" : governance.target().replace('\\', '/').toLowerCase(Locale.ROOT);
+        if (reason.contains("pathSensitivity=10")
+                || target.startsWith("c:/windows")
+                || target.startsWith("c:/program files")
+                || governance.verdict() == GovernanceAdmissionVerdict.FORBIDDEN) {
+            return 10.0;
+        }
+        return switch (governance.assetTier()) {
+            case CORE_STATEFUL -> 8.0;
+            case CORE_STATELESS -> 6.0;
+            case NON_CORE -> 2.0;
+            case FORBIDDEN_AUTO -> 10.0;
+        };
+    }
+
+    private static double round1(double v) {
+        return Math.round(v * 10.0) / 10.0;
     }
 
     private String findOversizedParameter(Map<String, Object> parameters) {
@@ -221,6 +318,48 @@ public class McpInvocationSecurityGate {
         return evaluate(toolBeanName, params, instr, userMsg, McpSecurityProfile.CHAT_AGENT_TOOL);
     }
 
+    private static boolean isServiceRestartToolName(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return false;
+        }
+        return switch (toolName.trim()) {
+            case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean isWriteToolName(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return false;
+        }
+        return switch (toolName.trim()) {
+            case "CleanTempTool", "LogCleanupTool", "ServiceRestartTool",
+                 "DiskOpsTool", "LogOpsTool", "ServiceOpsTool", "SystemdTool" -> true;
+            default -> false;
+        };
+    }
+
+    private static Boolean coerceBoolParam(Map<String, Object> parameters, String key) {
+        if (parameters == null || key == null) {
+            return null;
+        }
+        Object v = parameters.get(key);
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Boolean b) {
+            return b;
+        }
+        String s = String.valueOf(v).trim().toLowerCase(Locale.ROOT);
+        if ("true".equals(s) || "1".equals(s) || "yes".equals(s)) {
+            return true;
+        }
+        if ("false".equals(s) || "0".equals(s) || "no".equals(s)) {
+            return false;
+        }
+        return null;
+    }
+
     private static String mergeRiskUtterance(String userUtterance, String instruction) {
         String inst = instruction == null ? "" : instruction.trim();
         String user = userUtterance == null ? "" : userUtterance.trim();
@@ -250,15 +389,41 @@ public class McpInvocationSecurityGate {
         return RiskLevel.LOW;
     }
 
-    private boolean isDestructiveUtteranceMismatch(String userUtterance, String toolName) {
-        if (userUtterance == null || userUtterance.isBlank() || toolName == null) {
+    private boolean isDestructiveUtteranceMismatch(String userUtterance, String toolName,
+                                                   Map<String, Object> parameters, String riskText) {
+        if (toolName == null || !mcpToolCatalog.isReadOnlyObservation(toolName)) {
             return false;
         }
-        if (!mcpToolCatalog.isReadOnlyObservation(toolName)) {
+        String u = userUtterance == null ? "" : userUtterance.trim();
+        String blob = ((riskText == null ? "" : riskText) + "\n" + u).trim();
+        if (blob.isEmpty() && (parameters == null || parameters.isEmpty())) {
             return false;
         }
-        String u = userUtterance.trim();
-        return DESTRUCTIVE_UTTERANCE_CN.matcher(u).find();
+        if (!u.isEmpty() && DESTRUCTIVE_UTTERANCE_CN.matcher(u).find()) {
+            return true;
+        }
+        // 只读工具却带破坏性 action，或“清理/删除 + 敏感路径”
+        if (parameters != null) {
+            Object action = parameters.get("action");
+            if (action != null && DESTRUCTIVE_ACTION_PARAM.matcher(String.valueOf(action).trim()).matches()) {
+                return true;
+            }
+        }
+        String pathBlob = blob + "\n" + stringifyParams(parameters);
+        boolean sensitive = SENSITIVE_PATH_HINT.matcher(pathBlob).find();
+        boolean mutates = MUTATION_VERB_CN.matcher(pathBlob).find();
+        return sensitive && mutates;
+    }
+
+    private static String stringifyParams(Map<String, Object> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Object> e : parameters.entrySet()) {
+            sb.append(e.getKey()).append('=').append(e.getValue()).append(' ');
+        }
+        return sb.toString();
     }
 
     public Set<String> allowedToolNames() {

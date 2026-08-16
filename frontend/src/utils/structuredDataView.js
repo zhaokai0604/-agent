@@ -1,5 +1,5 @@
 /**
- * 将 API / 工具返回的结构化数据转为卡片、表格、标签、进度条等视图模型（避免堆砌 JSON）。
+ * 把 API / 工具返回整理成可视化结构，避免页面直接堆原始 JSON。
  */
 
 import { normalizeMcpToolResponse } from './mcpToolResult'
@@ -7,169 +7,111 @@ import { normalizeMcpToolResponse } from './mcpToolResult'
 const FIELD_LABELS = {
   mode: '模式',
   path: '路径',
-  plan: '将执行',
+  plan: '计划',
   note: '说明',
-  filesFound: '发现文件数',
-  filesDeleted: '已删除',
-  deletableCount: '可删除',
-  protectedSkipped: '跳过受保护',
-  previewCount: '预览条数',
-  success: '成功',
-  error: '错误',
+  reason: '原因',
   message: '消息',
-  service: '服务',
-  stderr: '错误输出',
-  command: '命令',
-  tool: '工具',
-  output: '输出',
-  root: '扫描根',
-  entries: '条目',
-  traceId: 'traceId',
-  duration: '耗时(ms)',
-  durationMs: '耗时(ms)',
-  riskScore: '风险分',
-  riskLevel: '风险等级',
+  detail: '详情',
+  title: '标题',
+  summary: '摘要',
+  resultSummary: '结果摘要',
+  effectSummary: '效果摘要',
   securityOutcome: '安全结论',
   securityCode: '安全码',
-  needConfirm: '需确认',
-  cancelled: '已取消',
+  riskScore: '风险分',
+  riskLevel: '风险级别',
+  riskExplanation: '风险说明',
+  duration: '耗时(ms)',
+  durationMs: '耗时(ms)',
+  traceId: 'traceId',
+  trace_id: 'traceId',
+  targetName: '目标',
+  toolName: '工具',
   channel: '通道',
-  phase: '阶段',
-  receive: '接收请求',
-  perceive: '环境感知',
-  reason: '推理决策',
-  security: '安全校验',
-  execute: '执行操作',
-  verify: '结果验证',
-  title: '标题',
-  detail: '详情',
-  step: '步骤',
+  requestChannel: '请求通道',
+  executionOk: '执行成功',
+  executionStatus: '执行状态',
+  success: '成功',
+  error: '错误',
   status: '状态',
-  type: '类型',
-  target: '目标',
-  cpuUsagePercent: 'CPU 使用率',
-  memUsagePercent: '内存使用率',
-  loadAvg1min: '1分钟负载',
-  loadAvg5min: '5分钟负载',
-  loadAvg15min: '15分钟负载',
-  mountedOn: '挂载点',
-  usePercent: '使用率',
-  used: '已用',
-  size: '容量',
-  available: '可用空间',
-  filesystem: '盘符',
+  statusCode: '状态码',
+  statusText: '状态描述',
+  createdAt: '时间',
+  operatorUserId: '操作人',
+  remoteIp: '来源 IP',
+  userRole: '角色',
+  command: '命令',
+  output: '输出',
+  service: '服务',
   pid: 'PID',
   cpu: 'CPU%',
   mem: '内存%',
-  severity: '级别',
+  cpuUsagePercent: 'CPU 使用率',
+  memUsagePercent: '内存使用率',
+  usePercent: '使用率',
+  used: '已用',
+  available: '可用',
+  size: '大小',
+  filesystem: '文件系统',
+  mountedOn: '挂载点',
+  root: '根目录',
+  entries: '条目',
+  steps: '步骤',
+  rows: '行',
+  items: '项目',
+  list: '列表',
+  records: '记录',
+  preview: '预览',
   logPath: '日志路径',
   linesAnalyzed: '分析行数',
   errorCount: '错误数',
   rootCause: '根因',
   recommendation: '建议',
-  executionOk: '执行成功',
-  toolName: '工具名',
-  resultSummary: '结果摘要',
-  riskDimensions: '风险维度',
-  riskExplanation: '风险说明',
-  data: '磁盘分区',
-  preview: '预览',
-  protectedSamples: '受保护样例',
-  hops: '路由跳',
-  hopCount: '跳数',
-  transmitted: '发送包',
-  received: '接收包',
-  packetLossPercent: '丢包率',
-  avgLatencyMs: '平均延迟',
-  hasPrivilege: '有权限',
-  needsSudo: '需 sudo',
-  currentUser: '当前用户',
-  action: '操作',
-  resource: '资源',
-  suggestion: '建议',
-  configType: '配置类型',
-  configPath: '配置路径',
-  passed: '通过',
-  exitCode: '退出码',
-  kb: '大小(KB)',
-  maxDepth: '深度',
-  overview: '概览',
-  hotspotsRank: '热点目录',
-  hint: '提示',
-  integrationStatus: '集成状态',
-  filters: '过滤条件',
-  sinceHours: '时间范围(小时)',
-  keywordContains: '关键词',
-  drainTemplateSignal: 'Drain 模板信号',
-  novelTemplateKindsLastHour: '近1小时新模板种类',
-  distinctTemplatesTracked: '已跟踪模板数',
-  novelTemplateCountThisRun: '本轮新模板数',
-  distinctTemplateIds: '模板种类数',
-  templateSummary: '模板汇总',
-  templateId: '模板 ID',
   lineCount: '行数',
   anomalyLineCount: '异常行数',
-  maxAnomalyScore: '最高异常分',
+  maxAnomalyScore: '最大异常分',
   sampleLine: '样例行',
-  dominantSeverity: '主要级别',
-  lineTimeStats: '时间解析统计',
-  unparsedTimeRatio: '未解析时间占比',
-  linesWithParsedTime: '已解析时间行数',
-  linesTotal: '总行数',
-  severityHistogram: '严重级别分布',
-  anomalySamples: '异常样例',
+  severity: '级别',
+  dominantSeverity: '主级别',
   anomalyScore: '异常分',
-  reasons: '异常原因',
   line: '日志行',
   logTime: '日志时间',
-  summary: '摘要',
   minEpochMs: '最早时间',
-  maxEpochMs: '最晚时间'
+  maxEpochMs: '最晚时间',
+  value: '值'
 }
 
 const ENUM_VALUE_LABELS = {
-  INTEGRATED: '已集成',
-  HEALTHY: '健康',
-  ISSUES_DETECTED: '存在异常',
-  EMPTY: '无数据',
-  none: '未设置',
-  UNKNOWN: '未知',
-  UNKNOWN_LEVEL: '未知级别',
+  SUCCESS: '成功',
+  FAIL: '失败',
+  FAILED: '失败',
   ERROR: '错误',
-  WARN: '警告',
-  WARNING: '警告',
+  WARN: '告警',
+  WARNING: '告警',
   INFO: '信息',
   DEBUG: '调试',
   FATAL: '致命',
-  CRITICAL: '严重'
+  CRITICAL: '严重',
+  HEALTHY: '健康',
+  UNHEALTHY: '异常',
+  ALLOW: '允许',
+  BLOCK: '拦截',
+  REJECT: '拒绝',
+  CONFIRM: '确认'
 }
 
 const METRIC_KEY_RE = /percent|usage|ratio|score|progress|level|risk/i
 const BYTE_FIELD_KEYS = new Set(['available', 'size', 'used', 'free', 'total', 'capacity'])
-const TABLE_ARRAY_KEYS = new Set([
-  'preview',
-  'entries',
-  'protectedSamples',
-  'hops',
-  'steps',
-  'rows',
-  'items',
-  'list',
-  'records',
-  'templateSummary',
-  'anomalySamples'
-])
+const TABLE_ARRAY_KEYS = new Set(['preview', 'entries', 'steps', 'rows', 'items', 'list', 'records', 'anomalySamples', 'protectedSamples'])
 
 export function fieldLabel(key) {
   if (key == null) return ''
-  if (FIELD_LABELS[key]) return FIELD_LABELS[key]
-  if (ENUM_VALUE_LABELS[key]) return ENUM_VALUE_LABELS[key]
-  return String(key)
+  return FIELD_LABELS[key] || FIELD_LABELS[String(key)] || String(key)
 }
 
 function translateEnumValue(val) {
   if (val == null || val === '') return null
-  return ENUM_VALUE_LABELS[String(val)] ?? null
+  return ENUM_VALUE_LABELS[String(val).toUpperCase()] ?? null
 }
 
 export function looksLikeJsonString(s) {
@@ -194,30 +136,26 @@ export function coerceStructuredInput(val) {
   return val
 }
 
-/** 将 MCP / 审计返回统一解包，避免 StructuredResultView 直接渲染整段 JSON */
 export function payloadForStructuredView(raw) {
   if (raw == null) return null
 
-  let val = coerceStructuredInput(raw)
-
-  if (val != null && typeof val === 'object' && !Array.isArray(val)) {
+  const val = coerceStructuredInput(raw)
+  if (val && typeof val === 'object' && !Array.isArray(val)) {
     if (val.success !== undefined && (val.data !== undefined || val.needConfirm !== undefined)) {
-      const n = normalizeMcpToolResponse(val)
-      if (n.data != null && n.data !== '') return coerceStructuredInput(n.data)
-      const { success, error, message, securityCode, riskScore, riskExplanation, traceId, duration } = n
+      const normalized = normalizeMcpToolResponse(val)
+      if (normalized.data != null && normalized.data !== '') return coerceStructuredInput(normalized.data)
       return {
-        success,
-        error,
-        message,
-        securityCode,
-        riskScore,
-        riskExplanation,
-        traceId,
-        durationMs: duration
+        success: normalized.success,
+        error: normalized.error,
+        message: normalized.message,
+        securityCode: normalized.securityCode,
+        riskScore: normalized.riskScore,
+        riskExplanation: normalized.riskExplanation,
+        traceId: normalized.traceId,
+        durationMs: normalized.duration
       }
     }
   }
-
   return val
 }
 
@@ -235,7 +173,7 @@ function parsePercentValue(val) {
   }
   const m = String(val).match(/(\d+(?:\.\d+)?)\s*%?/)
   if (!m) return null
-  const n = parseFloat(m[1])
+  const n = Number.parseFloat(m[1])
   if (!Number.isFinite(n)) return null
   if (String(val).includes('%')) return Math.min(100, Math.round(n))
   if (n >= 0 && n <= 1) return Math.round(n * 100)
@@ -245,7 +183,6 @@ function parsePercentValue(val) {
 }
 
 function metricStatus(percent, key) {
-  if (percent == null) return undefined
   const k = String(key || '').toLowerCase()
   if (k.includes('risk') || k.includes('error') || k.includes('anomaly')) {
     if (percent >= 70) return 'exception'
@@ -258,7 +195,7 @@ function metricStatus(percent, key) {
 }
 
 function formatBytesCompact(value) {
-  if (value == null || value === '') return '—'
+  if (value == null || value === '') return '-'
   if (typeof value === 'string' && /[a-zA-Z%]/.test(value)) return value
   const n = Number(value)
   if (!Number.isFinite(n)) return String(value)
@@ -273,7 +210,6 @@ function formatBytesCompact(value) {
   return `${size.toFixed(digits)} ${units[idx]}`
 }
 
-/** 字节数可读格式（供组件与其它 util 复用） */
 export function formatBytes(value) {
   return formatBytesCompact(value)
 }
@@ -282,74 +218,42 @@ function isByteField(key) {
   return BYTE_FIELD_KEYS.has(String(key || ''))
 }
 
-function formatKbCompact(kb) {
-  const n = Number(kb)
-  if (!Number.isFinite(n)) return kb == null ? '—' : String(kb)
-  return formatBytesCompact(n * 1024)
-}
-
 function formatScalar(val, key) {
-  if (val == null) return '—'
+  if (val == null) return '-'
   if (typeof val === 'boolean') return val ? '是' : '否'
-  if (key === 'mode' && typeof val === 'string') {
-    const u = val.toUpperCase()
-    if (u === 'DRY-RUN' || u === 'DRY_RUN') return '预览模式'
-    if (u === 'HEALTHY') return '健康'
-    if (u === 'UNHEALTHY' || u === 'WARNING') return '异常'
+  if (typeof val === 'number') {
+    if (isByteField(key)) return formatBytesCompact(val)
+    return Number.isInteger(val) ? String(val) : val.toFixed(2)
   }
-  if (typeof val === 'string') {
-    const u = val.toUpperCase()
-    if (u === 'HEALTHY') return '健康'
-    if (u === 'ONLINE') return '在线'
-    if (u === 'OFFLINE') return '离线'
-  }
-  if (isByteField(key) && typeof val === 'number') return formatBytesCompact(val)
-  if (typeof val === 'number') return Number.isInteger(val) ? String(val) : val.toFixed(2)
   if (typeof val === 'string') {
     const translated = translateEnumValue(val)
     const s = translated ?? val
-    return s.length > 500 ? s.slice(0, 500) + '…' : s
+    if (isByteField(key) && !/[a-zA-Z%]/.test(s) && /^\d+(\.\d+)?$/.test(s)) return formatBytesCompact(Number(s))
+    return s.length > 500 ? `${s.slice(0, 500)}…` : s
   }
-  const s = String(val)
-  return s.length > 500 ? s.slice(0, 500) + '…' : s
+  return String(val)
 }
 
-const ENUM_CELL_PROPS = new Set([
-  'status',
-  'integrationStatus',
-  'dominantSeverity',
-  'severity',
-  'securityOutcome'
-])
-
-/** 表格单元格：字节字段自动换算为 GB 等可读单位 */
 export function formatTableCell(prop, val) {
-  if (val == null || val === '') return '—'
+  if (val == null || val === '') return '-'
   if (typeof val === 'boolean') return val ? '是' : '否'
   if (typeof val === 'object') return fieldLabel('value')
-  if (prop === 'kb') return formatKbCompact(val)
+  if (prop === 'kb') return formatBytesCompact(Number(val) * 1024)
   if (BYTE_FIELD_KEYS.has(prop)) return formatBytesCompact(val)
-  if (ENUM_CELL_PROPS.has(prop)) {
-    const translated = translateEnumValue(val)
-    if (translated) return translated
-  }
-  if (prop === 'unparsedTimeRatio' && typeof val === 'number') {
-    return `${(val * 100).toFixed(1)}%`
-  }
+  if (prop === 'unparsedTimeRatio' && typeof val === 'number') return `${(val * 100).toFixed(1)}%`
   if ((prop === 'minEpochMs' || prop === 'maxEpochMs') && typeof val === 'number') {
     const d = new Date(val)
     return Number.isNaN(d.getTime()) ? String(val) : d.toLocaleString('zh-CN', { hour12: false })
   }
-  const s = formatScalar(val)
-  return s.length > 120 ? s.slice(0, 120) + '…' : s
+  const translated = translateEnumValue(val)
+  const s = formatScalar(translated ?? val, prop)
+  return s.length > 120 ? `${s.slice(0, 120)}…` : s
 }
 
 function tagTypeForField(key, val) {
   const k = String(key).toLowerCase()
   if (typeof val === 'boolean') return val ? 'success' : 'info'
-  if (k === 'success' || k === 'executionok' || k === 'passed') {
-    return val === true || val === 'true' ? 'success' : 'danger'
-  }
+  if (k === 'success' || k === 'executionok' || k === 'passed') return val === true || val === 'true' ? 'success' : 'danger'
   if (k.includes('error') || k.includes('fail') || k === 'severity') return 'danger'
   if (k.includes('warn') || k === 'risklevel') return 'warning'
   if (k.includes('status') || k === 'mode') return 'info'
@@ -398,7 +302,7 @@ function inferTableColumns(rows) {
   return ordered.map((prop) => ({ prop, label: fieldLabel(prop), minWidth: prop === 'path' ? 200 : 100 }))
 }
 
-function formatRowForDisplay (row, columns) {
+function formatRowForDisplay(row, columns) {
   if (!isPlainObject(row)) return row
   const out = { ...row }
   for (const col of columns) {
@@ -411,7 +315,7 @@ function formatRowForDisplay (row, columns) {
   return out
 }
 
-function buildTableSection (key, arr, depth) {
+function buildTableSection(key, arr, depth) {
   if (!arr.length) return null
   if (arr.every(isPlainObject)) {
     const columns = inferTableColumns(arr)
@@ -442,17 +346,10 @@ function buildTableSection (key, arr, depth) {
   }
 }
 
-/**
- * @param {*} raw
- * @param {number} depth
- * @returns {{ kind: string, text?: string, tags?: string[], metrics?: object[], fields?: object[], table?: object, sections?: object[] }}
- */
 export function buildStructuredViewModel(raw, depth = 0) {
-  const val = payloadForStructuredView(coerceStructuredInput(raw))
+  const val = payloadForStructuredView(raw)
 
-  if (val == null || val === '') {
-    return { kind: 'empty' }
-  }
+  if (val == null || val === '') return { kind: 'empty' }
 
   if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
     return { kind: 'text', text: formatScalar(val) }
@@ -465,9 +362,7 @@ export function buildStructuredViewModel(raw, depth = 0) {
     return { kind: 'text', text: formatScalar(val) }
   }
 
-  if (!isPlainObject(val)) {
-    return { kind: 'text', text: formatScalar(val) }
-  }
+  if (!isPlainObject(val)) return { kind: 'text', text: formatScalar(val) }
 
   const metrics = []
   const fields = []
@@ -483,10 +378,7 @@ export function buildStructuredViewModel(raw, depth = 0) {
         label: fieldLabel(key),
         percent: Math.min(100, Math.max(0, pct)),
         status: metricStatus(pct, key),
-        hint:
-          key === 'riskScore'
-            ? `${pct / 10}/10`
-            : undefined
+        hint: key === 'riskScore' ? `${pct / 10}/10` : undefined
       })
       continue
     }
@@ -498,10 +390,7 @@ export function buildStructuredViewModel(raw, depth = 0) {
     }
 
     if (key === 'severityHistogram' && isPlainObject(v)) {
-      const rows = Object.entries(v).map(([level, count]) => ({
-        severity: level,
-        lineCount: count
-      }))
+      const rows = Object.entries(v).map(([severity, lineCount]) => ({ severity, lineCount }))
       const sec = buildTableSection('severityHistogram', rows, depth)
       if (sec) sections.push(sec)
       continue
@@ -535,40 +424,34 @@ export function buildStructuredViewModel(raw, depth = 0) {
   return { kind: 'empty' }
 }
 
-/** 历史列表 / 表格预览：单行摘要，不用 JSON */
 export function formatResultPreview(raw, maxLen = 140) {
-  const vm = buildStructuredViewModel(payloadForStructuredView(raw))
+  const vm = buildStructuredViewModel(raw)
   const parts = []
 
   const walk = (m) => {
     if (!m || parts.length > 6) return
     if (m.kind === 'text' && m.text) parts.push(m.text)
     if (m.kind === 'composite') {
-      for (const f of m.fields || []) {
-        parts.push(`${f.label}: ${f.value}`)
-      }
-      for (const met of m.metrics || []) {
-        parts.push(`${met.label}: ${met.percent}%`)
-      }
+      for (const f of m.fields || []) parts.push(`${f.label}: ${f.value}`)
+      for (const met of m.metrics || []) parts.push(`${met.label}: ${met.percent}%`)
     }
     if (m.kind === 'table' && m.rows?.length) {
-      parts.push(`${m.title || '列表'} ${m.rows.length} 条`)
+      parts.push(`${m.title || '列表'} ${m.rows.length} 行`)
     }
     if (m.kind === 'tags' && m.items?.length) {
-      parts.push(`${m.title || '项'}: ${m.items.slice(0, 3).join('、')}`)
+      parts.push(`${m.title || '项目'}: ${m.items.slice(0, 3).join('、')}`)
     }
     for (const s of m.sections || []) walk(s.view || s)
   }
 
   walk(vm)
   const text = parts.filter(Boolean).join(' · ') || '—'
-  return text.length > maxLen ? text.slice(0, maxLen) + '…' : text
+  return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text
 }
 
-/** 风险维度对象 → 可读行（用于确认框） */
 export function formatRiskDimensions(dimensions) {
   if (!dimensions || typeof dimensions !== 'object') return ''
   return Object.entries(dimensions)
-    .map(([k, v]) => `· ${fieldLabel(k)}: ${formatScalar(v)}`)
+    .map(([k, v]) => `• ${fieldLabel(k)}: ${formatScalar(v, k)}`)
     .join('\n')
 }

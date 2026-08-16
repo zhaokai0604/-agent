@@ -1,11 +1,11 @@
 <template>
   <div class="ops-page log-analysis-dashboard">
     <OpsPageHeader
-      title="趋势看板"
-      subtitle="近 7 日日志量、异常率、任务状态与系统性能趋势"
+      title="证据趋势看板"
+      subtitle="近 7 日日志证据、异常率、任务状态与系统性能趋势"
     >
       <template #actions>
-        <el-button type="success" plain size="small" @click="goToOpsAgent">打开对话</el-button>
+        <el-button type="success" plain size="small" @click="goToOpsAgent">带入任务台</el-button>
         <el-button type="primary" @click="refreshData">刷新数据</el-button>
         <el-button type="info" plain size="small" @click="exportDashboardPng">导出 PNG</el-button>
         <el-button type="info" plain size="small" @click="exportDashboardPdf">导出 PDF</el-button>
@@ -43,10 +43,10 @@
 
       <!-- 图表区域 -->
       <div class="charts-row">
-        <!-- 日志分析趋势 -->
+        <!-- 证据分析趋势 -->
         <el-card class="chart-card">
           <template #header>
-            <span>日志分析趋势</span>
+            <span>证据分析趋势</span>
           </template>
           <div ref="trendChartRef" class="chart-container echarts-host"></div>
         </el-card>
@@ -223,7 +223,7 @@ const exportDashboardPdf = async () => {
     `近7日：日志 ${summary.totalLogs ?? 0} · 异常 ${summary.anomalyLogs ?? 0} · 异常率 ${(summary.anomalyRate ?? 0).toFixed(2)}% · 任务 ${summary.totalTasks ?? 0}`
   try {
     await exportDashboardPdfDocument({
-      title: '趋势看板 · 近7日',
+      title: '证据趋势看板 · 近7日',
       summaryLine,
       chartImages: images,
       filename: `log-dashboard-report-${formatLocalDateKey(new Date())}.pdf`
@@ -290,7 +290,7 @@ const scheduleChartResize = () => {
 
 // 初始化图表
 const initCharts = () => {
-  // 日志分析趋势图表
+  // 证据分析趋势图表
   if (trendChartRef.value) {
     trendChart = echarts.init(trendChartRef.value)
     trendChart.setOption({
@@ -494,7 +494,7 @@ const updateDistributionChart = (anomalyDistribution) => {
       {
         title: {
           text: '暂无异常日志（近 7 日）',
-          subtext: '完成日志分析且标记为异常后此处显示级别分布',
+          subtext: '完成证据分析且标记为异常后此处显示级别分布',
           left: 'center',
           top: 'center',
           textStyle: { color: '#909399', fontSize: 14, fontWeight: 'normal' },
@@ -615,7 +615,7 @@ const opsAgentDeepDiveTask = (row) => {
 
 // 查看任务详情
 const viewTask = (taskId) => {
-  // 触发查看任务事件，跳转到日志分析页面查看详情
+  // 触发查看任务事件，跳转到证据分析页面查看详情
   console.log('查看任务详情:', taskId)
   emit('view-task', taskId)
 }

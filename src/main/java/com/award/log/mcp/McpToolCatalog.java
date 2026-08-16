@@ -133,8 +133,7 @@ public class McpToolCatalog {
                     "ConfigDriftTool" -> 1.0;
             case "PrivilegeTool", "OsInsightTool", "DockerTool", "CronJobTool", "FirewallTool", "SystemdTool" -> 2.0;
             case "AutonomousOpsTool" -> 5.0;
-            case "CleanTempTool", "DiskOpsTool" -> 4.5;
-            case "LogCleanupTool", "LogOpsTool" -> 5.5;
+            case "CleanTempTool", "DiskOpsTool", "LogCleanupTool", "LogOpsTool" -> 7.0;
             case "ServiceRestartTool", "ServiceOpsTool" -> 7.0;
             case "ContainerOpsTool" -> 6.0;
             case "ProcessOpsTool" -> 6.5;

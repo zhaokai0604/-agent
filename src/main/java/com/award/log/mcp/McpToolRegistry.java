@@ -100,8 +100,21 @@ public class McpToolRegistry {
 
     /** 对话 ChatClient：排除实验性 FirstMcpTools，避免 echo 注入面。 */
     public ToolCallback[] getToolCallbacksForChatAgent(McpToolSurface surface, ReadOnlySurfaceDenylist denylist) {
-        List<Object> beans = getToolBeansForSurface(surface, denylist).stream()
+        return getToolCallbacksForChatAgent(surface, denylist, true);
+    }
+
+    /**
+     * @param allowWrite false 时按 READ_ONLY 面过滤，并额外剔除 Docker/Systemd 等混合写 Bean
+     */
+    public ToolCallback[] getToolCallbacksForChatAgent(McpToolSurface surface,
+                                                       ReadOnlySurfaceDenylist denylist,
+                                                       boolean allowWrite) {
+        McpToolSurface effective = com.award.log.agent.AgentToolPhase.effectiveSurface(surface, allowWrite);
+        List<Object> beans = getToolBeansForSurface(effective, denylist).stream()
                 .filter(bean -> !(bean instanceof FirstMcpTools))
+                .filter(bean -> allowWrite
+                        || !com.award.log.agent.AgentToolPhase.denyBeanInDiagnosePhase(
+                        ClassUtils.getUserClass(bean).getSimpleName()))
                 .collect(Collectors.toCollection(ArrayList::new));
         return buildToolCallbacks(beans);
     }

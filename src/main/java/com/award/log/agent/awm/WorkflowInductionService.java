@@ -81,9 +81,12 @@ public class WorkflowInductionService {
         }
 
         OpsWorkflow induced = induceWorkflow(exp, domainTag, findingKinds, toolSeq);
-        workflowMemoryService.upsert(induced, false);
-        log.info("AWM online: induced workflow {} source={} toolSeq={}",
-                induced.workflowId(), induced.sourceType(), toolSeq);
+        if (workflowMemoryService.upsert(induced, false)) {
+            log.info("AWM online: induced workflow {} source={} toolSeq={}",
+                    induced.workflowId(), induced.sourceType(), toolSeq);
+        } else {
+            log.warn("AWM online: induce upsert failed id={} toolSeq={}", induced.workflowId(), toolSeq);
+        }
     }
 
     public record InductionResult(
@@ -91,11 +94,23 @@ public class WorkflowInductionService {
             int created,
             int skippedNotEligible,
             int skippedDuplicate,
-            int skippedShortTools
+            int skippedShortTools,
+            int skippedDomainFull,
+            int upsertFailed,
+            boolean awmEnabled
     ) {
+        public InductionResult(
+                int scanned, int created, int skippedNotEligible, int skippedDuplicate, int skippedShortTools) {
+            this(scanned, created, skippedNotEligible, skippedDuplicate, skippedShortTools, 0, 0, true);
+        }
+
         public String hintZh() {
+            if (!awmEnabled) {
+                return "AWM 已关闭（agent.awm.enabled=false），未执行归纳";
+            }
             if (created > 0) {
-                return "已从审计轨迹归纳 " + created + " 条新 workflow";
+                return "已从审计轨迹归纳 " + created + " 条新 workflow"
+                        + (upsertFailed > 0 ? "（另有 " + upsertFailed + " 条写入失败）" : "");
             }
             if (scanned == 0) {
                 return "审计库为空：请先跑一键巡检、磁盘编排或 Agent 多工具对话";
@@ -106,6 +121,12 @@ public class WorkflowInductionService {
             if (skippedDuplicate > 0) {
                 return "近期轨迹与已有套路重复，无新增（可先跑新的编排再诱导）";
             }
+            if (skippedDomainFull > 0) {
+                return "对应域已达记忆上限，无新增（可清理旧 workflow 或提高 max-per-domain）";
+            }
+            if (upsertFailed > 0) {
+                return "归纳写入失败 " + upsertFailed + " 条，请检查数据库 ops_workflow_memory";
+            }
             if (skippedNotEligible > 0) {
                 return "近期轨迹未达归纳条件（需 executionOk 且 outcome 为 EXECUTED/DIAGNOSED 等）";
             }
@@ -115,13 +136,15 @@ public class WorkflowInductionService {
 
     public InductionResult induceFromRecentTraces(int limit) {
         if (!workflowMemoryService.isEnabled()) {
-            return new InductionResult(0, 0, 0, 0, 0);
+            return new InductionResult(0, 0, 0, 0, 0, 0, 0, false);
         }
         int scanned = 0;
         int created = 0;
         int skippedNotEligible = 0;
         int skippedDuplicate = 0;
         int skippedShortTools = 0;
+        int skippedDomainFull = 0;
+        int upsertFailed = 0;
         for (OpsExperience exp : experienceLoader.loadRecentSuccessful(limit)) {
             scanned++;
             if (!trajectoryEvaluator.shouldInduce(exp)) {
@@ -139,13 +162,19 @@ public class WorkflowInductionService {
                 continue;
             }
             if (workflowMemoryService.isDomainFull(domain)) {
-                break;
+                skippedDomainFull++;
+                continue;
             }
             OpsWorkflow wf = induceWorkflow(exp, domain, List.of(), toolSeq);
-            workflowMemoryService.upsert(wf, false);
-            created++;
+            if (workflowMemoryService.upsert(wf, false)) {
+                created++;
+            } else {
+                upsertFailed++;
+            }
         }
-        return new InductionResult(scanned, created, skippedNotEligible, skippedDuplicate, skippedShortTools);
+        return new InductionResult(
+                scanned, created, skippedNotEligible, skippedDuplicate, skippedShortTools,
+                skippedDomainFull, upsertFailed, true);
     }
 
     /** @deprecated use {@link #induceFromRecentTraces(int)} and {@link InductionResult} */
@@ -307,18 +336,37 @@ public class WorkflowInductionService {
 
     private String inferDomain(OpsExperience exp) {
         String input = exp.userInput() != null ? exp.userInput().toLowerCase(Locale.ROOT) : "";
-        if (input.contains("cpu") || input.contains("负载")) {
-            return "cpu";
-        }
-        if (input.contains("服务") || input.contains("systemd")) {
-            return "service";
-        }
         List<String> seq = extractToolSequenceFromSteps(exp.steps());
-        if (seq.stream().anyMatch(t -> "SystemLoadTool".equals(t) || "ProcessTool".equals(t))) {
+        boolean hasServiceTool = seq.stream().anyMatch(t ->
+                "SystemdTool".equals(t) || "ServiceRestartTool".equals(t) || "ServiceOpsTool".equals(t));
+        boolean hasDiskTool = seq.stream().anyMatch(t ->
+                "CleanTempTool".equals(t) || "LogCleanupTool".equals(t)
+                        || "DiskTool".equals(t) || "DiskAnalyzeTool".equals(t) || "DiskOpsTool".equals(t));
+        boolean hasCpuTool = seq.stream().anyMatch(t ->
+                "SystemLoadTool".equals(t) || "ProcessTool".equals(t) || "ProcessOpsTool".equals(t));
+
+        // 文本意图优先，但「重启服务」类英文要归 service
+        if (input.contains("restart") || input.contains("服务") || input.contains("systemd")
+                || input.contains("nginx") || input.contains("service")) {
+            if (hasServiceTool || !hasDiskTool) {
+                return "service";
+            }
+        }
+        if (input.contains("cpu") || input.contains("负载") || input.contains("进程")) {
             return "cpu";
         }
-        if (seq.stream().anyMatch(t -> "SystemdTool".equals(t) || "ServiceRestartTool".equals(t))) {
+        if (input.contains("磁盘") || input.contains("磁盘满") || input.contains("清理") || input.contains("temp")) {
+            return "disk";
+        }
+        // 工具序列：写类服务工具优先于只读负载工具，避免 SystemLoad+Restart 误判成 cpu
+        if (hasServiceTool) {
             return "service";
+        }
+        if (hasDiskTool) {
+            return "disk";
+        }
+        if (hasCpuTool) {
+            return "cpu";
         }
         return "disk";
     }

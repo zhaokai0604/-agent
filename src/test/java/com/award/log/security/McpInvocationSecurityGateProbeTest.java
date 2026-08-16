@@ -1,5 +1,7 @@
 package com.award.log.security;
 
+import com.award.log.governance.OpsGovernanceProperties;
+import com.award.log.governance.OpsGovernanceService;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.rule.dsl.RuleExpressionEvaluator;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,8 +37,9 @@ class McpInvocationSecurityGateProbeTest {
         AgenticRiskScoreEngine score = new AgenticRiskScoreEngine(catalog, 5, 9.5);
         ReadOnlySurfaceDenylist deny = new ReadOnlySurfaceDenylist("");
 
+        OpsGovernanceService governance = new OpsGovernanceService(new OpsGovernanceProperties());
         gate = new McpInvocationSecurityGate(
-                injection, intent, highRisk, score, catalog, deny, 16384, 48, 131072);
+                injection, intent, highRisk, score, catalog, deny, governance, 16384, 48, 131072);
     }
 
     @Test
@@ -89,5 +92,22 @@ class McpInvocationSecurityGateProbeTest {
         var d = gate.evaluate("CleanTempTool", Map.of("path", "/tmp", "days", 7, "dryRun", true),
                 McpInvocationSecurityGate.McpSecurityProfile.INITIAL_REQUEST);
         assertEquals(McpInvocationSecurityGate.GateDecision.Type.ALLOW, d.getType());
+    }
+
+    @Test
+    void governanceForbidsSshdRestartEvenWhenScoreLow() {
+        var d = gate.evaluate("ServiceRestartTool",
+                Map.of("serviceName", "sshd", "dryRun", true),
+                McpInvocationSecurityGate.McpSecurityProfile.INITIAL_REQUEST);
+        assertEquals(McpInvocationSecurityGate.GateDecision.Type.BLOCK, d.getType());
+        assertEquals("GOVERNANCE_FORBIDDEN", d.getCode());
+    }
+
+    @Test
+    void governanceForcesConfirmOnCoreRestartRealWrite() {
+        var d = gate.evaluate("ServiceRestartTool",
+                Map.of("serviceName", "redis", "dryRun", false, "confirmRestart", true),
+                McpInvocationSecurityGate.McpSecurityProfile.INITIAL_REQUEST);
+        assertEquals(McpInvocationSecurityGate.GateDecision.Type.NEED_CONFIRM, d.getType());
     }
 }

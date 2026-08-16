@@ -378,7 +378,8 @@ class WorkflowExecutionServiceTest {
                 new ObjectMapper(),
                 opsPathPolicy,
                 new TestRuntimePlatform(windows),
-                workflowMemoryService);
+                workflowMemoryService,
+                null);
         ReflectionTestUtils.setField(service, "logCleanDays", 30);
         ReflectionTestUtils.setField(service, "tempCleanDays", 7);
         return service;

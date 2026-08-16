@@ -1,5 +1,6 @@
 package com.award.log.mcp.tools;
 
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.security.OpsPathPolicy;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,15 +40,15 @@ public class ConfigDriftTool {
     ) throws JsonProcessingException {
         long start = System.currentTimeMillis();
         if (configPath == null || configPath.isBlank()) {
-            return buildError("configPath 不能为空", start);
+            return McpToolResponses.error(objectMapper, "configPath 不能为空", start);
         }
         String path = configPath.trim();
         if (!opsPathPolicy.isAllowedConfigCheckPath(path)) {
-            return buildError(opsPathPolicy.rejectReason("配置文件路径"), start);
+            return McpToolResponses.error(objectMapper, opsPathPolicy.rejectReason("配置文件路径"), start);
         }
         Path p = Path.of(path);
         if (!Files.isRegularFile(p)) {
-            return buildError("文件不存在或不可读: " + path, start);
+            return McpToolResponses.error(objectMapper, "文件不存在或不可读: " + path, start);
         }
 
         try {
@@ -65,20 +66,17 @@ public class ConfigDriftTool {
                     ? "已建立基线快照，下次调用可检测漂移" : "与上次快照一致"));
 
             long duration = System.currentTimeMillis() - start;
-            return objectMapper.writeValueAsString(
-                    new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
+            String dataJson = objectMapper.writeValueAsString(body);
+            return drifted
+                    ? McpToolResponses.warn(objectMapper, dataJson, duration)
+                    : McpToolResponses.success(objectMapper, dataJson, duration);
         } catch (Exception e) {
-            return buildError("漂移检测失败: " + e.getMessage(), start);
+            return McpToolResponses.error(objectMapper, "漂移检测失败: " + e.getMessage(), start);
         }
     }
 
     private static String sha256Hex(byte[] bytes) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         return HexFormat.of().formatHex(md.digest(bytes));
-    }
-
-    private String buildError(String msg, long start) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, msg, System.currentTimeMillis() - start, false));
     }
 }

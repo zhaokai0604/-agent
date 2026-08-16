@@ -13,6 +13,10 @@
 #   DB_USER=root
 #   DB_PASSWORD=
 #   AI_API_KEY=
+#   QDRANT_URL=                 # Cloud 或 http://127.0.0.1:6333
+#   QDRANT_API_KEY=             # Cloud 必填
+#   QDRANT_COLLECTION=ops_knowledge
+#   KNOWLEDGE_ENABLED=true
 #   SKIP_NGINX=1          跳过 Nginx 配置
 #   SKIP_DB_CHECK=1       跳过 MariaDB 连通检查
 #
@@ -25,6 +29,10 @@ DB_NAME="${DB_NAME:-log_analysis}"
 DB_USER="${DB_USER:-root}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 AI_API_KEY="${AI_API_KEY:-}"
+QDRANT_URL="${QDRANT_URL:-}"
+QDRANT_API_KEY="${QDRANT_API_KEY:-}"
+QDRANT_COLLECTION="${QDRANT_COLLECTION:-ops_knowledge}"
+KNOWLEDGE_ENABLED="${KNOWLEDGE_ENABLED:-}"
 SKIP_NGINX="${SKIP_NGINX:-0}"
 SKIP_DB_CHECK="${SKIP_DB_CHECK:-0}"
 
@@ -56,6 +64,19 @@ if [[ -z "$AI_API_KEY" ]]; then
   read -rsp "DeepSeek AI_API_KEY（可留空，回车跳过）: " AI_API_KEY
   echo ""
 fi
+if [[ -z "$QDRANT_URL" ]]; then
+  read -rp "Qdrant URL（Cloud/本机；留空则关闭知识库）: " QDRANT_URL
+  QDRANT_URL="${QDRANT_URL%%/}"
+fi
+if [[ -n "$QDRANT_URL" ]]; then
+  KNOWLEDGE_ENABLED="${KNOWLEDGE_ENABLED:-true}"
+  if [[ -z "$QDRANT_API_KEY" && "$QDRANT_URL" == *cloud.qdrant.io* ]]; then
+    read -rsp "Qdrant API Key（Cloud）: " QDRANT_API_KEY
+    echo ""
+  fi
+else
+  KNOWLEDGE_ENABLED="${KNOWLEDGE_ENABLED:-false}"
+fi
 
 cat > "$ENV_FILE" <<EOF
 SPRING_PROFILES_ACTIVE=prod-kylin
@@ -74,9 +95,11 @@ AI_EMBEDDING_MODEL=deepseek-chat
 
 APP_MANAGEMENT_ENABLED=false
 APP_AI_AUDIT_RELAXED_READ=false
+# 浏览器 / Nginx 正式入口 Origin 白名单，多个来源用英文逗号分隔
+APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://threshcore.example.com
 
 AGENT_RUN_AS_USER=award-agent
-AGENT_MIN_PRIVILEGE=false
+AGENT_MIN_PRIVILEGE=true
 AGENT_RUNTIME_ENABLED=true
 AGENT_AUTONOMOUS_ENABLED=true
 AGENT_AWM_ENABLED=true
@@ -90,13 +113,20 @@ OPS_PATROL_INSPECT_ROOTS=/var/log,/tmp,/var/tmp,/var/cache,${INSTALL_ROOT}/logs
 RF_FORCE_HEURISTIC_LOONGARCH=true
 LOG_COLLECTOR_ROOT=/var/log
 
+KNOWLEDGE_ENABLED=${KNOWLEDGE_ENABLED}
+KNOWLEDGE_SEED_ON_STARTUP=true
+KNOWLEDGE_LOCAL_EMBED_FALLBACK=true
+QDRANT_URL=${QDRANT_URL}
+QDRANT_API_KEY=${QDRANT_API_KEY}
+QDRANT_COLLECTION=${QDRANT_COLLECTION}
+
 AWARD_MIDDLEWARE_KAFKA=false
 AWARD_MIDDLEWARE_REDIS=false
 ELASTIC_ENABLED=false
 SERVER_TOMCAT_CONNECTION_TIMEOUT_MS=300000
 EOF
 chmod 600 "$ENV_FILE"
-echo "[OK] 已写入 $ENV_FILE"
+echo "[OK] 已写入 $ENV_FILE（知识库=${KNOWLEDGE_ENABLED} Qdrant=${QDRANT_URL:-未配置}）"
 
 if [[ "$SKIP_DB_CHECK" != "1" ]]; then
   DB_CLI=""

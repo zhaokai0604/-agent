@@ -6,11 +6,11 @@ import com.award.log.agent.awm.LlmWorkflowInductor;
 import com.award.log.agent.awm.OpsWorkflow;
 import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowMemoryService;
-import com.award.log.agent.awm.WorkflowRetriever;
 import com.award.log.common.Result;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,7 +29,6 @@ import java.util.Map;
 public class OpsWorkflowController {
 
     private final WorkflowMemoryService workflowMemoryService;
-    private final WorkflowRetriever workflowRetriever;
     private final WorkflowInductionService workflowInductionService;
     private final FailureInsightService failureInsightService;
     private final LlmWorkflowInductor llmWorkflowInductor;
@@ -51,13 +50,23 @@ public class OpsWorkflowController {
         if (domain == null || domain.isBlank() || "all".equalsIgnoreCase(domain.trim())) {
             workflows = workflowMemoryService.listEnabled();
         } else {
-            int cap = Math.min(50, Math.max(1, limit));
-            workflows = workflowRetriever.retrieve(
-                    domain.trim(),
-                    defaultFindingsForDomain(domain),
-                    q,
-                    cap
-            );
+            // 管理页按域全量列表；Top-K retrieve 仅用于对话注入，避免面板最多只显示 5 条
+            workflows = workflowMemoryService.listByDomain(domain.trim());
+        }
+        if (q != null && !q.isBlank()) {
+            String needle = q.trim().toLowerCase(Locale.ROOT);
+            workflows = workflows.stream()
+                    .filter(w -> {
+                        String blob = ((w.title() == null ? "" : w.title()) + " "
+                                + (w.description() == null ? "" : w.description()) + " "
+                                + (w.workflowId() == null ? "" : w.workflowId())).toLowerCase(Locale.ROOT);
+                        return blob.contains(needle);
+                    })
+                    .toList();
+        }
+        int cap = Math.min(50, Math.max(1, limit));
+        if (workflows.size() > cap) {
+            workflows = workflows.subList(0, cap);
         }
         resp.put("domain", domain == null || domain.isBlank() ? "all" : domain.trim());
         resp.put("workflows", workflows.stream().map(this::enrichWorkflow).toList());
@@ -106,6 +115,30 @@ public class OpsWorkflowController {
         return Result.success(resp);
     }
 
+    /**
+     * 工作台前端本地拦截时可上报，避免「前端拦了、后端从不落库」导致安全教训永远为空。
+     */
+    @PostMapping("/failure-insights/capture")
+    public Result<Map<String, Object>> captureFailureInsight(@RequestBody Map<String, Object> body) {
+        String userInput = str(body.get("userInput"));
+        String securityCode = str(body.get("securityCode"));
+        String toolName = str(body.get("toolName"));
+        String detail = str(body.get("detail"));
+        if (detail == null || detail.isBlank()) {
+            detail = "workbench client capture";
+        }
+        boolean captured = failureInsightService.captureFromClient(userInput, securityCode, toolName, detail);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("captured", captured);
+        resp.put("enabled", failureInsightService.isEnabled());
+        resp.put("storedCount", failureInsightService.countStored());
+        return Result.success(resp);
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : String.valueOf(o).trim();
+    }
+
     @PostMapping("/induce-from-audit")
     public Result<Map<String, Object>> induceFromAudit(@RequestParam(defaultValue = "20") int limit) {
         WorkflowInductionService.InductionResult result =
@@ -116,20 +149,11 @@ public class OpsWorkflowController {
         resp.put("skippedNotEligible", result.skippedNotEligible());
         resp.put("skippedDuplicate", result.skippedDuplicate());
         resp.put("skippedShortTools", result.skippedShortTools());
+        resp.put("skippedDomainFull", result.skippedDomainFull());
+        resp.put("upsertFailed", result.upsertFailed());
+        resp.put("awmEnabled", result.awmEnabled());
         resp.put("hint", result.hintZh());
         resp.put("storedCount", workflowMemoryService.countEnabled());
         return Result.success(resp);
-    }
-
-    private static List<String> defaultFindingsForDomain(String domain) {
-        if (domain == null || domain.isBlank()) {
-            return List.of();
-        }
-        return switch (domain.trim().toLowerCase(Locale.ROOT)) {
-            case "disk" -> List.of("DISK_PRESSURE");
-            case "cpu" -> List.of("CPU_HIGH");
-            case "service" -> List.of("FAILED_SERVICE");
-            default -> List.of();
-        };
     }
 }

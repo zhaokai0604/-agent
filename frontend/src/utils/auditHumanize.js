@@ -1,7 +1,7 @@
 import { mcpToolDisplayName } from './mcpToolsMeta.js'
 
 const KIND_LABEL = {
-  access: '登录/访问',
+  access: '访问',
   dialogue: '对话',
   tool: '工具调用',
   remediation: '处置修复',
@@ -15,12 +15,18 @@ const CHANNEL_LABEL = {
   CHAT: '运维对话',
   PATROL: '自动巡检',
   RUNBOOK: '运维剧本',
-  MCP: '工具台',
-  TOOL: '工具台'
+  MCP: '工具调用',
+  TOOL: '工具调用'
 }
 
 function upper(v) {
   return String(v || '').trim().toUpperCase()
+}
+
+function cleanText(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 export function auditKindLabel(kind) {
@@ -53,7 +59,7 @@ export function formatDurationMs(ms) {
 export function humanOutcome(row = {}) {
   if (row.auditKind === 'access' || row.httpStatus != null) {
     const s = Number(row.httpStatus ?? row.status)
-    if (s >= 500) return '服务出错'
+    if (s >= 500) return '服务异常'
     if (s === 403) return '无权限'
     if (s === 401) return '未登录'
     if (s >= 400) return '请求失败'
@@ -62,18 +68,11 @@ export function humanOutcome(row = {}) {
   }
 
   const code = upper(row.decision || row.securityOutcome || '')
-  if (code.includes('REJECT') || code.includes('BLOCK') || code.includes('DENY')) {
-    return '已拦截'
-  }
-  if (code.includes('NEED_CONFIRM') || code === 'CONFIRM') {
-    return '等待您确认'
-  }
-  if (code.includes('DRY') || code.includes('PREVIEW') || code.includes('SIMULAT')) {
-    return '仅预览（未改系统）'
-  }
-  if (code.includes('NOOP')) {
-    return '无需操作'
-  }
+  if (code.includes('REJECT') || code.includes('BLOCK') || code.includes('DENY')) return '已拦截'
+  if (code.includes('NEED_CONFIRM') || code === 'CONFIRM') return '待确认'
+  if (code.includes('DRY') || code.includes('PREVIEW') || code.includes('SIMULAT')) return '仅预览'
+  if (code.includes('NOOP')) return '无需操作'
+  if (code.includes('WARN')) return '完成但有告警'
   if (code.includes('EXECUTE') || code === 'PASS' || code === 'ALLOW') {
     if (row.executionOk === false) return '执行未成功'
     return '已执行'
@@ -86,72 +85,76 @@ export function humanOutcome(row = {}) {
 
 export function outcomeTagType(row = {}) {
   const label = humanOutcome(row)
-  if (label.includes('拦截') || label.includes('失败') || label.includes('出错') || label.includes('无权限')) return 'danger'
-  if (label.includes('确认') || label.includes('预览')) return 'warning'
+  if (label.includes('拦截') || label.includes('失败') || label.includes('异常') || label.includes('无权限')) return 'danger'
+  if (label.includes('确认') || label.includes('预览') || label.includes('告警')) return 'warning'
   if (label.includes('成功') || label.includes('已执行')) return 'success'
   return 'info'
 }
 
 function cleanSummaryText(text) {
-  const s = String(text || '').trim()
-  if (!s) return ''
-  return s
+  return cleanText(text)
     .replace(/^status=\d+,\s*/i, '')
     .replace(/durationMs=\d+/gi, '')
-    .replace(/\s{2,}/g, ' ')
     .slice(0, 280)
 }
 
 export function narrateAudit(row = {}) {
-  if (!row || typeof row !== 'object') return '请选择一条记录，看看当时发生了什么。'
+  if (!row || typeof row !== 'object') return '请选择一条记录查看详情'
 
   const when = row.createdAt
     ? (() => {
         const d = new Date(row.createdAt)
         return Number.isNaN(d.getTime()) ? String(row.createdAt) : d.toLocaleString('zh-CN')
       })()
-    : '某时'
-  const who = row.operatorUserId ? `用户「${row.operatorUserId}」` : '有人'
+    : '未知时间'
+  const who = row.operatorUserId ? `操作人 ${row.operatorUserId}` : '操作人未知'
   const via = humanChannel(row.requestChannel || row.channel)
   const outcome = humanOutcome(row)
   const tool = humanToolName(row.toolName)
-  const target = String(row.targetName || '').trim()
+  const target = cleanText(row.targetName || '')
   const dur = formatDurationMs(row.durationMs)
-  const durPart = dur ? `，前后大约花了 ${dur}` : ''
+  const durPart = dur ? `，耗时 ${dur}` : ''
 
   if (row.auditKind === 'access') {
-    const ip = row.remoteIp ? `，来自 ${row.remoteIp}` : ''
-    const role = row.userRole != null && row.userRole !== '' ? `（角色 ${row.userRole}）` : ''
-    return `${when}，${who}${role}通过网页访问了「${target || '某接口'}」${ip}。结果：${outcome}${durPart}。`
+    const ip = row.remoteIp ? `，来源 IP ${row.remoteIp}` : ''
+    const role = row.userRole != null && row.userRole !== '' ? `，角色 ${row.userRole}` : ''
+    return `${when}，${who}${role} 通过 HTTP 访问 ${target || '接口'}${ip}。结果：${outcome}${durPart}。`
   }
 
   if (row.auditKind === 'block' || String(outcome).includes('拦截')) {
     const why = cleanSummaryText(row.resultSummary || row.effectSummary || row.userInput)
-    return `${when}，${who}想通过${via}${tool ? `调用「${tool}」` : '做一次操作'}，但被安全策略拦住了${why ? `：${why}` : ''}。`
+    return `${when}，${who} 通过 ${via}${tool ? ` 调用 ${tool}` : '发起操作'}，被安全策略拦截${why ? `。原因：${why}` : ''}。`
   }
 
   if (row.auditKind === 'confirm' || String(outcome).includes('确认')) {
-    return `${when}，系统已给出处置计划${tool ? `（涉及「${tool}」）` : ''}，还需要您在对话里点「确认执行」后才会真正改动系统。`
+    return `${when}，系统已生成待确认方案${tool ? `（工具：${tool}）` : ''}，需要在对话中确认后执行。`
   }
 
   if (row.auditKind === 'dialogue') {
     const ask = cleanSummaryText(row.userInput)
     const ans = cleanSummaryText(row.resultSummary || row.effectSummary)
-    return `${when}，${who}在运维对话里提问${ask ? `：「${ask}」` : ''}。${ans ? `助手结论：${ans}。` : `结果：${outcome}。`}${durPart ? durPart.replace(/^，/, '') + '。' : ''}`
+    return `${when}，${who} 发起运维对话${ask ? `：${ask}` : ''}。${ans ? `结论：${ans}。` : `结果：${outcome}。`}${dur ? `耗时 ${dur}。` : ''}`
   }
 
   const action = tool
-    ? `调用了「${tool}」`
+    ? `调用工具 ${tool}`
     : target
-      ? `操作了「${target}」`
-      : '做了一次运维操作'
+      ? `操作目标 ${target}`
+      : '执行运维动作'
   const effect = cleanSummaryText(row.effectSummary || row.resultSummary)
-  return `${when}，${who}经${via}${action}。结果：${outcome}${durPart}${effect ? `。补充：${effect}` : ''}。`
+  return `${when}，${who} 通过 ${via} ${action}。结果：${outcome}${durPart}${effect ? `。摘要：${effect}` : ''}。`
 }
 
 export function humanStepTitle(step, index = 0) {
   if (!step || typeof step !== 'object') return `第 ${index + 1} 步`
-  const phase = String(step.phase || step.title || step.name || '').trim()
+  const rawPhase = String(step.phase || step.title || step.name || '').trim()
+  const phase = rawPhase.toLowerCase()
+  if (phase === 'cot') {
+    const detail = String(step.detail || step.message || step.summary || '')
+    const matched = detail.match(/^\[Step\s*\d+\s*-\s*([^\]]+)\]/i)
+    if (matched?.[1]) return matched[1].trim()
+    return '分析推理'
+  }
   const map = {
     request: '发起请求',
     identity: '身份核对',
@@ -164,11 +167,10 @@ export function humanStepTitle(step, index = 0) {
     gate: '安全门禁',
     reply: '生成回复',
     rag: '检索知识',
-    think: '分析判断'
+    think: '分析判断',
+    cot: '分析推理'
   }
-  const key = phase.toLowerCase()
-  if (map[key]) return map[key]
-  if (map[upper(phase).toLowerCase()]) return map[upper(phase).toLowerCase()]
+  if (map[phase]) return map[phase]
   if (/[\u4e00-\u9fff]/.test(phase)) return phase
   return phase || `第 ${index + 1} 步`
 }
@@ -181,9 +183,9 @@ export function humanStepBody(step) {
   if (step.detail && typeof step.detail === 'object') {
     const bits = []
     if (step.detail.toolName) bits.push(`工具：${humanToolName(step.detail.toolName)}`)
-    if (step.detail.decision) bits.push(`判定：${step.detail.decision}`)
+    if (step.detail.decision) bits.push(`判断：${step.detail.decision}`)
     if (step.detail.path) bits.push(`路径：${step.detail.path}`)
-    if (bits.length) return bits.join('；')
+    if (bits.length) return bits.join('，')
     return JSON.stringify(step.detail, null, 2)
   }
   const { phase, title, name, ...rest } = step

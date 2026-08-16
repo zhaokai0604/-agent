@@ -54,9 +54,9 @@ class LogAnalysisServiceImplTest {
     }
 
     @Test
-    void cancelAnalysisShouldFailTaskAndPurgeArtifacts() {
+    void cancelAnalysisShouldCancelTaskAndPurgeArtifacts() {
         service.cancelAnalysis("task-2");
-        verify(taskManager).failTask("task-2", "任务被用户取消");
+        verify(taskManager).cancelTask("task-2", "任务被用户取消");
         verify(artifactCleaner).purgeTaskArtifacts("task-2");
     }
 

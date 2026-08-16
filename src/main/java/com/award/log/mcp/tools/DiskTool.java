@@ -3,7 +3,7 @@ package com.award.log.mcp.tools;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.mcp.McpToolsConfig;
-import com.award.log.mcp.ToolResult;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -296,12 +296,10 @@ public class DiskTool extends AbstractCommandExecutor {
     }
 
     private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        ToolResult<String> result = ToolResult.success(data, duration, cacheHit);
-        return objectMapper.writeValueAsString(result);
+        return McpToolResponses.success(objectMapper, data, duration);
     }
 
     private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        ToolResult<String> result = ToolResult.error(error, normalizeDurationMs(duration));
-        return objectMapper.writeValueAsString(result);
+        return McpToolResponses.error(objectMapper, error, duration);
     }
 }

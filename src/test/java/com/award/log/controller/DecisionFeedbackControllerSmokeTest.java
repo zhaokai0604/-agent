@@ -1,9 +1,11 @@
 package com.award.log.controller;
 
 import com.award.log.mapper.DecisionFeedbackMapper;
+import com.award.log.mapper.DecisionLogMapper;
 import com.award.log.model.DecisionFeedback;
 import com.award.log.security.RequestUserResolver;
 import com.award.log.service.impl.ContinuousLearningService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,6 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class DecisionFeedbackControllerSmokeTest {
 
     @Mock private DecisionFeedbackMapper decisionFeedbackMapper;
+    @Mock private DecisionLogMapper decisionLogMapper;
     @Mock private ContinuousLearningService continuousLearningService;
     @Mock private RequestUserResolver requestUserResolver;
 
@@ -35,7 +38,11 @@ class DecisionFeedbackControllerSmokeTest {
     @BeforeEach
     void setUp() {
         DecisionFeedbackController controller = new DecisionFeedbackController(
-                decisionFeedbackMapper, continuousLearningService, requestUserResolver);
+                decisionFeedbackMapper,
+                decisionLogMapper,
+                continuousLearningService,
+                requestUserResolver,
+                new ObjectMapper());
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

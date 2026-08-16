@@ -30,6 +30,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -69,6 +71,9 @@ public class AssistantOrchestrator {
 
     @Autowired(required = false)
     private OpsAutoRemediationService opsAutoRemediationService;
+
+    @Autowired(required = false)
+    private RemediationEffectEvaluator remediationEffectEvaluator;
 
     public AssistantOrchestrator(
             DiskTool diskTool,
@@ -157,6 +162,10 @@ public class AssistantOrchestrator {
         }
 
         boolean forceExecute = resolveForceExecute(userMessage);
+        Map<String, Object> metricsBefore = null;
+        if (forceExecute && remediationEffectEvaluator != null) {
+            metricsBefore = remediationEffectEvaluator.captureMetrics();
+        }
         StringBuilder md = new StringBuilder();
         md.append("## 运维闭环报告\n\n");
 
@@ -230,8 +239,18 @@ public class AssistantOrchestrator {
             md.append("### 验证\n\n");
             md.append(summarizeDisk(verifyDisk)).append("\n\n");
 
+            if (anyExecuted) {
+                appendEffectSection(md, metricsBefore, 1);
+            }
+
             if (!anyExecuted) {
                 md.append("\n").append(OpsReportFormat.previewPendingFooter("自动清理")).append("\n");
+                md.append(OpsReportFormat.remediationPlanMarkdown(List.of(
+                        "预览清理临时目录（Dry-Run）",
+                        "预览旧日志清理（Dry-Run）",
+                        "再次采集磁盘占用做验证",
+                        "写操作须回复「确认执行」后落地"
+                )));
             } else {
                 md.append("\n").append(OpsReportFormat.executedFooter()).append("\n");
             }
@@ -330,7 +349,25 @@ public class AssistantOrchestrator {
         if (extraTools != null) {
             tools.addAll(extraTools);
         }
-        meta.put("toolsUsed", List.copyOf(tools));
+        List<String> plannedTools = List.copyOf(tools);
+        boolean writeConfirmed = workflowRun != null && workflowRun.anyExecuted();
+        meta.put("toolsUsed", plannedTools);
+        meta.put("plannedTools", plannedTools);
+        meta.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
+        meta.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
+        meta.put("planPhase", AgentSkillPlan.planPhase(writeConfirmed, plannedTools));
+        meta.put("awaitingConfirm", !writeConfirmed && AgentSkillPlan.hasWriteTools(plannedTools));
+        meta.put("writeConfirmed", writeConfirmed);
+        meta.put("writeToolsMounted", writeConfirmed);
+        meta.put("executionState", AgentExecutionState.build(
+                "ORCHESTRATE",
+                writeConfirmed,
+                writeConfirmed,
+                plannedTools,
+                AgentSkillPlan.planPhase(writeConfirmed, plannedTools),
+                traceId,
+                securityOutcome,
+                workflowHit));
         if (workflowRun != null) {
             meta.put("awmHandled", workflowRun.handled());
             meta.put("awmStepsOk", workflowRun.successfulStepCount());
@@ -393,7 +430,7 @@ public class AssistantOrchestrator {
         if (OpsPathExtractSupport.bestPath(userMessage).isEmpty()) {
             return appendMultiDriveTempCleanup(md, steps, forceExecute, userMessage);
         }
-        String defaultPath = runtimePlatform.isWindows() ? "C:\\Windows\\Temp" : "/tmp";
+        String defaultPath = defaultTempRoot();
         String path = OpsPathExtractSupport.bestPath(userMessage).orElse(defaultPath);
         boolean removeDirectory = OpsPathExtractSupport.isCleanableSubDirectory(opsPathPolicy, path);
         int days = (forceExecute || removeDirectory) ? 0 : tempCleanDays;
@@ -616,6 +653,15 @@ public class AssistantOrchestrator {
             meta.put("traceId", traceId);
             meta.put("securityOutcome", "PREVIEW");
             meta.put("replyMode", "ORCHESTRATE");
+            meta.put("executionState", AgentExecutionState.build(
+                    "ORCHESTRATE",
+                    false,
+                    false,
+                    List.of("SystemLoadTool", "DiskTool", "DiskAnalyzeTool", "PortHealthTool"),
+                    "DIAGNOSE",
+                    traceId,
+                    "PREVIEW",
+                    null));
             return new RunResult(preview.toString(), traceId, meta);
         }
 
@@ -623,6 +669,9 @@ public class AssistantOrchestrator {
         auditRecorder.addCot(steps, 2, "感知", "加载巡检待确认方案 " + proposalId);
         auditRecorder.addCot(steps, 3, "推理", String.valueOf(pending.getOrDefault("summary", "")));
 
+        Map<String, Object> metricsBefore = remediationEffectEvaluator != null
+                ? remediationEffectEvaluator.captureMetrics()
+                : null;
         Map<String, Object> exec = opsAutoRemediationService.confirmPendingFromAssistant(proposalId);
         boolean ok = Boolean.TRUE.equals(exec.get("success"));
         String resultSummary = String.valueOf(exec.getOrDefault("resultSummary", summarizeExecutionActions(exec.get("actions"))));
@@ -639,6 +688,8 @@ public class AssistantOrchestrator {
         }
         if (!ok) {
             md.append("\n错误：").append(exec.getOrDefault("error", "未知")).append("\n");
+        } else {
+            appendEffectSection(md, metricsBefore, 1);
         }
 
         auditRecorder.record(traceId, userMessage, intentRisk.name(), ok ? "EXECUTED" : "FAILED",
@@ -650,6 +701,15 @@ public class AssistantOrchestrator {
         meta.put("securityOutcome", ok ? "EXECUTED" : "FAILED");
         meta.put("replyMode", "ORCHESTRATE");
         meta.put("resultSummary", resultSummary);
+        meta.put("executionState", AgentExecutionState.build(
+                "ORCHESTRATE",
+                ok,
+                ok,
+                List.of("SystemLoadTool", "DiskTool"),
+                ok ? "EXECUTE" : "DIAGNOSE",
+                traceId,
+                ok ? "EXECUTED" : "FAILED",
+                null));
         return new RunResult(md.toString(), traceId, meta);
     }
 
@@ -710,6 +770,10 @@ public class AssistantOrchestrator {
         try {
             LinkedHashSet<String> toolsInvoked = new LinkedHashSet<>();
             boolean forceExecute = resolveForceExecute(userMessage);
+            Map<String, Object> metricsBefore = null;
+            if (forceExecute && remediationEffectEvaluator != null) {
+                metricsBefore = remediationEffectEvaluator.captureMetrics();
+            }
             WorkflowExecutionService.WorkflowRunResult workflowRun = executeAwmWorkflow(
                     workflowHit, traceId, userMessage, surface, forceExecute, steps,
                     buildCpuWorkflowVariables(userMessage));
@@ -754,6 +818,15 @@ public class AssistantOrchestrator {
                 md.append("### 建议\n\n");
                 md.append("- 若需重启白名单内非关键服务，请说明服务名并带「重启」（如：重启 nginx）。\n");
                 md.append("- 允许重启列表见配置 `agent.service-restart.allowlist`。\n\n");
+                md.append(OpsReportFormat.remediationPlanMarkdown(List.of(
+                        "采集系统负载与高占用进程",
+                        "必要时预览白名单服务重启",
+                        "写操作须回复「确认执行」后落地"
+                )));
+            }
+
+            if (anyExecuted) {
+                appendEffectSection(md, metricsBefore, 1);
             }
 
             String securityOutcome = resolveSecurityOutcome(anyExecuted, workflowRun);
@@ -816,7 +889,8 @@ public class AssistantOrchestrator {
     private String buildReadOnlyReply(String traceId) {
         return "## 只读模式\n\n"
                 + "当前会话为只读模式，本轮不会执行清理、重启、删除等写操作。"
-                + "请改成只做分析，或在需要真实处置时切换到可执行工具面。\n";
+                + "请改成只做分析，或在需要真实处置时切换到可执行工具面。\n\n"
+                + "- 追踪 ID：`" + (traceId == null ? "-" : traceId) + "`\n";
     }
 
     private String defaultLogRoot() {
@@ -824,7 +898,18 @@ public class AssistantOrchestrator {
     }
 
     private String defaultTempRoot() {
-        return runtimePlatform.isWindows() ? "C:\\Windows\\Temp" : "/tmp";
+        if (!runtimePlatform.isWindows()) {
+            return "/tmp";
+        }
+        String runtimeTemp = System.getProperty("java.io.tmpdir", "").trim();
+        if (!runtimeTemp.isEmpty()) {
+            return runtimeTemp;
+        }
+        String envTemp = System.getenv("TEMP");
+        if (envTemp != null && !envTemp.isBlank()) {
+            return envTemp.trim();
+        }
+        return "C:\\Temp";
     }
 
     private Map<String, Object> buildDiskWorkflowVariables(String userMessage, boolean forceExecute) {
@@ -882,9 +967,45 @@ public class AssistantOrchestrator {
         }
         List<String> allowedRoots = opsPathPolicy.snapshotTempCleanRoots();
         if (!allowedRoots.isEmpty()) {
-            return allowedRoots.get(0);
+            return preferredExistingTempRoot(allowedRoots);
         }
         return defaultTempRoot();
+    }
+
+    private String preferredExistingTempRoot(List<String> allowedRoots) {
+        String fallback = allowedRoots.get(0);
+        String runtimeTemp = defaultTempRoot();
+        for (String candidate : allowedRoots) {
+            if (sameWindowsPath(candidate, runtimeTemp) && isExistingDirectory(candidate)) {
+                return candidate;
+            }
+        }
+        for (String candidate : allowedRoots) {
+            if (!candidate.toLowerCase(Locale.ROOT).contains("\\windows\\temp")
+                    && !candidate.toLowerCase(Locale.ROOT).contains("/windows/temp")
+                    && isExistingDirectory(candidate)) {
+                return candidate;
+            }
+        }
+        return fallback;
+    }
+
+    private boolean isExistingDirectory(String path) {
+        if (path == null || path.isBlank()) {
+            return false;
+        }
+        try {
+            return Files.isDirectory(Path.of(path));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean sameWindowsPath(String a, String b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.trim().replace('\\', '/').equalsIgnoreCase(b.trim().replace('\\', '/'));
     }
 
     private static boolean mentionsTemp(String msg) {
@@ -1134,6 +1255,20 @@ public class AssistantOrchestrator {
         }
         OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
         return ctx != null && ctx.isUserConfirmedWrite();
+    }
+
+    private void appendEffectSection(StringBuilder md, Map<String, Object> metricsBefore, int remediationsExecuted) {
+        if (remediationEffectEvaluator == null || md == null || remediationsExecuted <= 0) {
+            return;
+        }
+        Map<String, Object> before = metricsBefore != null
+                ? metricsBefore
+                : remediationEffectEvaluator.captureMetrics();
+        Map<String, Object> effect = remediationEffectEvaluator.evaluate(
+                before,
+                remediationEffectEvaluator.captureMetrics(),
+                remediationsExecuted);
+        md.append(OpsReportFormat.effectSectionMarkdown(effect));
     }
 
     private static String formatBytes(String raw) {

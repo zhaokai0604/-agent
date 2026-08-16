@@ -123,14 +123,33 @@ class UnifiedAssistantServiceTest {
     }
 
     @Test
+    void previewAgentStateShouldExposeExecutionContract() {
+        when(opsIntentRouter.forceRemediate(anyString())).thenReturn(false);
+
+        Map<String, Object> preview = service.previewAgentState("check disk", List.of(), true, false);
+
+        assertTrue(preview.containsKey("executionState"));
+        assertTrue(preview.containsKey("plannedTools"));
+        assertTrue(preview.containsKey("observeTools"));
+        assertTrue(preview.containsKey("pendingWriteTools"));
+        assertEquals(Boolean.FALSE, preview.get("writeConfirmed"));
+    }
+
+    @Test
     void orchestratedStreamKeepsSecurityContextInExecutionThread() {
         when(promptInjectionGuard.isInjection(anyString())).thenReturn(false);
         when(highRiskCommandDetector.isHighRiskCommand(anyString())).thenReturn(false);
         when(intentRiskFilter.evaluate(anyString())).thenReturn(RiskLevel.LOW);
         when(opsIntentRouter.forceRemediate(anyString())).thenReturn(false);
+        when(opsRuntimeService.shouldOrchestrate(anyString())).thenReturn(true);
+        when(opsIntentRouter.resolveFromContext(anyString(), anyList()))
+                .thenReturn(OpsIntentRouter.Playbook.PATROL_AUTOMATION);
         when(toolSurfaceResolver.resolve(anyString(), eq(RiskLevel.LOW))).thenReturn(McpToolSurface.FULL);
-        when(opsRuntimeService.shouldOrchestrateFromContext(anyString(), anyList())).thenReturn(true);
-        when(opsRuntimeService.runFromContext(anyString(), anyList(), eq(McpToolSurface.FULL), eq(RiskLevel.LOW)))
+        when(opsRuntimeService.runPlaybook(
+                eq(OpsIntentRouter.Playbook.PATROL_AUTOMATION),
+                anyString(),
+                eq(McpToolSurface.FULL),
+                eq(RiskLevel.LOW)))
                 .thenAnswer(invocation -> {
                     OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
                     assertNotNull(ctx);

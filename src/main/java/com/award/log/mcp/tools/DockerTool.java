@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -67,11 +68,11 @@ public class DockerTool extends AbstractCommandExecutor {
     ) throws JsonProcessingException {
         long start = System.currentTimeMillis();
         if (containerName == null || containerName.isBlank()) {
-            return buildError("容器名称不能为空", start);
+            return McpToolResponses.error(objectMapper,"容器名称不能为空", start);
         }
         String name = containerName.trim();
         if (!CONTAINER_NAME.matcher(name).matches()) {
-            return buildError("容器名称格式不合法", start);
+            return McpToolResponses.error(objectMapper,"容器名称格式不合法", start);
         }
 
         List<String> cmd = List.of(
@@ -91,17 +92,17 @@ public class DockerTool extends AbstractCommandExecutor {
     ) throws JsonProcessingException {
         long start = System.currentTimeMillis();
         if (containerName == null || containerName.isBlank()) {
-            return buildError("容器名称不能为空", start);
+            return McpToolResponses.error(objectMapper,"容器名称不能为空", start);
         }
         String name = containerName.trim();
         if (!CONTAINER_NAME.matcher(name).matches()) {
-            return buildError("容器名称格式不合法", start);
+            return McpToolResponses.error(objectMapper,"容器名称格式不合法", start);
         }
         com.award.log.security.ChatWriteExecutionPolicy.ResolvedRestart write =
                 com.award.log.security.ChatWriteExecutionPolicy.resolveRestart(dryRun, confirmRestart);
         boolean isDryRun = write.dryRun();
         if (!isDryRun && !write.confirmRestart()) {
-            return buildError("真实重启需 dryRun=false 且 confirmRestart=true", start);
+            return McpToolResponses.error(objectMapper,"真实重启需 dryRun=false 且 confirmRestart=true", start);
         }
         List<String> cmd = List.of("docker", "restart", name);
         if (isDryRun) {
@@ -110,15 +111,14 @@ public class DockerTool extends AbstractCommandExecutor {
             body.put("plan", String.join(" ", cmd));
             body.put("containerName", name);
             long duration = System.currentTimeMillis() - start;
-            return objectMapper.writeValueAsString(
-                    new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
+            return McpToolResponses.success(objectMapper, objectMapper.writeValueAsString(body), duration);
         }
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 60_000L);
         if (isSimulatedDryRun(r)) {
-            return buildError("全局演练模式已启用：docker restart 被模拟执行，容器未实际重启", start);
+            return McpToolResponses.error(objectMapper,"全局演练模式已启用：docker restart 被模拟执行，容器未实际重启", start);
         }
         if (!r.success()) {
-            return buildError("docker restart failed: " + (r.error() != null ? r.error() : r.output()), start);
+            return McpToolResponses.error(objectMapper,"docker restart failed: " + (r.error() != null ? r.error() : r.output()), start);
         }
         return buildWriteSuccess("docker-restart", name, cmd, r, start);
     }
@@ -132,17 +132,17 @@ public class DockerTool extends AbstractCommandExecutor {
     ) throws JsonProcessingException {
         long start = System.currentTimeMillis();
         if (containerName == null || containerName.isBlank()) {
-            return buildError("容器名称不能为空", start);
+            return McpToolResponses.error(objectMapper,"容器名称不能为空", start);
         }
         String name = containerName.trim();
         if (!CONTAINER_NAME.matcher(name).matches()) {
-            return buildError("容器名称格式不合法", start);
+            return McpToolResponses.error(objectMapper,"容器名称格式不合法", start);
         }
         com.award.log.security.ChatWriteExecutionPolicy.ResolvedStop write =
                 com.award.log.security.ChatWriteExecutionPolicy.resolveStop(dryRun, confirmStop);
         boolean isDryRun = write.dryRun();
         if (!isDryRun && !write.confirmStop()) {
-            return buildError("真实停止需 dryRun=false 且 confirmStop=true", start);
+            return McpToolResponses.error(objectMapper,"真实停止需 dryRun=false 且 confirmStop=true", start);
         }
         List<String> cmd = List.of("docker", "stop", name);
         if (isDryRun) {
@@ -151,15 +151,14 @@ public class DockerTool extends AbstractCommandExecutor {
             body.put("plan", String.join(" ", cmd));
             body.put("containerName", name);
             long duration = System.currentTimeMillis() - start;
-            return objectMapper.writeValueAsString(
-                    new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
+            return McpToolResponses.success(objectMapper, objectMapper.writeValueAsString(body), duration);
         }
         CommandResult r = minPrivilegeExecutor.executeSafely(cmd, 60_000L);
         if (isSimulatedDryRun(r)) {
-            return buildError("全局演练模式已启用：docker stop 被模拟执行，容器未实际停止", start);
+            return McpToolResponses.error(objectMapper,"全局演练模式已启用：docker stop 被模拟执行，容器未实际停止", start);
         }
         if (!r.success()) {
-            return buildError("docker stop failed: " + (r.error() != null ? r.error() : r.output()), start);
+            return McpToolResponses.error(objectMapper,"docker stop failed: " + (r.error() != null ? r.error() : r.output()), start);
         }
         return buildWriteSuccess("docker-stop", name, cmd, r, start);
     }
@@ -179,7 +178,7 @@ public class DockerTool extends AbstractCommandExecutor {
             case "inspect" -> inspectDockerContainer(containerName);
             case "restart" -> restartDockerContainer(containerName, dryRun, confirmRestart);
             case "stop" -> stopDockerContainer(containerName, dryRun, confirmStop);
-            default -> buildError("未知 operation: " + operation + "；可选 list|inspect|restart|stop",
+            default -> McpToolResponses.error(objectMapper, "未知 operation: " + operation + "；可选 list|inspect|restart|stop",
                     System.currentTimeMillis());
         };
     }
@@ -204,8 +203,15 @@ public class DockerTool extends AbstractCommandExecutor {
             }
         }
         long duration = System.currentTimeMillis() - start;
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(ok, objectMapper.writeValueAsString(body), ok ? null : "docker command failed", duration, false));
+        String dataJson = objectMapper.writeValueAsString(body);
+        if (ok) {
+            return McpToolResponses.success(objectMapper, dataJson, duration);
+        }
+        String errMsg = r.error() != null ? r.error() : "docker command failed";
+        if (r.output() != null && !r.output().isBlank()) {
+            return McpToolResponses.warn(objectMapper, dataJson, duration);
+        }
+        return McpToolResponses.error(objectMapper, errMsg, start);
     }
 
     private String truncate(String s) {
@@ -224,16 +230,10 @@ public class DockerTool extends AbstractCommandExecutor {
             body.put("output", truncate(r.output()));
         }
         long duration = System.currentTimeMillis() - start;
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(true, objectMapper.writeValueAsString(body), null, duration, false));
+        return McpToolResponses.success(objectMapper, objectMapper.writeValueAsString(body), duration);
     }
 
     private boolean isSimulatedDryRun(CommandResult result) {
         return result != null && result.output() != null && result.output().contains("[DRY-RUN]");
-    }
-
-    private String buildError(String msg, long start) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, msg, System.currentTimeMillis() - start, false));
     }
 }

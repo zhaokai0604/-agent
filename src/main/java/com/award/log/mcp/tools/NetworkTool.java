@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -61,7 +62,7 @@ public class NetworkTool extends AbstractCommandExecutor {
         long startTime = System.currentTimeMillis();
 
         if (target == null || target.isBlank()) {
-            return buildErrorResponse("目标地址不能为空", startTime);
+            return McpToolResponses.error(objectMapper, "目标地址不能为空", startTime);
         }
 
         String targetHost = target.trim();
@@ -71,25 +72,39 @@ public class NetworkTool extends AbstractCommandExecutor {
         log.info("开始网络诊断，目标: {}, 类型: {}, 次数: {}", targetHost, diagnoseType, maxCount);
 
         try {
-            String dataJson;
+            long duration = System.currentTimeMillis() - startTime;
             if ("traceroute".equals(diagnoseType) || "trace".equals(diagnoseType)) {
-                dataJson = runTraceroute(targetHost, maxCount);
-            } else {
-                dataJson = runPing(targetHost, maxCount);
+                TracerouteResult tr = runTraceroute(targetHost, maxCount);
+                duration = System.currentTimeMillis() - startTime;
+                log.info("网络诊断完成，目标: {}, 类型: {}, 耗时: {}ms", targetHost, diagnoseType, duration);
+                if (tr.commandFailed()) {
+                    return McpToolResponses.error(objectMapper, "traceroute 命令执行失败", startTime);
+                }
+                return McpToolResponses.success(objectMapper, tr.dataJson(), duration);
             }
 
-            long duration = System.currentTimeMillis() - startTime;
+            PingResult pr = runPing(targetHost, maxCount);
+            duration = System.currentTimeMillis() - startTime;
             log.info("网络诊断完成，目标: {}, 类型: {}, 耗时: {}ms", targetHost, diagnoseType, duration);
-
-            return buildSuccessResponse(dataJson, duration, false);
+            if (pr.commandFailed()) {
+                return McpToolResponses.error(objectMapper, "ping 命令执行失败", startTime);
+            }
+            if (!pr.pingHealthy()) {
+                return McpToolResponses.warn(objectMapper, pr.dataJson(), duration);
+            }
+            return McpToolResponses.success(objectMapper, pr.dataJson(), duration);
 
         } catch (Exception e) {
             log.error("执行网络诊断时发生异常", e);
-            return buildErrorResponse("执行网络诊断时发生异常: " + e.getMessage(), startTime);
+            return McpToolResponses.error(objectMapper, "执行网络诊断时发生异常: " + e.getMessage(), startTime);
         }
     }
 
-    private String runPing(String target, int count) throws JsonProcessingException {
+    private record PingResult(String dataJson, boolean commandFailed, boolean pingHealthy) {}
+
+    private record TracerouteResult(String dataJson, boolean commandFailed) {}
+
+    private PingResult runPing(String target, int count) {
         AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
                 OsRuntime.isWindows()
                         ? List.of("ping", "-n", String.valueOf(count), target)
@@ -136,16 +151,18 @@ public class NetworkTool extends AbstractCommandExecutor {
             }
         }
 
-        boolean success = received > 0 && packetLoss < 100.0;
+        boolean pingHealthy = received > 0 && packetLoss < 100.0;
+        boolean commandFailed = blob.isBlank() && !result.success();
 
-        return String.format(
+        String dataJson = String.format(
             "{\"type\":\"ping\",\"target\":\"%s\",\"transmitted\":%d,\"received\":%d," +
             "\"packetLossPercent\":%.1f,\"avgLatencyMs\":%.2f,\"success\":%s}",
-            target, transmitted, received, packetLoss, avgLatency, success
+            target, transmitted, received, packetLoss, avgLatency, pingHealthy
         );
+        return new PingResult(dataJson, commandFailed, pingHealthy);
     }
 
-    private String runTraceroute(String target, int maxHops) throws JsonProcessingException {
+    private TracerouteResult runTraceroute(String target, int maxHops) {
         AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
                 OsRuntime.isWindows()
                         ? List.of("tracert", "-d", "-h", String.valueOf(maxHops), target)
@@ -170,26 +187,22 @@ public class NetworkTool extends AbstractCommandExecutor {
             }
         }
 
-        if (OsRuntime.isWindows() && hops.isEmpty() && result.output() != null && !result.output().isBlank()) {
-            String esc = result.output().replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n");
-            return String.format(
+        String output = result.output() != null ? result.output() : "";
+        boolean commandFailed = output.isBlank() && !result.success();
+
+        if (OsRuntime.isWindows() && hops.isEmpty() && !output.isBlank()) {
+            String esc = output.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n");
+            String dataJson = String.format(
                     "{\"type\":\"traceroute\",\"target\":\"%s\",\"hopCount\":0,\"hops\":[],\"raw\":\"%s\"}",
                     target, esc.length() > 8000 ? esc.substring(0, 8000) + "...(truncated)" : esc
             );
+            return new TracerouteResult(dataJson, commandFailed);
         }
 
-        return String.format(
+        String dataJson = String.format(
                 "{\"type\":\"traceroute\",\"target\":\"%s\",\"hopCount\":%d,\"hops\":[%s]}",
                 target, hops.size(), String.join(",", hops)
         );
-    }
-
-    private String buildSuccessResponse(String data, long duration, boolean cacheHit) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(new com.award.log.mcp.ToolResult<>(true, data, null, duration, cacheHit));
-    }
-
-    private String buildErrorResponse(String error, long duration) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<String>(false, null, error, normalizeDurationMs(duration), false));
+        return new TracerouteResult(dataJson, commandFailed);
     }
 }

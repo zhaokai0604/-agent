@@ -13,7 +13,7 @@ let persistTimer = null
 
 function deriveTitle(msgs) {
   const first = (msgs || []).find(m => m.role === 'user' && m.content)
-  if (!first) return '新对话'
+  if (!first) return '新任务'
   const text = String(first.content).replace(/\s+/g, ' ').trim()
   return text.length > 28 ? `${text.slice(0, 28)}…` : text
 }
@@ -53,10 +53,6 @@ function schedulePersist() {
   }, PERSIST_DEBOUNCE_MS)
 }
 
-function persist() {
-  schedulePersist()
-}
-
 function activeSession() {
   return sessions.value.find(s => s.id === activeSessionId.value) || null
 }
@@ -91,7 +87,7 @@ function loadFromStorage() {
     if (!Array.isArray(data?.sessions) || data.sessions.length === 0) return false
     sessions.value = data.sessions.map(s => ({
       id: s.id || `s-${Date.now()}`,
-      title: s.title || '新对话',
+      title: s.title || '新任务',
       updatedAt: s.updatedAt || Date.now(),
       messages: Array.isArray(s.messages) ? s.messages.slice(-MAX_MESSAGES) : []
     }))
@@ -106,7 +102,7 @@ function loadFromStorage() {
 function ensureDefaultSession() {
   if (sessions.value.length === 0) {
     const id = `s-${Date.now()}`
-    const session = { id, title: '新对话', updatedAt: Date.now(), messages: [] }
+    const session = { id, title: '新任务', updatedAt: Date.now(), messages: [] }
     sessions.value = [session]
     activeSessionId.value = id
     messages.value = session.messages
@@ -147,7 +143,7 @@ export function useAgentSession() {
     const id = `s-${Date.now()}`
     const session = {
       id,
-      title: '新对话',
+      title: '新任务',
       updatedAt: Date.now(),
       messages: []
     }

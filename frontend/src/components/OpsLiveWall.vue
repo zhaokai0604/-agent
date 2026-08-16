@@ -2,7 +2,7 @@
   <div class="ops-live-wall" :class="{ 'wall-fullscreen': isFullscreen }">
     <header class="wall-header">
       <div class="wall-brand">
-        <span class="wall-title">运行态势</span>
+        <span class="wall-title">资源总览</span>
         <span class="wall-sub">本机实时 · {{ envSummary.host || '—' }}</span>
       </div>
       <div class="wall-header-center">

@@ -32,24 +32,22 @@ class ExperimentControllerSmokeTest {
     }
 
     @Test
-    void startExperimentReturnsSuccess() throws Exception {
-        when(experimentService.start("ab-default")).thenReturn(true);
-
+    void startExperimentReturnsNotImplemented() throws Exception {
         mockMvc.perform(post("/api/v1/experiment/start")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"ab-default\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data").value(true));
+                .andExpect(jsonPath("$.code").value(501))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("未实现")));
     }
 
     @Test
-    void reportReturnsSummary() throws Exception {
+    void reportReturnsNotImplementedStub() throws Exception {
         when(experimentService.report()).thenReturn(Map.of("running", false));
 
         mockMvc.perform(get("/api/v1/experiment/report"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.running").value(false));
+                .andExpect(jsonPath("$.code").value(501))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("始终无真实")));
     }
 }

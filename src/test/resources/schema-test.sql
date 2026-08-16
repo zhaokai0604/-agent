@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS `log_alarm` (
   `root_cause` text,
   `solution` text,
   `log_content` text,
-  `push_status` varchar(32) DEFAULT 'PENDING',
+  `push_status` varchar(64) DEFAULT 'PENDING',
   `lifecycle_status` varchar(32) DEFAULT 'NEW',
   `ack_by` varchar(64) DEFAULT NULL,
   `ack_time` datetime DEFAULT NULL,

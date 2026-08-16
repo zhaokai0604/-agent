@@ -74,9 +74,13 @@ frontend/miniprogram_npm/
 .env.local
 .env.*.local
 
-# Production configuration - 生产环境配置，可能包含敏感信息
-application-prod.yml
-application-prod.properties
+# 生产密钥覆盖（可提交的 src/main/resources/application-prod.yml 仅含环境变量占位）
+# 若在项目根或 config/ 放置带真实密钥的同名文件，仍忽略
+/application-prod.yml
+/application-prod.properties
+/config/application-prod.yml
+/config/application-prod.properties
+!src/main/resources/application-prod.yml
 
 # 本机 QQ 邮箱授权码等（由 application-local.example.yml 复制改名，切勿提交）
 src/main/resources/application-local.yml
@@ -87,8 +91,18 @@ config/application-local.yml
 logs/
 storage/
 outputs/
+data/
+output/
+tmp/
+tmp_patent_imgs/
 perf/runtime/
 perf/data/results/
+
+# 已从交付仓库移除的研究/比赛资料，避免再次误加入
+docs/patent/
+docs/competition/
+docs/archive/
+docs/_doc_extract/
 
 # 调试输出
 vite-debug.log

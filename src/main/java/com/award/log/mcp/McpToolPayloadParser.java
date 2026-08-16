@@ -75,4 +75,20 @@ public final class McpToolPayloadParser {
         }
         return "工具执行失败";
     }
+
+    /** 读取信封 status（SUCCESS/WARN/ERROR）；缺省按 success 推导。 */
+    public static String statusOf(ObjectMapper mapper, String raw) {
+        JsonNode root = parseRoot(mapper, raw);
+        if (root == null) {
+            return ToolResult.STATUS_ERROR;
+        }
+        String status = root.path("status").asText("").trim();
+        if (!status.isEmpty()) {
+            return status.toUpperCase();
+        }
+        if (root.isObject() && root.has("success")) {
+            return root.path("success").asBoolean(false) ? ToolResult.STATUS_SUCCESS : ToolResult.STATUS_ERROR;
+        }
+        return ToolResult.STATUS_SUCCESS;
+    }
 }

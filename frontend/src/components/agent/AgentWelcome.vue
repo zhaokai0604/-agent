@@ -1,10 +1,10 @@
 <template>
   <div class="agent-welcome">
     <div class="agent-welcome__hero">
-      <h2>有什么可以帮您？</h2>
+      <h2>先给我一个任务</h2>
       <p>
-        ThreshCore 运维管家：描述需求即可，我会调用运维工具帮您查磁盘、看负载、跟巡检；
-        涉及删改的操作先演练预览，您确认后再执行。
+        我会先梳理目标、约束和成功标准，再进入观测、规划、执行、验证和复盘。
+        涉及写操作时，默认先预览，确认后落地。
       </p>
     </div>
 
@@ -36,7 +36,7 @@
     </div>
 
     <button type="button" class="skills-link" @click="$emit('open-skills')">
-      浏览全部运维技能 →
+      查看全部技能 →
     </button>
   </div>
 </template>
@@ -49,8 +49,7 @@ import {
   Delete,
   Document,
   Link,
-  TrendCharts,
-  Warning
+  TrendCharts
 } from '@element-plus/icons-vue'
 import { getPlatformInfo } from '../../api'
 import { buildWelcomeQuickChips } from '../../utils/platformQuickPaths'
@@ -99,14 +98,14 @@ onMounted(async () => {
   font-size: 28px;
   font-weight: 600;
   color: var(--ops-text);
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .agent-welcome__hero p {
   margin: 0 auto;
-  max-width: 520px;
+  max-width: 560px;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: var(--agent-muted);
 }
 

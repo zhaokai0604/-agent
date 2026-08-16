@@ -161,4 +161,15 @@ class AssistantReplyPlannerTest {
         assertEquals(AssistantReplyMode.ORCHESTRATE, plan.mode());
         assertTrue(plan.useToolAgentPath());
     }
+
+    @Test
+    void broadServerMetricsUseToolAgentInsteadOfFixedPatrol() {
+        String message = "请检查当前服务器的整体运行状态，包括 CPU、内存、磁盘、进程和网络情况。";
+
+        var plan = planner.plan(message, null, true, false, true, null);
+
+        assertEquals(AssistantReplyMode.TOOL_AGENT, plan.mode());
+        assertEquals(AssistantIntentCategory.METRICS_QUERY, plan.category());
+        assertTrue(plan.useToolAgentPath());
+    }
 }

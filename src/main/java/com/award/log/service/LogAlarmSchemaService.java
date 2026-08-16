@@ -37,7 +37,7 @@ public class LogAlarmSchemaService {
                   root_cause TEXT NULL COMMENT '根因分析',
                   solution TEXT NULL COMMENT '解决方案',
                   log_content TEXT NULL COMMENT '关联日志内容',
-                  push_status VARCHAR(32) DEFAULT 'PENDING' COMMENT '推送状态',
+                  push_status VARCHAR(64) DEFAULT 'PENDING' COMMENT '推送状态',
                   lifecycle_status VARCHAR(32) DEFAULT 'NEW' COMMENT '生命周期状态',
                   ack_by VARCHAR(64) DEFAULT NULL COMMENT '确认人',
                   ack_time DATETIME DEFAULT NULL COMMENT '确认时间',

@@ -1,9 +1,12 @@
 package com.award.log.security;
 
 import com.award.log.mcp.dispatch.McpToolParamReader;
+import com.award.log.security.effect.PlanEffectGate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,6 +18,7 @@ public class OpsSecurityKernel {
 
     private final McpInvocationSecurityGate mcpInvocationSecurityGate;
     private final OpsTrustPolicy opsTrustPolicy;
+    private final PlanEffectGate planEffectGate;
 
     public McpInvocationSecurityGate.GateDecision evaluateTool(
             String toolName,
@@ -28,6 +32,31 @@ public class OpsSecurityKernel {
             String instruction) {
         return mcpInvocationSecurityGate.evaluateChatToolInvocation(
                 toolBeanName, Map.of(), instruction, null);
+    }
+
+    public PlanEffectGate.PlanDecision evaluatePlan(List<PlanEffectGate.PlannedCall> calls) {
+        return planEffectGate.evaluate(calls == null ? List.of() : calls);
+    }
+
+    public PlanEffectGate.PlanDecision evaluatePlanMaps(List<Map<String, Object>> steps) {
+        List<PlanEffectGate.PlannedCall> calls = new ArrayList<>();
+        if (steps != null) {
+            for (Map<String, Object> step : steps) {
+                if (step == null) {
+                    continue;
+                }
+                Object tool = step.getOrDefault("toolName", step.get("tool"));
+                if (tool == null) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> params = step.get("parameters") instanceof Map<?, ?> m
+                        ? (Map<String, Object>) m
+                        : Map.of();
+                calls.add(new PlanEffectGate.PlannedCall(String.valueOf(tool), params));
+            }
+        }
+        return planEffectGate.evaluate(calls);
     }
 
     public OpsTrustTier trustTierForTool(String toolName, Map<String, Object> parameters, String instruction) {

@@ -116,7 +116,7 @@ class SecurityMcpIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    void serviceRestartDryRunRequiresConfirmation() throws Exception {
+    void serviceRestartDryRunAllowsPreviewWithoutConfirm() throws Exception {
         mockMvc.perform(IntegrationTestSupport.withSession(
                         post("/api/mcp/execute")
                                 .contentType(MediaType.APPLICATION_JSON)
@@ -129,11 +129,10 @@ class SecurityMcpIntegrationTest extends IntegrationTestBase {
                                         """),
                         session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$",
-                        anyOf(
-                                org.hamcrest.Matchers.hasKey("needConfirm"),
-                                org.hamcrest.Matchers.hasKey("securityCode"))));
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data").value(
+                        anyOf(containsString("DRY-RUN"), containsString("PREVIEW"), containsString("dry"),
+                                containsString("nginx"), containsString("restart"))));
     }
 
     @Test

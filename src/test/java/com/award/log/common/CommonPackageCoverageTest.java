@@ -49,10 +49,10 @@ class CommonPackageCoverageTest {
 
         Result<String> runtime = handler.handleRuntimeException(new RuntimeException("boom"));
         assertEquals(500, runtime.getCode());
-        assertEquals("Business processing failed", runtime.getMessage());
+        assertEquals("Business processing failed: RuntimeException: boom", runtime.getMessage());
 
         Result<String> generic = handler.handleException(new Exception("oops"));
         assertEquals(500, generic.getCode());
-        assertEquals("Internal server error", generic.getMessage());
+        assertEquals("Internal server error: Exception: oops", generic.getMessage());
     }
 }

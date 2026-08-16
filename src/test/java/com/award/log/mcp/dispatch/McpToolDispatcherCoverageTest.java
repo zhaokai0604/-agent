@@ -150,10 +150,13 @@ class McpToolDispatcherCoverageTest {
     @Test
     void invalidatesPerceptionCacheOnWriteToolSuccess() throws JsonProcessingException {
         when(mcpToolCatalog.isReadOnlyObservation("CleanTempTool")).thenReturn(false);
+        when(cleanTempTool.cleanTempFiles(any(), any(), any(), any(), any()))
+                .thenReturn("{\"success\":true,\"data\":{\"mode\":\"DELETE\",\"filesDeleted\":3}}");
         Map<String, Object> params = new HashMap<>();
         params.put("path", "/tmp");
         params.put("days", 7);
         params.put("dryRun", false);
+        params.put("confirmDelete", true);
 
         McpToolDispatchResult result = dispatcher.dispatch("CleanTempTool", params);
 

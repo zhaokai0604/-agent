@@ -6,6 +6,11 @@ import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.dispatch.McpToolParamReader;
 import com.award.log.security.HttpAuditSubject;
 import com.award.log.security.McpInvocationSecurityGate.GateDecision;
+import com.award.log.security.effect.EffectFingerprint;
+import com.award.log.security.effect.SessionRiskBudgetService;
+import com.award.log.security.effect.ToolEffect;
+import com.award.log.security.effect.ToolEffectResolver;
+import com.award.log.security.effect.WriteCapabilityToken;
 import com.award.log.service.mcp.McpAuditService;
 import com.award.log.service.mcp.McpExecutionService;
 import com.award.log.service.mcp.McpPendingConfirmationService;
@@ -38,6 +43,8 @@ public class McpExecuteController {
     private final FailureInsightService failureInsightService;
     private final McpPendingConfirmationService mcpPendingConfirmationService;
     private final HttpAuditSubject httpAuditSubject;
+    private final ToolEffectResolver toolEffectResolver;
+    private final SessionRiskBudgetService sessionRiskBudgetService;
 
     @GetMapping("/tools")
     public Map<String, Object> getMcpTools() {
@@ -72,27 +79,36 @@ public class McpExecuteController {
 
         GateDecision decision = mcpSecurityService.evaluateInitial(toolName, parameters, userMessage);
         String userInstruction = mcpSecurityService.buildAuditInstruction(userMessage, toolName, parameters);
+        ToolEffect effect = toolEffectResolver.resolve(toolName, parameters);
+        String effectFingerprint = EffectFingerprint.of(toolName, parameters, effect);
+        String requester = currentRequester();
 
         if (decision.getType() == GateDecision.Type.BLOCK) {
             log.warn("MCP 安全门拦截: tool={} code={}", toolName, decision.getCode());
             mcpAuditService.persistGateReject(traceId, userInstruction, toolName, decision, startTime, parameters);
             failureInsightService.captureReject(userMessage, decision.getCode(), toolName, decision.getMessage(), traceId);
-            return decorateEnvelope(
-                    mcpSecurityService.buildBlockResponse(traceId, startTime, decision),
-                    toolName,
-                    traceId,
-                    403);
+            Map<String, Object> blocked = mcpSecurityService.buildBlockResponse(traceId, startTime, decision);
+            attachEffectMeta(blocked, effect, effectFingerprint, null);
+            return decorateEnvelope(blocked, toolName, traceId, 403);
         }
 
         if (decision.getType() == GateDecision.Type.NEED_CONFIRM) {
-            log.info("MCP 中风险待确认: tool={} score={}", toolName, decision.getAgenticRiskScore());
+            log.info("MCP 中风险待确认: tool={} score={} effect={}",
+                    toolName, decision.getAgenticRiskScore(), effect.action());
+            failureInsightService.captureReject(
+                    userMessage, decision.getCode(), toolName, decision.getMessage(), traceId);
+            WriteCapabilityToken token = WriteCapabilityToken.issue(
+                    effectFingerprint, toolName, requester, pendingTtlHint());
             McpPendingConfirmationService.PendingConfirmation pending = mcpPendingConfirmationService.register(
                     traceId,
                     toolName,
                     parameters,
                     userMessage,
                     userInstruction,
-                    currentRequester());
+                    requester,
+                    effect,
+                    effectFingerprint,
+                    token);
             mcpAuditService.persistNeedConfirm(
                     traceId,
                     userInstruction,
@@ -105,12 +121,40 @@ public class McpExecuteController {
                     mcpSecurityService.buildNeedConfirmResponse(traceId, startTime, decision, toolName, parameters);
             response.put("confirmationId", pending.confirmationId());
             response.put("expiresAtMs", pending.expiresAtMs());
+            response.put("capabilityToken", token.tokenId());
+            attachEffectMeta(response, effect, effectFingerprint, sessionRiskBudgetService.summary(requester));
             return decorateEnvelope(response, toolName, traceId, 202);
+        }
+
+        SessionRiskBudgetService.BudgetDecision budget = sessionRiskBudgetService.check(requester, effect);
+        if (!budget.allowed()) {
+            Map<String, Object> budgetBlock = new LinkedHashMap<>();
+            budgetBlock.put("success", false);
+            budgetBlock.put("error", budget.message());
+            budgetBlock.put("securityCode", budget.code());
+            budgetBlock.put("traceId", traceId);
+            budgetBlock.put("duration", System.currentTimeMillis() - startTime);
+            attachEffectMeta(budgetBlock, effect, effectFingerprint, sessionRiskBudgetService.summary(requester));
+            mcpAuditService.persistGateReject(
+                    traceId,
+                    userInstruction,
+                    toolName,
+                    GateDecision.block(budget.code(), budget.message()),
+                    startTime,
+                    parameters);
+            return decorateEnvelope(budgetBlock, toolName, traceId, 429);
         }
 
         Map<String, Object> execResponse = mcpExecutionService.execute(
                 toolName, parameters, startTime, traceId, userInstruction);
         execResponse.put("traceId", traceId);
+        attachEffectMeta(execResponse, effect, effectFingerprint, sessionRiskBudgetService.summary(requester));
+        if (Boolean.TRUE.equals(execResponse.get("success"))
+                && WriteToolResultSupport.requestedRealWrite(parameters)
+                && !Boolean.TRUE.equals(execResponse.get("writeMismatch"))) {
+            sessionRiskBudgetService.consume(requester, effect);
+            execResponse.put("riskBudget", sessionRiskBudgetService.summary(requester));
+        }
         mcpAuditService.persistSuccess(traceId, userInstruction, decision, toolName, execResponse, startTime, parameters);
         return decorateEnvelope(execResponse, toolName, traceId, Boolean.TRUE.equals(execResponse.get("success")) ? 200 : 500);
     }
@@ -126,6 +170,7 @@ public class McpExecuteController {
 
         String confirmCode = stringField(request, "confirmCode");
         String confirmationId = stringField(request, "confirmationId");
+        String capabilityToken = stringField(request, "capabilityToken");
         if (confirmationId.isBlank()) {
             confirmationId = stringField(request, "traceId");
         }
@@ -136,12 +181,19 @@ public class McpExecuteController {
             return errorResponse("确认码不正确，请输入 '确认执行'", traceId, startTime, "", 400);
         }
 
+        String requester = currentRequester();
         McpPendingConfirmationService.TakeResult takeResult =
-                mcpPendingConfirmationService.take(confirmationId, currentRequester());
+                mcpPendingConfirmationService.take(confirmationId, requester, capabilityToken);
         if (takeResult.status() != McpPendingConfirmationService.TakeStatus.OK || takeResult.pending() == null) {
             return switch (takeResult.status()) {
                 case REQUESTER_MISMATCH -> errorResponse(
                         "该待确认请求不属于当前用户",
+                        confirmationIdOr(traceId, confirmationId),
+                        startTime,
+                        "",
+                        403);
+                case TOKEN_MISMATCH -> errorResponse(
+                        "能力凭证无效或与效果指纹不匹配，请重新预览确认",
                         confirmationIdOr(traceId, confirmationId),
                         startTime,
                         "",
@@ -172,6 +224,35 @@ public class McpExecuteController {
         Map<String, Object> parameters = new HashMap<>(pending.parameters());
         String userMessage = pending.userMessage();
         String userInstruction = pending.userInstruction();
+        ToolEffect effect = pending.effect() != null
+                ? pending.effect()
+                : toolEffectResolver.resolve(toolName, parameters);
+        String effectFingerprint = pending.effectFingerprint() == null || pending.effectFingerprint().isBlank()
+                ? EffectFingerprint.of(toolName, parameters, effect)
+                : pending.effectFingerprint();
+
+        // 确认后仍复核效果指纹，防止快照被异常篡改
+        String recomputed = EffectFingerprint.of(toolName, parameters, effect);
+        if (!recomputed.equals(effectFingerprint)) {
+            return errorResponse(
+                    "效果指纹校验失败，请重新预览确认",
+                    traceId,
+                    startTime,
+                    toolName,
+                    409);
+        }
+
+        SessionRiskBudgetService.BudgetDecision budget = sessionRiskBudgetService.check(requester, effect);
+        if (!budget.allowed()) {
+            Map<String, Object> budgetBlock = new LinkedHashMap<>();
+            budgetBlock.put("success", false);
+            budgetBlock.put("error", budget.message());
+            budgetBlock.put("securityCode", budget.code());
+            budgetBlock.put("traceId", traceId);
+            budgetBlock.put("duration", System.currentTimeMillis() - startTime);
+            attachEffectMeta(budgetBlock, effect, effectFingerprint, sessionRiskBudgetService.summary(requester));
+            return decorateEnvelope(budgetBlock, toolName, traceId, 429);
+        }
 
         McpToolParamReader.forceConfirmedWriteToolParams(toolName, parameters);
         GateDecision decision = mcpSecurityService.evaluatePostConfirm(toolName, parameters, userMessage);
@@ -179,17 +260,22 @@ public class McpExecuteController {
             log.warn("确认执行路径仍被安全门拦截: tool={} code={}", toolName, decision.getCode());
             mcpAuditService.persistGateReject(traceId, userInstruction, toolName, decision, startTime, parameters);
             failureInsightService.captureReject(userMessage, decision.getCode(), toolName, decision.getMessage(), traceId);
-            return decorateEnvelope(
-                    mcpSecurityService.buildBlockResponse(traceId, startTime, decision),
-                    toolName,
-                    traceId,
-                    403);
+            Map<String, Object> blocked = mcpSecurityService.buildBlockResponse(traceId, startTime, decision);
+            attachEffectMeta(blocked, effect, effectFingerprint, sessionRiskBudgetService.summary(requester));
+            return decorateEnvelope(blocked, toolName, traceId, 403);
         }
 
-        log.info("用户已确认，执行工具: {}", toolName);
+        log.info("用户已确认，执行工具: {} effect={}", toolName, effect.action());
         Map<String, Object> execResponse = mcpExecutionService.execute(
                 toolName, parameters, startTime, traceId, userInstruction, true);
         execResponse.put("traceId", traceId);
+        attachEffectMeta(execResponse, effect, effectFingerprint, sessionRiskBudgetService.summary(requester));
+        if (Boolean.TRUE.equals(execResponse.get("success"))
+                && !Boolean.TRUE.equals(execResponse.get("writeMismatch"))
+                && !Boolean.TRUE.equals(execResponse.get("evidenceIncomplete"))) {
+            sessionRiskBudgetService.consume(requester, effect);
+            execResponse.put("riskBudget", sessionRiskBudgetService.summary(requester));
+        }
         mcpAuditService.persistSuccess(traceId, userInstruction, decision, toolName, execResponse, startTime, parameters);
         return decorateEnvelope(execResponse, toolName, traceId, Boolean.TRUE.equals(execResponse.get("success")) ? 200 : 500);
     }
@@ -255,9 +341,33 @@ public class McpExecuteController {
         response.putIfAbsent("needConfirm", false);
         response.putIfAbsent("confirmationId", "");
         response.putIfAbsent("expiresAtMs", null);
+        response.putIfAbsent("capabilityToken", "");
         response.put("platformSupport", platformSupport);
         response.put("warnings", buildWarnings(response, platformSupport));
         return response;
+    }
+
+    private static void attachEffectMeta(
+            Map<String, Object> response,
+            ToolEffect effect,
+            String effectFingerprint,
+            Map<String, Object> riskBudget) {
+        if (response == null) {
+            return;
+        }
+        if (effect != null) {
+            response.put("toolEffect", effect.toMap());
+        }
+        if (effectFingerprint != null && !effectFingerprint.isBlank()) {
+            response.put("effectFingerprint", effectFingerprint);
+        }
+        if (riskBudget != null) {
+            response.put("riskBudget", riskBudget);
+        }
+    }
+
+    private long pendingTtlHint() {
+        return 900_000L;
     }
 
     private Map<String, Object> unsupportedResponse(String toolName,
@@ -278,6 +388,10 @@ public class McpExecuteController {
         }
         Object writeMismatchMessage = response.get("writeMismatchMessage");
         if (writeMismatchMessage instanceof String message && !message.isBlank()) {
+            warnings.add(message.trim());
+        }
+        Object evidenceMessage = response.get("evidenceMessage");
+        if (evidenceMessage instanceof String message && !message.isBlank()) {
             warnings.add(message.trim());
         }
         return warnings;

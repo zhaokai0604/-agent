@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.mcp.AbstractCommandExecutor;
+import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -85,7 +86,10 @@ public class CronJobTool extends AbstractCommandExecutor {
         }
         long duration = System.currentTimeMillis() - start;
         boolean ok = Boolean.TRUE.equals(body.get("success"));
-        return objectMapper.writeValueAsString(
-                new com.award.log.mcp.ToolResult<>(ok, objectMapper.writeValueAsString(body), ok ? null : r.error(), duration, false));
+        String dataJson = objectMapper.writeValueAsString(body);
+        if (ok) {
+            return McpToolResponses.success(objectMapper, dataJson, duration);
+        }
+        return McpToolResponses.warn(objectMapper, dataJson, duration);
     }
 }

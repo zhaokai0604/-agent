@@ -1,5 +1,7 @@
 package com.award.log.agent;
 
+import java.util.List;
+
 /**
  * 各回复模式 / 意图下的系统提示词与输出结构规范。
  */
@@ -105,6 +107,21 @@ public final class AssistantReplyPrompts {
     }
 
     public static String toolAgentSystemPrompt(String contextJson, String toolSection) {
+        return toolAgentSystemPrompt(contextJson, toolSection, false, List.of(), false);
+    }
+
+    public static String toolAgentSystemPrompt(String contextJson,
+                                               String toolSection,
+                                               boolean allowWrite,
+                                               List<String> plannedTools) {
+        return toolAgentSystemPrompt(contextJson, toolSection, allowWrite, plannedTools, allowWrite);
+    }
+
+    public static String toolAgentSystemPrompt(String contextJson,
+                                               String toolSection,
+                                               boolean allowWrite,
+                                               List<String> plannedTools,
+                                               boolean writeToolsMounted) {
         return """
                 你是 ThreshCore **运维管家**，通过运维工具**直接操作本机**后回答，**简体中文**。
 
@@ -112,13 +129,58 @@ public final class AssistantReplyPrompts {
                 - **先行动、后解释**：用户描述磁盘/文件/照片/系统问题时，**立即调用** DiskTool、DiskAnalyzeTool、ProcessTool 等，禁止空口追问
                 - 缺参数时用**合理默认**（Windows：`C:\\` 与用户目录；Linux：`/` 或 `/var/log`），并在结果中说明假设
                 - 多步任务：先采集信息 → 给出结构化结论 → 可执行建议；写操作默认预览
+                - `awmPreferredSequence` / `plannedTools` 只是路由层给出的候选提示，不是事实也不是强制序列；必须根据本轮工具返回动态选择、增删步骤，不适用的工具不得为了凑计划而调用
                 - 文件/照片整理：先用 DiskAnalyzeTool 扫热点与大文件，再给出保留/迁移/清理方案
-                - 禁止编造指标；工具失败如实说明
-                """ + toolSection + """
+                - **证据约束**：禁止编造指标；结论中的数字/路径/状态必须来自本轮工具返回；工具失败如实说明，不得改写成“已成功”
+                - **执行声明约束**：未看到工具真实写证据（mode=DELETE/EXECUTED 等）时，禁止声称“已删除/已重启/已清理完成”
+                - 进程列表：`mem` 为占**整机物理内存**百分比；CPU 高但内存低的进程也会入选。制表时须写清「入选原因」，并尽量带 memMb；勿暗示两行进程内存之和等于系统总内存占用
+                - 遇到 `s_daemon` 等匿名或归属不明进程时，先调用 `inspectProcessOwnership`，结合 PPID、/proc cgroup、systemd status 与 lsof 再判断服务归属
+                """ + toolAgentPhaseRules(allowWrite, plannedTools, writeToolsMounted) + toolSection + """
                 """ + OpsReportFormat.markdownOutputSpecForPromptZh() + universalReplyStructure() + """
 
                 ## 实时上下文
                 """ + contextJson;
+    }
+
+    /** 两阶段：诊断（硬只读挂载） vs 确认后落地。 */
+    public static String toolAgentPhaseRules(boolean allowWrite, List<String> plannedTools) {
+        return toolAgentPhaseRules(allowWrite, plannedTools, allowWrite);
+    }
+
+    public static String toolAgentPhaseRules(boolean allowWrite,
+                                             List<String> plannedTools,
+                                             boolean writeToolsMounted) {
+        String seq = plannedTools == null || plannedTools.isEmpty()
+                ? ""
+                : String.join(" → ", plannedTools);
+        List<String> pendingWrite = AgentSkillPlan.pendingWriteTools(plannedTools);
+        String pending = pendingWrite.isEmpty() ? "" : String.join("、", pendingWrite);
+        if (allowWrite && writeToolsMounted) {
+            return """
+
+                ## 本轮阶段：确认执行（写工具已挂载）
+                - 用户已确认写操作；优先按计划调用：""" + (seq.isBlank() ? "（见上下文 plannedTools）" : seq) + """
+
+                - 写工具须使用真实执行参数（dryRun=false 且对应 confirm* =true）；仍受路径/服务白名单与治理策略约束
+                - 先完成计划中的写步骤，再验证只读采集；禁止再次空口索要同样确认
+                """;
+        }
+        if (AgentSkillPlan.hasWriteTools(plannedTools)) {
+            return """
+
+                ## 本轮阶段：诊断 + 计划（写工具未挂载）
+                - **本轮系统仅挂载观测类工具**，无法调用清理/重启等写工具
+                - 用 DiskTool / DiskAnalyzeTool / ProcessTool / SystemLoadTool 等采集事实
+                - 待确认的写步骤：""" + (pending.isBlank() ? "见处置计划" : pending) + """
+
+                - 答复须含处置计划，并明确提示用户回复「确认执行」后系统才会挂载写工具并落地
+                """;
+        }
+        return """
+
+                ## 本轮阶段：只读诊断
+                - 仅调用只读/观测类工具，给出结论与建议
+                """;
     }
 
     public static String orchestratePrompt(AssistantIntentCategory category) {

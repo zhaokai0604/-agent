@@ -18,6 +18,12 @@ export function buildMcpRiskConfirmMessage(result) {
     if (dimText) parts.push('评分明细：\n' + dimText)
   }
   if (result.riskExplanation) parts.push(String(result.riskExplanation))
+  if (result.toolEffect && typeof result.toolEffect === 'object') {
+    const te = result.toolEffect
+    const action = te.action || '?'
+    const target = [te.targetType, te.targetId].filter(Boolean).join(':')
+    parts.push(`效果对象：${action}${target ? ' → ' + target : ''}（不可逆 ${te.irreversibility ?? '?'}）`)
+  }
   if (parts.length === 0) {
     return '该操作存在风险，需在界面二次确认后执行（等同口令「确认执行」）。'
   }

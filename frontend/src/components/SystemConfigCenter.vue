@@ -425,10 +425,10 @@
             <h3>更多效果数据</h3>
             <p class="effect-links-hint">下列内容已在其它 Tab 完整展示，此处不再重复拉取。</p>
             <div class="effect-link-actions">
-              <el-button type="primary" link @click="goToTab('ops-effect')">运维效果评分（Tab 8）</el-button>
               <el-button type="primary" link @click="goToTab('audit')">统一审计中心（Tab 3）</el-button>
+              <el-button type="primary" link @click="goToTab('security-cockpit')">安全驾驶舱</el-button>
             </div>
-            <p class="effect-links-sub">顶栏「安全自检」按钮可查看护栏探针详情。</p>
+            <p class="effect-links-sub">顶栏「安全自检 / 驾驶舱」可查看护栏探针与策略回放。</p>
           </div>
         </div>
       </section>
@@ -842,7 +842,6 @@ async function exportPdfReport() {
     `AI Key 状态：${aiKeyStatusText.value}`,
     `最近保存：${savedAt.value ? formatDateTime(savedAt.value) : '未保存'}`,
     `巡检快照：${patrolSnapshot.value?.timestamp || '暂无'}`,
-    '完整运维效果评分见 Tab 8「运维效果评分」',
     '',
     ...(messages.value || []).map(msg => `- ${msg}`)
   ]

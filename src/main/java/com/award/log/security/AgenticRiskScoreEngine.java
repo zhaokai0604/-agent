@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import java.text.Normalizer;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -49,6 +50,7 @@ public class AgenticRiskScoreEngine {
         total += toolBase;
 
         String haystack = (instruction == null ? "" : instruction).toLowerCase(Locale.ROOT);
+        String structuredPaths = extractStructuredPathHaystack(parameters);
         if (parameters != null) {
             for (Object v : parameters.values()) {
                 if (v != null) {
@@ -57,11 +59,19 @@ public class AgenticRiskScoreEngine {
             }
         }
 
-        double pathRisk = pathSensitivityScore(haystack);
+        // 路径敏感度优先看结构化路径字段，降低整段 instruction 误伤
+        double pathFromStructured = pathSensitivityScore(structuredPaths);
+        double pathFromText = pathSensitivityScore(haystack);
+        double pathRisk = structuredPaths.isBlank()
+                ? pathFromText
+                : Math.max(pathFromStructured, pathFromText * 0.35);
         dims.put("pathSensitivity", round1(pathRisk));
         total += pathRisk;
 
-        double cmdRisk = commandPatternScore(haystack);
+        // 命令模式主要看用户指令与显式 command 参数，避免工具名拼接串误抬升
+        String commandHaystack = (instruction == null ? "" : instruction).toLowerCase(Locale.ROOT)
+                + " " + firstParam(parameters, "command", "cmd", "shell");
+        double cmdRisk = commandPatternScore(commandHaystack);
         dims.put("commandPattern", round1(cmdRisk));
         total += cmdRisk;
 
@@ -72,6 +82,36 @@ public class AgenticRiskScoreEngine {
         total = clamp(round1(total), 0, 10);
         String explanation = buildExplanation(toolName, total, dims);
         return new ScoreResult(total, Map.copyOf(dims), explanation);
+    }
+
+    private static String extractStructuredPathHaystack(Map<String, Object> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String key : List.of("path", "rootPath", "logPath", "targetPath", "file", "directory")) {
+            Object v = parameters.get(key);
+            if (v != null) {
+                sb.append(' ').append(v);
+            }
+        }
+        return sb.toString().toLowerCase(Locale.ROOT);
+    }
+
+    private static String firstParam(Map<String, Object> parameters, String... keys) {
+        if (parameters == null || keys == null) {
+            return "";
+        }
+        for (String key : keys) {
+            Object v = parameters.get(key);
+            if (v != null) {
+                String s = String.valueOf(v).trim();
+                if (!s.isEmpty()) {
+                    return s.toLowerCase(Locale.ROOT);
+                }
+            }
+        }
+        return "";
     }
 
     /**
@@ -100,7 +140,11 @@ public class AgenticRiskScoreEngine {
 
     private static double pathSensitivityScore(String haystack) {
         double s = 0;
-        String h = haystack.replace('\\', '/');
+        String h = haystack.replace('\\', '/').toLowerCase(Locale.ROOT);
+        // Windows：仅对真正系统关键路径打满分；Temp/Logs/事件日志是本机运维白名单场景，不能因含 c:/windows 前缀误杀
+        if (isWindowsCriticalSystemPath(h)) {
+            return 10.0;
+        }
         if (haystack.contains("/etc/shadow") || haystack.contains("/etc/gshadow")
                 || h.contains("/etc/shadow") || h.contains("/etc/gshadow")) {
             s += 6;
@@ -108,7 +152,7 @@ public class AgenticRiskScoreEngine {
         if (h.contains("/boot") || h.contains(":/windows/system32/config")) {
             s += 3;
         }
-        if (h.contains("/etc/") || h.contains("c:/windows/system32")) {
+        if (h.contains("/etc/") || (h.contains("c:/windows/system32") && !isWindowsOpsAllowlistedSubpath(h))) {
             s += 2;
         }
         if (h.contains("/root/") || h.contains("/.ssh") || h.contains(".ssh/")) {
@@ -121,6 +165,33 @@ public class AgenticRiskScoreEngine {
             s += 2;
         }
         return Math.min(s, 6);
+    }
+
+    /**
+     * Windows 系统关键路径（应拒绝自动写）：Program Files、注册表配置、非运维白名单的 System32 / Windows 根。
+     */
+    private static boolean isWindowsCriticalSystemPath(String h) {
+        if (h.contains("c:/program files") || h.contains("c:/programfiles")) {
+            return true;
+        }
+        if (h.contains("c:/windows/system32/config")) {
+            return true;
+        }
+        if (isWindowsOpsAllowlistedSubpath(h)) {
+            return false;
+        }
+        // 裸 C:/Windows 或非白名单子路径（如 System32 本体）仍视为高危
+        return h.contains("c:/windows");
+    }
+
+    /** 与 agent.paths.windows-* 常见运维根对齐：临时目录、日志、事件日志。 */
+    private static boolean isWindowsOpsAllowlistedSubpath(String h) {
+        return h.contains("c:/windows/temp")
+                || h.contains("c:/windows/logs")
+                || h.contains("c:/windows/system32/winevt")
+                || h.contains("c:/inetpub/logs")
+                || h.contains("c:/programdata/logs")
+                || h.contains("/appdata/local/temp");
     }
 
     private static double commandPatternScore(String haystack) {

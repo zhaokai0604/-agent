@@ -37,6 +37,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         READ_ONLY_API_KEY_PATHS.add("/api/ops/patrol/history/trend");
         READ_ONLY_API_KEY_PATHS.add("/api/ops/patrol/correlation/latest");
         READ_ONLY_API_KEY_PATHS.add("/api/security/self-check");
+        READ_ONLY_API_KEY_PATHS.add("/api/security/policy-snapshot");
         READ_ONLY_API_KEY_PATHS.add("/api/platform/acceptance");
         READ_ONLY_API_KEY_PATHS.add("/api/platform/backend-probe");
     }

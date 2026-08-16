@@ -56,6 +56,19 @@ class UnifiedAssistantControllerSmokeTest {
     }
 
     @Test
+    void statePreviewReturnsAgentState() throws Exception {
+        when(unifiedAssistantService.previewAgentState(anyString(), anyList(), anyBoolean(), anyBoolean()))
+                .thenReturn(Map.of("phase", "plan"));
+
+        mockMvc.perform(post("/api/assistant/state/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"check disk\",\"history\":[{\"role\":\"user\",\"content\":\"hello\"}],\"useToolAgent\":true,\"confirmRemediation\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.phase").value("plan"));
+    }
+
+    @Test
     void chatStreamAcceptsMessageWithHistory() throws Exception {
         lenient().when(unifiedAssistantService.chatStream(anyString(), anyList(), anyBoolean(), anyBoolean()))
                 .thenReturn(Flux.just("ok"));

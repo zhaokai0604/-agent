@@ -42,6 +42,7 @@ public class OpsEffectDashboardService {
         int periodDays = Math.min(30, Math.max(1, days));
         AuditAggregate audit = loadAuditAggregate(periodDays);
         List<Map<String, Object>> patrolTrend = patrolHistoryService.countByDay(periodDays);
+        List<Map<String, Object>> metricTrend = patrolHistoryService.metricsTrend(periodDays, 500);
         PatrolAggregate patrol = aggregatePatrol(patrolTrend);
         HealingAggregate healing = loadHealingAggregate(periodDays);
         Map<String, Object> resource = loadResourceSnapshot();
@@ -63,6 +64,7 @@ public class OpsEffectDashboardService {
         body.put("trends", Map.of(
                 "auditByDay", audit.byDay,
                 "patrolByDay", patrolTrend,
+                "metricTrend", metricTrend,
                 "dimensionRadar", radarFromDimensions(dimensions)
         ));
         body.put("valueHighlights", buildHighlights(audit, patrol, healing));

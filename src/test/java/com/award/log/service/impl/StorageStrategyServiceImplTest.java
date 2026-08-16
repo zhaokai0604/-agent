@@ -29,9 +29,12 @@ class StorageStrategyServiceImplTest {
     private StorageStrategyServiceImpl service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
         service = new StorageStrategyServiceImpl();
         ReflectionTestUtils.setField(service, "elasticsearchService", elasticsearchService);
+        clearDir(directory("HOT_DIR"));
+        clearDir(directory("WARM_DIR"));
+        clearDir(directory("COLD_DIR"));
     }
 
     @Test
@@ -115,6 +118,15 @@ class StorageStrategyServiceImplTest {
 
     private static Path directory(String fieldName) {
         return Path.of(String.valueOf(ReflectionTestUtils.getField(StorageStrategyServiceImpl.class, fieldName)));
+    }
+
+    private static void clearDir(Path dir) throws IOException {
+        Files.createDirectories(dir);
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path p : stream) {
+                Files.deleteIfExists(p);
+            }
+        }
     }
 
     private static long countFiles(Path dir) throws IOException {

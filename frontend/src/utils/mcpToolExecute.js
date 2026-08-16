@@ -30,13 +30,17 @@ export async function runMcpToolExecute(toolName, parameters, options = {}) {
       applyMcpWriteConfirmParams(toolName, parameters, '确认执行'),
       '确认执行',
       userMessage || '确认执行',
-      result.confirmationId || result.traceId || ''
+      result.confirmationId || result.traceId || '',
+      result.capabilityToken || ''
     )
   }
 
   const normalized = normalizeMcpToolResponse(result)
   if (normalized.writeMismatch && normalized.writeMismatchMessage) {
     ElMessage.warning(normalized.writeMismatchMessage)
+  }
+  if (normalized.evidenceIncomplete && normalized.evidenceMessage) {
+    ElMessage.warning(normalized.evidenceMessage)
   }
   return normalized
 }

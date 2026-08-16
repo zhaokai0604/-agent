@@ -1,7 +1,7 @@
 <template>
   <div class="agent-composer">
     <div v-if="pendingAttachment" class="attachment-chip">
-      <span>已选：{{ pendingAttachment.name }}</span>
+      <span>已附加：{{ pendingAttachment.name }}</span>
       <el-button link type="danger" size="small" @click="$emit('clear-attachment')">移除</el-button>
     </div>
 
@@ -18,7 +18,7 @@
         :model-value="modelValue"
         type="textarea"
         :autosize="{ minRows: 2, maxRows: 8 }"
-        placeholder="描述需求，例如：运维管家、扫描 C 盘、整理照片文件…"
+        placeholder="写下任务目标、约束和成功标准，例如：检查磁盘、分析日志、生成处置计划。"
         class="composer-input"
         @update:model-value="$emit('update:modelValue', $event)"
         @keydown.enter.exact.prevent="$emit('send')"
@@ -28,7 +28,7 @@
       <div class="composer-bar">
         <div class="composer-bar__left">
           <el-button class="tool-btn" :icon="FolderOpened" text size="small" title="附加文本文件" @click="openFilePicker">
-            附件
+            证据
           </el-button>
           <el-button
             class="tool-btn"
@@ -66,7 +66,7 @@
             round
             :loading="loading"
             :icon="Promotion"
-            title="发送"
+            title="发送任务"
             @click="$emit('send')"
           >
             发送

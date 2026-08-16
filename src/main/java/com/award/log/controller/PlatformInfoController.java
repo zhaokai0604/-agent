@@ -10,6 +10,7 @@ import com.award.log.platform.KylinCommandProbe;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import com.award.log.mcp.McpToolCatalog;
+import com.award.log.security.effect.PolicyReplayService;
 import com.award.log.util.OsRuntime;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -26,8 +27,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 骞冲彴涓庤繍琛岀幆澧冨揩鐓э紙涓嶅惈瀵嗛挜鏄庢枃锛夈€? */
-@Tag(name = "骞冲彴淇℃伅")
+ * 平台与运行环境快照（不含密钥明文）。
+ */
+@Tag(name = "平台信息")
 @RestController
 @RequestMapping("/api/platform")
 public class PlatformInfoController {
@@ -39,6 +41,9 @@ public class PlatformInfoController {
     private final OpsDryRunProperties opsDryRunProperties;
     private final DataSource dataSource;
     private final McpToolCatalog mcpToolCatalog;
+
+    @Autowired(required = false)
+    private PolicyReplayService policyReplayService;
 
     @Autowired(required = false)
     private ChatClient chatClient;
@@ -81,7 +86,7 @@ public class PlatformInfoController {
         this.mcpToolCatalog = mcpToolCatalog;
     }
 
-    @Operation(summary = "骞冲彴涓庣敓浜у氨缁揩鐓э紙闇€鐧诲綍锛涘惈娌荤悊涓庢渶灏忔潈闄愯鎯咃級")
+    @Operation(summary = "平台与生产就绪快照（需登录；含治理与最小权限详情）")
     @GetMapping("/info")
     public Result<Map<String, Object>> info() {
         Map<String, Object> body = buildAcceptanceBody();
@@ -105,6 +110,13 @@ public class PlatformInfoController {
         security.put("autonomousOpsEnabled", environment.getProperty("agent.autonomous.enabled"));
         security.put("globalDryRun", opsDryRunProperties.isGlobalDryRun());
         security.put("aiConfigured", chatClient != null && aiApiKey != null && !aiApiKey.isBlank());
+        security.put("effectEngine", "ToolEffect+CapabilityToken+Evidence+Budget+PlanGate+PolicyReplay");
+        security.put("governanceHardCover", true);
+        security.put("policyReplayApi", "/api/security/policy-replay");
+        security.put("securityCockpitTab", "security-cockpit");
+        if (policyReplayService != null) {
+            security.put("policySnapshot", policyReplayService.currentPolicySnapshot());
+        }
         body.put("security", security);
 
         body.put("governance", opsGovernanceService.summaryForPlatform());
@@ -117,7 +129,7 @@ public class PlatformInfoController {
         return Result.success(body);
     }
 
-    @Operation(summary = "楹掗簾 V11 + LoongArch 鍏紑楠屾敹蹇収锛堟棤闇€鐧诲綍锛屼笉鍚繍琛岀敤鎴蜂笌鑷姩鍖栧紑鍏筹級")
+    @Operation(summary = "麒麟 V11 + LoongArch 公开验收快照（无需登录，不含运行用户与自动化开关）")
     @GetMapping("/acceptance")
     public Result<Map<String, Object>> acceptance() {
         return Result.success(buildAcceptanceBody());
@@ -163,7 +175,7 @@ public class PlatformInfoController {
                         ? "LLM 对话可用" : "未配置 AI_API_KEY，编排 MCP 仍可用"));
         components.put("elasticsearch", Map.of(
                 "enabled", elasticsearchEnabled,
-                "hint", elasticsearchEnabled ? "已启用" : "默认关闭，Chat 工具回退 MariaDB 明细"));
+                "hint", elasticsearchEnabled ? "已启用" : "默认关闭，Chat 工具回退 MySQL 明细"));
         components.put("redis", Map.of(
                 "enabled", redisEnabled,
                 "hint", redisEnabled ? "已启用" : "默认关闭，Statistics 使用进程内缓存"));

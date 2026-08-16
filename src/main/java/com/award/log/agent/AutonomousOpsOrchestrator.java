@@ -248,10 +248,25 @@ public class AutonomousOpsOrchestrator {
         String traceId = traceIdGenerator.nextId();
         List<Map<String, Object>> steps = auditRecorder.newSteps();
         auditRecorder.addCot(steps, 1, "receive", userMessage);
+        List<String> plannedTools = AgentSkillPlan.forOrchestrate(userMessage);
+        String planPhase = AgentSkillPlan.planPhase(forceRemediate, plannedTools);
 
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("traceId", traceId);
         report.put("readOnlySurface", surface == McpToolSurface.READ_ONLY);
+        report.put("plannedTools", plannedTools);
+        report.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
+        report.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
+        report.put("planPhase", planPhase);
+        report.put("executionState", AgentExecutionState.build(
+                "ORCHESTRATE",
+                forceRemediate,
+                forceRemediate && surface != McpToolSurface.READ_ONLY,
+                plannedTools,
+                planPhase,
+                traceId,
+                null,
+                null));
 
         StringBuilder md = new StringBuilder("## Autonomous Ops Report\n\n");
 
@@ -315,11 +330,7 @@ public class AutonomousOpsOrchestrator {
                         remediationEffectEvaluator.captureMetrics(),
                         remediationSummary.executedCount());
                 report.put("remediationEffect", effect);
-                md.append("### Effect\n\n");
-                md.append(String.format(Locale.ROOT, "- Healing score: **%s/100** (%s)\n",
-                        effect.get("healingScore"), effect.get("verdict")));
-                md.append(String.format(Locale.ROOT, "- Disk delta: %.2f%%\n", asDouble(effect.get("diskUsageDeltaPct"))));
-                md.append(String.format(Locale.ROOT, "- CPU delta: %.2f%%\n\n", asDouble(effect.get("cpuUsageDeltaPct"))));
+                md.append(OpsReportFormat.effectSectionMarkdown(effect));
             }
 
             boolean hasActionable = findings.stream().anyMatch(f -> OpsReportFormat.isActionableSeverity(f.severity()));
@@ -330,6 +341,16 @@ public class AutonomousOpsOrchestrator {
             }
 
             String status = anyRemediated ? "REMEDIATED" : (findings.isEmpty() ? "HEALTHY" : "DIAGNOSED");
+            report.put("securityOutcome", status);
+            report.put("executionState", AgentExecutionState.build(
+                    "ORCHESTRATE",
+                    forceRemediate,
+                    anyRemediated,
+                    plannedTools,
+                    planPhase,
+                    traceId,
+                    status,
+                    null));
             auditRecorder.record(traceId, userMessage, intentRisk.name(), status,
                     "AutonomousOpsOrchestrator", true,
                     truncate(md.toString(), 500), steps, timeSource.currentTimeMillis() - startedAt);
@@ -345,6 +366,16 @@ public class AutonomousOpsOrchestrator {
                     "AutonomousOpsOrchestrator", false, e.getMessage(),
                     steps, timeSource.currentTimeMillis() - startedAt);
             report.put("error", e.getMessage());
+            report.put("securityOutcome", "ERROR");
+            report.put("executionState", AgentExecutionState.build(
+                    "ORCHESTRATE",
+                    forceRemediate,
+                    false,
+                    plannedTools,
+                    planPhase,
+                    traceId,
+                    "ERROR",
+                    null));
             return new RunResult(md.toString(), traceId, report);
         }
     }
@@ -748,8 +779,8 @@ public class AutonomousOpsOrchestrator {
                 sb.append("   - Suggested action: ").append(action).append("\n");
             }
         }
-        sb.append("\n> Reply **").append(OpsReportFormat.CONFIRM_EXECUTE_HINT)
-                .append("** to continue with allowed write actions.\n");
+        sb.append("\n> 请回复 **「").append(OpsReportFormat.CONFIRM_EXECUTE_HINT_ZH)
+                .append("」** 以在策略允许范围内继续写操作。\n");
         return sb.toString();
     }
 
@@ -945,6 +976,15 @@ public class AutonomousOpsOrchestrator {
         for (OpsWorkflow workflow : workflows) {
             auditRecorder.addStep(steps, "workflow", "matched workflow=" + workflow.workflowId());
         }
+        md.append(OpsReportFormat.awmSectionHeader());
+        for (OpsWorkflow workflow : workflows) {
+            md.append("- `").append(workflow.workflowId()).append("`");
+            if (workflow.title() != null && !workflow.title().isBlank()) {
+                md.append(' ').append(workflow.title());
+            }
+            md.append('\n');
+        }
+        md.append(OpsReportFormat.awmSectionFooter());
     }
 
     private record Finding(String severity, String title, String detail, String kind) {
