@@ -2,6 +2,8 @@ package com.award.log.controller;
 
 import com.award.log.common.Result;
 import com.award.log.model.SysUser;
+import com.award.log.model.SysUserView;
+import com.award.log.model.SysUserViews;
 import com.award.log.security.RequestUserResolver;
 import com.award.log.service.SysUserService;
 import com.award.log.service.UserApiKeyService;
@@ -49,7 +51,7 @@ public class UserProfileController {
 
     @Operation(summary = "获取当前登录用户资料")
     @GetMapping("/user-info")
-    public Result<SysUser> getCurrentUserInfo(HttpServletRequest request) {
+    public Result<SysUserView> getCurrentUserInfo(HttpServletRequest request) {
         Integer userId = requestUserResolver.currentUserId(request);
         if (userId == null) {
             return unauthorized();
@@ -58,12 +60,12 @@ public class UserProfileController {
         if (user == null) {
             return Result.error(404, "当前用户不存在");
         }
-        return Result.success(sanitizeUser(user));
+        return Result.success(SysUserViews.toView(user));
     }
 
     @Operation(summary = "更新当前登录用户资料")
     @PutMapping("/user-info")
-    public Result<SysUser> updateUserInfo(HttpServletRequest request, @RequestBody(required = false) SysUser payload) {
+    public Result<SysUserView> updateUserInfo(HttpServletRequest request, @RequestBody(required = false) SysUser payload) {
         Integer userId = requestUserResolver.currentUserId(request);
         if (userId == null) {
             return unauthorized();
@@ -81,7 +83,7 @@ public class UserProfileController {
             return Result.error("更新个人资料失败");
         }
         SysUser refreshed = sysUserService.getUserById(userId);
-        return Result.success(sanitizeUser(refreshed), "个人资料已更新");
+        return Result.success(SysUserViews.toView(refreshed), "个人资料已更新");
     }
 
     @Operation(summary = "修改当前登录用户密码")
@@ -251,14 +253,6 @@ public class UserProfileController {
         stats.put("username", user == null ? null : user.getUsername());
         stats.put("role", user == null ? null : user.getRole());
         return Result.success(stats);
-    }
-
-    private static SysUser sanitizeUser(SysUser user) {
-        if (user == null) {
-            return null;
-        }
-        user.setPassword(null);
-        return user;
     }
 
     private static String normalizeNullable(String value) {

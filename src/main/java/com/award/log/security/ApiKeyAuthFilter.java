@@ -1,6 +1,5 @@
 package com.award.log.security;
 
-import com.award.log.model.SysUser;
 import com.award.log.service.SysUserService;
 import com.award.log.service.UserApiKeyService;
 import jakarta.servlet.FilterChain;
@@ -100,12 +99,16 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             writeJson(response, 401, "API_KEY_INVALID", "API key invalid");
             return;
         }
-        SysUser user = sysUserService.getUserById(userId);
-        if (user == null) {
+        if (!sysUserService.userExistsById(userId)) {
             writeJson(response, 401, "API_KEY_INVALID", "API key user not found");
             return;
         }
-        requestUserResolver.bindApiKeyUser(request, user.getUserId(), user.getRole());
+        Integer role = sysUserService.getUserRoleById(userId);
+        if (role == null) {
+            writeJson(response, 401, "API_KEY_INVALID", "API key user not found");
+            return;
+        }
+        requestUserResolver.bindApiKeyUser(request, userId, role);
         filterChain.doFilter(request, response);
     }
 

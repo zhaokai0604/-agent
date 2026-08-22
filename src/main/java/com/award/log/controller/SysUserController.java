@@ -3,6 +3,8 @@ package com.award.log.controller;
 import com.award.log.common.PageResult;
 import com.award.log.common.Result;
 import com.award.log.model.SysUser;
+import com.award.log.model.SysUserView;
+import com.award.log.model.SysUserViews;
 import com.award.log.security.AuthInterceptor;
 import com.award.log.security.RequestUserResolver;
 import com.award.log.service.SysUserService;
@@ -38,9 +40,9 @@ public class SysUserController {
 
     @Operation(summary = "用户登录")
     @PostMapping("/login")
-    public Result<SysUser> login(@RequestBody SysUser loginUser,
-                                 HttpSession session,
-                                 HttpServletRequest request) {
+    public Result<SysUserView> login(@RequestBody SysUser loginUser,
+                                     HttpSession session,
+                                     HttpServletRequest request) {
         log.info("用户登录: {}", loginUser.getUsername());
         SysUser user = sysUserService.login(loginUser.getUsername(), loginUser.getPassword());
         if (user == null) {
@@ -59,8 +61,7 @@ public class SysUserController {
                     0,
                     0);
         }
-        user.setPassword(null);
-        return Result.success(user);
+        return Result.success(SysUserViews.toView(user));
     }
 
     @Operation(summary = "用户登出")
@@ -93,22 +94,18 @@ public class SysUserController {
         Integer userId = sysUserService.registerUser(user);
         return userId != null
                 ? Result.success(userId)
-                : Result.error("用户名已存在或注册信息不完整");
+                : Result.error("用户名或邮箱已存在，或注册信息不完整");
     }
 
     @Operation(summary = "获取用户信息")
     @GetMapping("/{userId}")
-    public Result<SysUser> getUserById(@PathVariable String userId) {
+    public Result<SysUserView> getUserById(@PathVariable String userId) {
         log.info("获取用户信息: {}", userId);
         Integer id = parseId(userId);
         if (id == null) {
             return Result.error("用户ID格式错误");
         }
-        SysUser user = sysUserService.getUserById(id);
-        if (user != null) {
-            user.setPassword(null);
-        }
-        return Result.success(user);
+        return Result.success(SysUserViews.toView(sysUserService.getUserById(id)));
     }
 
     @Operation(summary = "更新用户信息")
@@ -139,19 +136,15 @@ public class SysUserController {
 
     @Operation(summary = "获取全部用户")
     @GetMapping("/list")
-    public Result<List<SysUser>> getAllUsers() {
-        List<SysUser> users = sysUserService.getAllUsers();
-        users.forEach(user -> user.setPassword(null));
-        return Result.success(users);
+    public Result<List<SysUserView>> getAllUsers() {
+        return Result.success(SysUserViews.toViews(sysUserService.getAllUsers()));
     }
 
     @Operation(summary = "分页获取用户列表")
     @GetMapping("/page")
-    public Result<PageResult<SysUser>> getUsersPage(@RequestParam(defaultValue = "1") int pageNum,
-                                                    @RequestParam(defaultValue = "10") int pageSize) {
-        PageResult<SysUser> pageResult = sysUserService.getUsersPage(pageNum, pageSize);
-        pageResult.getList().forEach(user -> user.setPassword(null));
-        return Result.success(pageResult);
+    public Result<PageResult<SysUserView>> getUsersPage(@RequestParam(defaultValue = "1") int pageNum,
+                                                      @RequestParam(defaultValue = "10") int pageSize) {
+        return Result.success(SysUserViews.toViewPage(sysUserService.getUsersPage(pageNum, pageSize)));
     }
 
     @Operation(summary = "检查用户是否存在")

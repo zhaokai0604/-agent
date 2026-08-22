@@ -12,56 +12,56 @@ import java.util.List;
 @Mapper
 public interface SysUserMapper {
     /**
-     * 根据用户ID查询用户
-     * @param userId 用户ID
-     * @return 用户信息
+     * 根据用户ID查询公开资料（不含 password）
      */
     SysUser selectById(Integer userId);
 
     /**
-     * 根据用户名查询用户
-     * @param username 用户名
-     * @return 用户信息
+     * 根据用户名查询公开资料（不含 password）
      */
     SysUser selectByUsername(String username);
 
     /**
-     * 根据邮箱查询用户
+     * 根据邮箱查询公开资料（不含 password）
      */
     SysUser selectByEmail(@Param("email") String email);
 
     /**
-     * 查询所有用户
-     * @return 用户列表
+     * 登录/改密等鉴权场景：按用户名读取 password 哈希
      */
+    SysUser selectAuthByUsername(String username);
+
+    /**
+     * 管理更新场景：读取含 password 的鉴权字段
+     */
+    SysUser selectAuthById(Integer userId);
+
+    /**
+     * 校验密码时只读哈希，避免 SELECT *
+     */
+    String selectPasswordHashById(@Param("userId") Integer userId);
+
+    /**
+     * API Key 等场景只读 role
+     */
+    Integer selectRoleById(@Param("userId") Integer userId);
+
+    boolean existsById(@Param("userId") Integer userId);
+
+    boolean existsByUsername(@Param("username") String username);
+
+    boolean existsByEmail(@Param("email") String email);
+
+    boolean existsByEmailExcludingUser(@Param("email") String email, @Param("userId") Integer userId);
+
     List<SysUser> selectAll();
 
-    /**
-     * 分页查询用户列表
-     * @param offset 偏移量
-     * @param limit 每页条数
-     * @return 用户列表
-     */
     List<SysUser> selectPage(@Param("offset") int offset, @Param("limit") int limit);
 
-    /**
-     * 查询用户总数
-     * @return 用户总数
-     */
     long countAll();
 
-    /**
-     * 插入用户
-     * @param user 用户信息
-     * @return 影响行数
-     */
     int insert(SysUser user);
 
-    /**
-     * 更新用户信息
-     * @param user 用户信息
-     * @return 影响行数
-     */
     int updateById(SysUser user);
 
     int updateProfileFields(@Param("userId") Integer userId,
@@ -71,16 +71,9 @@ public interface SysUserMapper {
     int updatePasswordById(@Param("userId") Integer userId,
                            @Param("password") String password);
 
-    /**
-     * 删除用户
-     * @param userId 用户ID
-     * @return 影响行数
-     */
+    int updateRoleById(@Param("userId") Integer userId, @Param("role") Integer role);
+
     int deleteById(Integer userId);
-    
-    /**
-     * 查询管理员用户
-     * @return 管理员用户列表
-     */
+
     List<SysUser> selectAdminUsers();
 }

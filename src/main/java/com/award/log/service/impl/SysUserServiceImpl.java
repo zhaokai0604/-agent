@@ -6,6 +6,7 @@ import com.award.log.model.SysUser;
 import com.award.log.service.SysUserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -22,7 +23,6 @@ public class SysUserServiceImpl implements SysUserService {
     @Autowired
     private SysUserMapper sysUserMapper;
 
-    // 密码加密器
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @Override
@@ -58,30 +58,33 @@ public class SysUserServiceImpl implements SysUserService {
 
     @Override
     public Integer registerUser(SysUser user) {
-        // 检查用户名是否已存在
-        if (sysUserMapper.selectByUsername(user.getUsername()) != null) {
-            log.warn("用户名已存在: {}", user.getUsername());
-            return null;
-        }
-        if (user.getEmail() != null && !user.getEmail().isBlank()
-                && sysUserMapper.selectByEmail(user.getEmail().trim()) != null) {
-            log.warn("邮箱已被注册: {}", user.getEmail());
+        if (user == null
+                || user.getUsername() == null
+                || user.getUsername().isBlank()
+                || user.getPassword() == null
+                || user.getPassword().isBlank()) {
             return null;
         }
 
-        // 加密密码
+        user.setUsername(user.getUsername().trim());
+        if (user.getEmail() != null) {
+            String email = user.getEmail().trim();
+            user.setEmail(email.isEmpty() ? null : email);
+        }
+
         user.setPassword(passwordEncoder.encode(user.getPassword()));
-
-        // 自注册一律为普通用户，忽略客户端传入的 role
         user.setRole(0);
 
-        // 插入用户
-        int result = sysUserMapper.insert(user);
-        if (result > 0) {
-            log.info("用户注册成功: {}", user.getUsername());
-            return user.getUserId();
-        } else {
+        try {
+            int result = sysUserMapper.insert(user);
+            if (result > 0) {
+                log.info("用户注册成功: {}", user.getUsername());
+                return user.getUserId();
+            }
             log.error("用户注册失败: {}", user.getUsername());
+            return null;
+        } catch (DuplicateKeyException ex) {
+            log.warn("用户注册冲突（用户名或邮箱已存在）: {}", user.getUsername());
             return null;
         }
     }
@@ -91,28 +94,55 @@ public class SysUserServiceImpl implements SysUserService {
         if (user == null || user.getUserId() == null) {
             return false;
         }
-        SysUser existing = sysUserMapper.selectById(user.getUserId());
+        SysUser existing = sysUserMapper.selectAuthById(user.getUserId());
         if (existing == null) {
             return false;
         }
-        // 禁止通过通用更新接口篡改角色（须走 updateUserRole）
+
+        if (user.getUsername() == null || user.getUsername().isBlank()) {
+            user.setUsername(existing.getUsername());
+        } else {
+            user.setUsername(user.getUsername().trim());
+        }
+
+        if (user.getEmail() != null) {
+            String email = user.getEmail().trim();
+            user.setEmail(email.isEmpty() ? null : email);
+        }
+
+        if (!user.getUsername().equals(existing.getUsername())
+                && sysUserMapper.existsByUsername(user.getUsername())) {
+            log.warn("更新用户失败，用户名已存在: {}", user.getUsername());
+            return false;
+        }
+        if (user.getEmail() != null
+                && !user.getEmail().equals(existing.getEmail())
+                && sysUserMapper.existsByEmailExcludingUser(user.getEmail(), user.getUserId())) {
+            log.warn("更新用户失败，邮箱已被占用: {}", user.getEmail());
+            return false;
+        }
+
         user.setRole(existing.getRole());
 
-        // 如果更新密码，需要加密
         if (user.getPassword() != null && !user.getPassword().isEmpty()) {
             user.setPassword(passwordEncoder.encode(user.getPassword()));
         } else {
             user.setPassword(existing.getPassword());
         }
 
-        int result = sysUserMapper.updateById(user);
-        boolean success = result > 0;
-        if (success) {
-            log.info("用户信息更新成功: {}", user.getUsername());
-        } else {
-            log.error("用户信息更新失败: {}", user.getUsername());
+        try {
+            int result = sysUserMapper.updateById(user);
+            boolean success = result > 0;
+            if (success) {
+                log.info("用户信息更新成功: {}", user.getUsername());
+            } else {
+                log.error("用户信息更新失败: {}", user.getUsername());
+            }
+            return success;
+        } catch (DuplicateKeyException ex) {
+            log.warn("更新用户冲突（用户名或邮箱已存在）: userId={}", user.getUserId());
+            return false;
         }
-        return success;
     }
 
     @Override
@@ -129,51 +159,42 @@ public class SysUserServiceImpl implements SysUserService {
 
     @Override
     public SysUser login(String username, String password) {
-        // 根据用户名查询用户
-        SysUser user = sysUserMapper.selectByUsername(username);
+        SysUser user = sysUserMapper.selectAuthByUsername(username);
         if (user == null) {
             log.warn("用户名不存在: {}", username);
             return null;
         }
 
-        // 验证密码
         if (passwordEncoder.matches(password, user.getPassword())) {
             log.info("用户登录成功: {}", username);
-            return user;
-        } else {
-            log.warn("密码错误: {}", username);
-            return null;
+            return sysUserMapper.selectByUsername(username);
         }
-    }
-
-    @Override
-    public SysUser getAdminUser() {
-        // 获取所有用户，找到角色为1的管理员用户
-        List<SysUser> users = getAllUsers();
-        for (SysUser user : users) {
-            if (user != null && user.getRole() != null && user.getRole() == 1) {
-                log.info("找到管理员用户: {}", user.getUsername());
-                return user;
-            }
-        }
-        log.warn("未找到管理员用户");
+        log.warn("密码错误: {}", username);
         return null;
     }
 
     @Override
+    public SysUser getAdminUser() {
+        List<SysUser> admins = sysUserMapper.selectAdminUsers();
+        if (admins == null || admins.isEmpty()) {
+            log.warn("未找到管理员用户");
+            return null;
+        }
+        SysUser admin = admins.get(0);
+        log.info("找到管理员用户: {}", admin.getUsername());
+        return admin;
+    }
+
+    @Override
     public boolean resetPassword(String username, String newPassword) {
-        // 根据用户名查询用户
-        SysUser user = sysUserMapper.selectByUsername(username);
+        SysUser user = sysUserMapper.selectAuthByUsername(username);
         if (user == null) {
             log.warn("用户不存在: {}", username);
             return false;
         }
 
-        // 加密新密码
-        user.setPassword(passwordEncoder.encode(newPassword));
-
-        // 更新用户信息
-        int result = sysUserMapper.updateById(user);
+        String encoded = passwordEncoder.encode(newPassword);
+        int result = sysUserMapper.updatePasswordById(user.getUserId(), encoded);
         boolean success = result > 0;
         if (success) {
             log.info("用户密码重置成功: {}", username);
@@ -188,10 +209,8 @@ public class SysUserServiceImpl implements SysUserService {
         if (userId == null || rawPassword == null) {
             return false;
         }
-        SysUser user = sysUserMapper.selectById(userId);
-        return user != null
-                && user.getPassword() != null
-                && passwordEncoder.matches(rawPassword, user.getPassword());
+        String hash = sysUserMapper.selectPasswordHashById(userId);
+        return hash != null && passwordEncoder.matches(rawPassword, hash);
     }
 
     @Override
@@ -211,28 +230,64 @@ public class SysUserServiceImpl implements SysUserService {
         if (userId == null) {
             return false;
         }
-        return sysUserMapper.updateProfileFields(
-                userId,
-                email == null ? null : email.trim(),
-                wechatUserid == null ? null : wechatUserid.trim()) > 0;
+        String normalizedEmail = email == null ? null : email.trim();
+        if (normalizedEmail != null && normalizedEmail.isEmpty()) {
+            normalizedEmail = null;
+        }
+        String normalizedWechat = wechatUserid == null ? null : wechatUserid.trim();
+        if (normalizedWechat != null && normalizedWechat.isEmpty()) {
+            normalizedWechat = null;
+        }
+
+        if (normalizedEmail != null
+                && sysUserMapper.existsByEmailExcludingUser(normalizedEmail, userId)) {
+            log.warn("更新个人资料失败，邮箱已被占用: userId={}, email={}", userId, normalizedEmail);
+            return false;
+        }
+
+        try {
+            return sysUserMapper.updateProfileFields(userId, normalizedEmail, normalizedWechat) > 0;
+        } catch (DuplicateKeyException ex) {
+            log.warn("更新个人资料邮箱冲突: userId={}", userId);
+            return false;
+        }
     }
 
     @Override
     public boolean userExists(String username) {
-        SysUser user = sysUserMapper.selectByUsername(username);
-        return user != null;
+        if (username == null || username.isBlank()) {
+            return false;
+        }
+        return sysUserMapper.existsByUsername(username.trim());
+    }
+
+    @Override
+    public boolean userExistsById(Integer userId) {
+        if (userId == null) {
+            return false;
+        }
+        return sysUserMapper.existsById(userId);
+    }
+
+    @Override
+    public Integer getUserRoleById(Integer userId) {
+        if (userId == null) {
+            return null;
+        }
+        return sysUserMapper.selectRoleById(userId);
     }
 
     @Override
     public boolean updateUserRole(Integer userId, Integer role) {
+        if (userId == null || role == null) {
+            return false;
+        }
+        if (!sysUserMapper.existsById(userId)) {
+            log.warn("用户不存在: {}", userId);
+            return false;
+        }
         try {
-            SysUser user = sysUserMapper.selectById(userId);
-            if (user == null) {
-                log.warn("用户不存在: {}", userId);
-                return false;
-            }
-            user.setRole(role);
-            int result = sysUserMapper.updateById(user);
+            int result = sysUserMapper.updateRoleById(userId, role);
             boolean success = result > 0;
             if (success) {
                 log.info("用户角色更新成功: 用户ID={}, 角色={}", userId, role);

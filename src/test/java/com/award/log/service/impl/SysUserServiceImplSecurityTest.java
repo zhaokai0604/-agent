@@ -9,6 +9,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import com.award.log.mapper.SysUserMapper;
+import org.springframework.dao.DuplicateKeyException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -25,7 +26,6 @@ class SysUserServiceImplSecurityTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(sysUserMapper.selectByUsername("newbie")).thenReturn(null);
         lenient().when(sysUserMapper.insert(any(SysUser.class))).thenAnswer(inv -> {
             SysUser u = inv.getArgument(0);
             u.setUserId(99);
@@ -46,6 +46,18 @@ class SysUserServiceImplSecurityTest {
         ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
         verify(sysUserMapper).insert(captor.capture());
         assertEquals(0, captor.getValue().getRole());
+        verify(sysUserMapper, never()).selectByUsername(any());
+    }
+
+    @Test
+    void registerUserHandlesDuplicateKeyWithoutPreCheckRace() {
+        when(sysUserMapper.insert(any(SysUser.class))).thenThrow(new DuplicateKeyException("uk_username"));
+
+        SysUser user = new SysUser();
+        user.setUsername("newbie");
+        user.setPassword("Secret123!");
+
+        assertNull(sysUserService.registerUser(user));
     }
 
     @Test
@@ -55,7 +67,7 @@ class SysUserServiceImplSecurityTest {
         existing.setUsername("alice");
         existing.setRole(0);
         existing.setPassword("hash");
-        when(sysUserMapper.selectById(5)).thenReturn(existing);
+        when(sysUserMapper.selectAuthById(5)).thenReturn(existing);
         when(sysUserMapper.updateById(any())).thenReturn(1);
 
         SysUser patch = new SysUser();
@@ -68,5 +80,42 @@ class SysUserServiceImplSecurityTest {
         ArgumentCaptor<SysUser> captor = ArgumentCaptor.forClass(SysUser.class);
         verify(sysUserMapper).updateById(captor.capture());
         assertEquals(0, captor.getValue().getRole());
+    }
+
+    @Test
+    void updateOwnProfileRejectsDuplicateEmail() {
+        when(sysUserMapper.existsByEmailExcludingUser("dup@example.com", 7)).thenReturn(true);
+
+        assertFalse(sysUserService.updateOwnProfile(7, "dup@example.com", "wx-1"));
+        verify(sysUserMapper, never()).updateProfileFields(any(), any(), any());
+    }
+
+    @Test
+    void userExistsUsesExistsQueryInsteadOfSelectStar() {
+        when(sysUserMapper.existsByUsername("alice")).thenReturn(true);
+
+        assertTrue(sysUserService.userExists("alice"));
+        verify(sysUserMapper).existsByUsername("alice");
+        verify(sysUserMapper, never()).selectByUsername(any());
+    }
+
+    @Test
+    void matchesPasswordReadsHashOnly() {
+        when(sysUserMapper.selectPasswordHashById(3))
+                .thenReturn("$2a$10$abcdefghijklmnopqrstuv");
+
+        assertFalse(sysUserService.matchesPassword(3, "wrong"));
+        verify(sysUserMapper).selectPasswordHashById(3);
+        verify(sysUserMapper, never()).selectById(any());
+    }
+
+    @Test
+    void updateUserRoleUsesDedicatedUpdate() {
+        when(sysUserMapper.existsById(8)).thenReturn(true);
+        when(sysUserMapper.updateRoleById(8, 1)).thenReturn(1);
+
+        assertTrue(sysUserService.updateUserRole(8, 1));
+        verify(sysUserMapper).updateRoleById(8, 1);
+        verify(sysUserMapper, never()).selectById(any());
     }
 }

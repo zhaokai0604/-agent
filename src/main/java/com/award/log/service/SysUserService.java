@@ -97,6 +97,16 @@ public interface SysUserService {
      * @return 是否存在
      */
     boolean userExists(String username);
+
+    /**
+     * 根据用户ID检查用户是否存在（仅 COUNT，不加载整行）
+     */
+    boolean userExistsById(Integer userId);
+
+    /**
+     * 读取用户角色（API Key 等轻量鉴权场景）
+     */
+    Integer getUserRoleById(Integer userId);
     
     /**
      * 更新用户角色

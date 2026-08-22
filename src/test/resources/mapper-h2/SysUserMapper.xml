@@ -1,42 +1,81 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.award.log.mapper.SysUserMapper">
-    <!-- 根据用户ID查询用户 -->
+
+    <sql id="PublicColumns">
+        user_id, username, role, email, wechat_userid, create_time, update_time
+    </sql>
+
+    <sql id="AuthColumns">
+        user_id, username, password, role, email, wechat_userid, create_time, update_time
+    </sql>
+
     <select id="selectById" parameterType="java.lang.Integer" resultType="com.award.log.model.SysUser">
-        SELECT * FROM sys_user WHERE user_id = #{userId}
+        SELECT <include refid="PublicColumns"/> FROM sys_user WHERE user_id = #{userId}
     </select>
 
-    <!-- 根据用户名查询用户 -->
     <select id="selectByUsername" parameterType="java.lang.String" resultType="com.award.log.model.SysUser">
-        SELECT * FROM sys_user WHERE username = #{username}
+        SELECT <include refid="PublicColumns"/> FROM sys_user WHERE username = #{username}
     </select>
 
     <select id="selectByEmail" parameterType="java.lang.String" resultType="com.award.log.model.SysUser">
-        SELECT * FROM sys_user WHERE email = #{email}
+        SELECT <include refid="PublicColumns"/> FROM sys_user WHERE email = #{email}
     </select>
 
-    <!-- 查询所有用户 -->
+    <select id="selectAuthByUsername" parameterType="java.lang.String" resultType="com.award.log.model.SysUser">
+        SELECT user_id, username, password, role FROM sys_user WHERE username = #{username}
+    </select>
+
+    <select id="selectAuthById" parameterType="java.lang.Integer" resultType="com.award.log.model.SysUser">
+        SELECT <include refid="AuthColumns"/> FROM sys_user WHERE user_id = #{userId}
+    </select>
+
+    <select id="selectPasswordHashById" resultType="java.lang.String">
+        SELECT password FROM sys_user WHERE user_id = #{userId}
+    </select>
+
+    <select id="selectRoleById" resultType="java.lang.Integer">
+        SELECT role FROM sys_user WHERE user_id = #{userId}
+    </select>
+
+    <select id="existsById" resultType="boolean">
+        SELECT COUNT(1) > 0 FROM sys_user WHERE user_id = #{userId}
+    </select>
+
+    <select id="existsByUsername" resultType="boolean">
+        SELECT COUNT(1) > 0 FROM sys_user WHERE username = #{username}
+    </select>
+
+    <select id="existsByEmail" resultType="boolean">
+        SELECT COUNT(1) > 0 FROM sys_user
+        WHERE email = #{email} AND email IS NOT NULL AND email != ''
+    </select>
+
+    <select id="existsByEmailExcludingUser" resultType="boolean">
+        SELECT COUNT(1) > 0 FROM sys_user
+        WHERE email = #{email}
+          AND user_id != #{userId}
+          AND email IS NOT NULL
+          AND email != ''
+    </select>
+
     <select id="selectAll" resultType="com.award.log.model.SysUser">
-        SELECT * FROM sys_user
+        SELECT <include refid="PublicColumns"/> FROM sys_user
     </select>
 
-    <!-- 分页查询用户列表 -->
     <select id="selectPage" resultType="com.award.log.model.SysUser">
-        SELECT * FROM sys_user LIMIT #{offset}, #{limit}
+        SELECT <include refid="PublicColumns"/> FROM sys_user LIMIT #{offset}, #{limit}
     </select>
 
-    <!-- 查询用户总数 -->
     <select id="countAll" resultType="java.lang.Long">
         SELECT COUNT(*) FROM sys_user
     </select>
 
-    <!-- 插入用户 -->
     <insert id="insert" parameterType="com.award.log.model.SysUser" useGeneratedKeys="true" keyProperty="userId">
         INSERT INTO sys_user (username, password, role, email, create_time, update_time)
         VALUES (#{username}, #{password}, #{role}, #{email}, NOW(), NOW())
     </insert>
 
-    <!-- 更新用户信息 -->
     <update id="updateById" parameterType="com.award.log.model.SysUser">
         UPDATE sys_user
         <set>
@@ -69,13 +108,18 @@
         WHERE user_id = #{userId}
     </update>
 
-    <!-- 删除用户 -->
+    <update id="updateRoleById">
+        UPDATE sys_user
+        SET role = #{role},
+            update_time = NOW()
+        WHERE user_id = #{userId}
+    </update>
+
     <delete id="deleteById" parameterType="java.lang.Integer">
         DELETE FROM sys_user WHERE user_id = #{userId}
     </delete>
 
-    <!-- 查询管理员用户 -->
     <select id="selectAdminUsers" resultType="com.award.log.model.SysUser">
-        SELECT * FROM sys_user WHERE role = 1
+        SELECT <include refid="PublicColumns"/> FROM sys_user WHERE role = 1
     </select>
 </mapper>
