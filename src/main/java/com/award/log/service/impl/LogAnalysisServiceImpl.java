@@ -42,6 +42,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * 日志文件分析引擎：分片并行解析、多维异常检测、智能决策与报告导出。
+ * <p>
+ * 同一进程内按文件内容指纹去重，{@link #analyzedFiles} 有上限，
+ * 超出时由 {@link #rememberAnalyzedFile} 淘汰最旧记录，防止去重表无限增长。
+ */
 @Slf4j
 @Service
 public class LogAnalysisServiceImpl implements LogAnalysisService {
@@ -51,6 +57,8 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     /** 热循环内取消检查间隔（行），暂停/取消仅在边界处阻塞 */
     private static final int CANCEL_CHECK_EVERY_LINES = 256;
     private static final long ANALYSIS_QUEUE_WAIT_MS = 60_000L;
+    /** 已分析文件指纹上限；超出淘汰最旧条目，避免去重表占满堆。 */
+    private static final int MAX_ANALYZED_FILES = 2048;
 
     @Value("${log.analysis.max-concurrent-tasks:4}")
     private int maxConcurrentAnalysisTasks;
@@ -69,8 +77,8 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     // 任务线程映射，用于跟踪每个任务的执行线程，以便取消任务时中断线程
     private final ConcurrentHashMap<String, Thread> taskThreadMap = new ConcurrentHashMap<>();
     
-    // 已分析文件集合，用于确保每个文件只分析一次
-    private final Set<String> analyzedFiles = ConcurrentHashMap.newKeySet();
+    /** 已分析文件指纹（路径+mtime+size → 记录时间）；仅防本进程内重复提交。 */
+    private final ConcurrentHashMap<String, Long> analyzedFiles = new ConcurrentHashMap<>();
 
     @Autowired
     private AnalysisTaskManager taskManager;
@@ -103,6 +111,23 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     void initAnalysisConcurrencyGate() {
         analysisConcurrencyGate = new Semaphore(Math.max(1, maxConcurrentAnalysisTasks), true);
         log.info("日志分析并发上限: {}", Math.max(1, maxConcurrentAnalysisTasks));
+    }
+
+    /**
+     * 记录已分析文件，并在超过 {@link #MAX_ANALYZED_FILES} 时按时间淘汰最旧指纹。
+     * 只做进程内去重，不持久化。
+     */
+    private void rememberAnalyzedFile(String dedupKey) {
+        analyzedFiles.put(dedupKey, System.currentTimeMillis());
+        int overflow = analyzedFiles.size() - MAX_ANALYZED_FILES;
+        if (overflow <= 0) {
+            return;
+        }
+        analyzedFiles.entrySet().stream()
+                .sorted(Map.Entry.comparingByValue())
+                .limit(overflow)
+                .map(Map.Entry::getKey)
+                .forEach(analyzedFiles::remove);
     }
 
     // 暂停任务：阻塞分析线程直至恢复或取消
@@ -169,12 +194,16 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         generateHtmlReport(results, config);
     }
 
+    /**
+     * 异步分析入口：去重 → 抢并发槽 → 分片 Drain 解析 → 异常检测 → 入库/导出。
+     * 已分析过的相同文件指纹会直接失败，避免重复烧 CPU。
+     */
     @Async("logAnalysisExecutor")
     @Override
     public void startAnalysisAsync(File logFile, String taskId) {
         String filePath = logFile.getAbsolutePath();
         String dedupKey = buildFileDedupKey(logFile);
-        if (analyzedFiles.contains(dedupKey)) {
+        if (analyzedFiles.containsKey(dedupKey)) {
             log.warn("【文件跳过】文件 {} 内容与本次运行中已完成任务相同，拒绝重复分析", filePath);
             taskStatusMap.put(taskId, "FAILED");
             taskManager.failTask(taskId, "该文件内容与本次运行中已分析的任务相同，请修改文件或重新上传后再试");
@@ -200,7 +229,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             return;
         }
 
-        analyzedFiles.add(dedupKey);
+        rememberAnalyzedFile(dedupKey);
         
         // 初始化任务状态
         taskStatusMap.put(taskId, "PROCESSING");

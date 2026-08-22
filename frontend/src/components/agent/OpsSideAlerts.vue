@@ -23,6 +23,9 @@
 </template>
 
 <script setup>
+/**
+ * 侧栏驾驶舱提醒：CPU/内存高压与巡检待办，一键预填到运维对话。
+ */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { getPatrolRemediationPending, getPerformanceData } from '../../api'
 import { dispatchOpsAgentPrefill } from '../../utils/opsAgentNavigate'

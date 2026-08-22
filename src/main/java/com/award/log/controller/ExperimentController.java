@@ -8,6 +8,11 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
+/**
+ * A/B 实验占位接口，诚实返回未实现，避免被当成可用能力。
+ * HTTP 前缀：{@code /api/v1/experiment}。
+ * 全部入口固定 501，不落库、不采样。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "Experiment", description = "非默认交付面：实验能力未完成落库/采样，接口诚实返回不可用")
 @RestController

@@ -8,6 +8,11 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
+/**
+ * 告警生命周期写操作（确认/处理/关闭/静默），非默认交付面。
+ * HTTP 前缀：{@code /api/v1/alarm/lifecycle}。
+ * 已 deprecated：无挂载 UI，仅保留 API 兼容，不提供只读列表。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "Alarm Lifecycle", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

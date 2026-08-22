@@ -68,6 +68,9 @@
 </template>
 
 <script setup>
+/**
+ * Agent 路径白名单策略对话框：读写允许目录，保存后约束 MCP 文件类工具。
+ */
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAgentPathPolicy, saveAgentPathPolicy } from '../api'

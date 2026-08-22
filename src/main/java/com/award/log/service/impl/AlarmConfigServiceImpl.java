@@ -15,6 +15,9 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * 任务告警配置：默认项与按任务覆盖，JSON 文件缓存并按 mtime 失效。
+ */
 @Slf4j
 @Service
 public class AlarmConfigServiceImpl implements AlarmConfigService {

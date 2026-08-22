@@ -6,6 +6,9 @@ import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
+/**
+ * 告警规则 Mapper，操作 alarm_rule 表（增删改查与启停）。
+ */
 @Mapper
 public interface AlarmRuleMapper {
 

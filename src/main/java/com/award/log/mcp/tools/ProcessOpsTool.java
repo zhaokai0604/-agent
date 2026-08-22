@@ -7,7 +7,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 /**
- * 进程运维合一：读（list）+ 写（kill，默认 dry-run）。
+ * 进程运维合一：读（{@code ps}/WMI list）+ 写（{@code kill}/{@code taskkill}，默认 dry-run）。
  */
 @Component
 @RequiredArgsConstructor
@@ -29,6 +29,7 @@ public class ProcessOpsTool {
         return executeGateway(operation, minCpu, minMem, pid, signal, dryRun, confirmKill);
     }
 
+    /** 转发到 {@link ProcessTool#executeGateway}。 */
     public String executeGateway(
             String operation,
             Double minCpu,

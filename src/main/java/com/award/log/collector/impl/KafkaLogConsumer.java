@@ -9,8 +9,8 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Kafka日志消费者
- * 用于接收Kafka中的日志并进行处理
+ * Kafka 原始 Topic 消费者：把 {@link RawLogEvent} 交给 {@link MvpStreamProcessor} 做实时解析/告警。
+ * 仅 {@code award.middleware.kafka=true} 时启用。
  */
 @Slf4j
 @Component

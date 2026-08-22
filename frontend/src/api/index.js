@@ -1,3 +1,7 @@
+/**
+ * 前端 API 聚合：axios 基址、业务/管理接口、助手 SSE 与 MCP 确认写。
+ * 流式 fetch 须与 axios 一致带头，否则非 localhost 会 403。
+ */
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { formatApiError } from '../utils/apiError.js'
@@ -256,6 +260,7 @@ export const assistantChatStream = (message, history = [], options = {}) =>
 export const getApiBaseUrl = () => buildRuntimeBaseUrl()
 export const getManagementApiBaseUrl = () => buildManagementBaseUrl()
 
+/** 由 HTTP 管理基址推导 ws/wss 地址（性能推送等） */
 export function buildManagementWsUrl(pathname = '/ws/performance') {
   const wsPath = pathname.startsWith('/') ? pathname : `/${pathname}`
   if (typeof window === 'undefined') {

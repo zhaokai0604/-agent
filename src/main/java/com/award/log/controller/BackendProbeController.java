@@ -12,6 +12,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 后端表结构与全局干跑开关探测，用于部署自检。
+ * HTTP 前缀：{@code /api/platform}（路径 {@code /backend-probe}）。
+ * 只读 INFORMATION_SCHEMA 与行计数，不改库。
+ */
 @RestController
 @RequestMapping("/api/platform")
 @RequiredArgsConstructor

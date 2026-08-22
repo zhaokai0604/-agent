@@ -19,7 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 防火墙状态只读巡检（ufw / firewalld / netsh）。
+ * 防火墙状态只读巡检：Linux 依次尝试 {@code ufw}/{@code firewalld}/{@code iptables}；Windows {@code netsh advfirewall}。
  */
 @Slf4j
 @Component

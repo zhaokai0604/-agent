@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * TLS 证书有效期巡检（纯 Java SSLSocket，只读握手）。
+ * TLS 证书有效期巡检（纯 Java SSLSocket 握手，只读，不改主机配置）。
  */
 @Slf4j
 @Component

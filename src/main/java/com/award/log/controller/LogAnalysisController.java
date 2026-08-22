@@ -34,6 +34,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 日志文件上传与异步分析任务管理。
+ * HTTP 前缀：{@code /log}。
+ * 任务按用户隔离；上传后立即异步分析，进度/结果需轮询任务接口。
+ */
 @Slf4j
 @Tag(name = "Log Analysis Async")
 @RestController

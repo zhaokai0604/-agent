@@ -4,6 +4,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+/**
+ * MCP 工具统一 JSON 信封：{@code success} + 可选 {@code status}（SUCCESS/WARN/ERROR）。
+ * {@code WARN} 表示调用完成但业务不健康（如端口不通），外层 success 仍为 true。
+ */
 @Data
 @NoArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -41,6 +45,7 @@ public class ToolResult<T> {
         return new ToolResult<>(true, data, null, durationMs, false, STATUS_SUCCESS);
     }
 
+    /** 调用本身完成但业务不健康：success=true 且 status=WARN。 */
     public static <T> ToolResult<T> warn(T data, long durationMs) {
         return new ToolResult<>(true, data, null, durationMs, false, STATUS_WARN);
     }

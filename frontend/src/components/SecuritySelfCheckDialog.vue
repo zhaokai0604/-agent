@@ -87,6 +87,9 @@
 </template>
 
 <script setup>
+/**
+ * 安全自检对话框：拉取后端自检项并按通过/警告/失败分组展示。
+ */
 import { computed, ref, watch } from 'vue'
 import { CircleCheck, CircleClose, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'

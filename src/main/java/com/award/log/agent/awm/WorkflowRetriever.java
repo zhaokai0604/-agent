@@ -17,6 +17,7 @@ public class WorkflowRetriever {
 
     private final WorkflowMemoryService workflowMemoryService;
 
+    /** 域内打分取 Top-K；AWM 关闭时返回空列表。 */
     public List<OpsWorkflow> retrieve(String domainTag, List<String> findingKinds, String userMessage, int limit) {
         if (!workflowMemoryService.isEnabled()) {
             return List.of();
@@ -41,11 +42,13 @@ public class WorkflowRetriever {
         return out;
     }
 
+    /** 最高分 workflow，无人选时返回 null。 */
     public OpsWorkflow bestMatch(String domainTag, List<String> findingKinds, String userMessage) {
         List<OpsWorkflow> list = retrieve(domainTag, findingKinds, userMessage, 1);
         return list.isEmpty() ? null : list.get(0);
     }
 
+    /** 回放真正处理后累计 utility。 */
     public void recordHit(OpsWorkflow workflow) {
         if (workflow != null && workflow.workflowId() != null) {
             workflowMemoryService.recordUtility(workflow.workflowId());

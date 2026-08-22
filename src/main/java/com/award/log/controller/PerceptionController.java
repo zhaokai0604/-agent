@@ -13,6 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 统一感知快照：主机指标 + 规则诊断 findings，只读。
+ * HTTP 前缀：{@code /api/ops/perception}。
+ * 强制 {@code READ_ONLY} 工具面，不会执行写操作。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "统一感知", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

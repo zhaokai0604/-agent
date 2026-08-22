@@ -4,6 +4,10 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+/**
+ * 启动时确保用户偏好与 API Key 表存在（CREATE TABLE IF NOT EXISTS）。
+ * 仅做结构补齐，不迁移已有数据、不写入默认用户。
+ */
 @Component
 public class UserProfileStorageInitializer {
 

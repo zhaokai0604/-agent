@@ -54,6 +54,7 @@ public class LlmWorkflowInductor {
         return enabled && chatModel != null;
     }
 
+    /** 从成功轨迹归纳 workflow；开关关闭或校验失败返回 empty，由规则层兜底。 */
     public Optional<OpsWorkflow> induce(OpsExperience exp, String domainTag, List<String> findingKinds) {
         if (!isAvailable() || exp == null || domainTag == null || domainTag.isBlank()) {
             return Optional.empty();

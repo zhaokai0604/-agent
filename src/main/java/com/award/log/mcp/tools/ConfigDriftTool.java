@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 配置文件漂移探测（只读）：对比当前 SHA-256 与进程内上次快照。
+ * 配置文件漂移探测（只读）：对比当前 SHA-256 与进程内上次快照，不写配置。
  */
 @Slf4j
 @Component

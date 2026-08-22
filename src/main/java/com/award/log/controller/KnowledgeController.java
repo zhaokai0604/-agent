@@ -10,6 +10,11 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 运维知识库（向量检索 / Runbook 文档）管理入口。
+ * HTTP 前缀：{@code /api/v1/knowledge}。
+ * 状态/检索只读；上传、内置种子与删除会改向量库。
+ */
 @Tag(name = "Knowledge")
 @RestController
 @RequestMapping("/api/v1/knowledge")

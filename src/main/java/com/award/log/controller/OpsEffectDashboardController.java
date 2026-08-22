@@ -11,6 +11,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 运维效果评分仪表板（审计/巡检/自愈聚合），只读。
+ * HTTP 前缀：{@code /api/ops/effect}。
+ * 不触发巡检或修复，仅聚合已有记录。
+ */
 @Tag(name = "运维效果评分")
 @RestController
 @RequestMapping("/api/ops/effect")

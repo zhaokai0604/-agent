@@ -30,6 +30,7 @@ import java.util.concurrent.Executors;
 /**
  * 日志目录陈旧文件清理（写操作）：默认 dry-run；真实删除需 dryRun=false 且 confirmDelete=true。
  * 路径仅限 {@link OpsPathPolicy#isAllowedLogCleanupPath}（默认 /var/log 树下）。
+ * Linux {@code find}+{@code rm}；Windows 对应日志目录文件删除。
  */
 @Slf4j
 @Component

@@ -16,6 +16,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 
+/**
+ * MCP 工具运行时配置：有界工具线程池、短 TTL 观测缓存、共享 ObjectMapper。
+ */
 @Slf4j
 @Configuration
 @EnableAsync
@@ -27,6 +30,7 @@ public class McpToolsConfig {
     public static final String CACHE_PROCESS_LIST = "processList";
     public static final String CACHE_LOG_ANALYSIS = "logAnalysis";
 
+    /** 有界线程池（4–8）执行 MCP 工具，拒绝策略为调用者运行，避免无界排队。 */
     @Bean("mcpToolExecutor")
     public ThreadPoolTaskExecutor mcpToolExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -41,6 +45,7 @@ public class McpToolsConfig {
         return executor;
     }
 
+    /** 只读观测结果短 TTL 缓存，降低 df/top/ps 等重复探测成本。 */
     @Bean("mcpCacheManager")
     public CacheManager cacheManager(
             @Value("${agent.mcp.cache-ttl-ms:45000}") long cacheTtlMs) {

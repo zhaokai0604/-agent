@@ -14,6 +14,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 
+/**
+ * AI/运维相关接口审计过滤器：在请求完成后记录用户、路径、耗时与状态码。
+ * 审计落库失败不影响业务；未登录用户不写库，仅打日志。
+ */
 @Slf4j
 @Component
 public class AiAuditFilter extends OncePerRequestFilter {

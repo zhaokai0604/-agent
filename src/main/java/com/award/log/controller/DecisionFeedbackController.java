@@ -19,6 +19,11 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+/**
+ * 决策对错反馈与持续学习样本管理。
+ * HTTP 前缀：{@code /api/decision-feedback}。
+ * 提交需登录；查看未训练样本与手动训练仅管理员。
+ */
 @Slf4j
 @Tag(name = "决策反馈管理", description = "持续学习 API，无默认 UI：见 docs/deployment/交付API白名单.md")
 @RestController

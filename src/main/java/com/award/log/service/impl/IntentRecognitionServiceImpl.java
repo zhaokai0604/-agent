@@ -14,6 +14,10 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 聊天意图识别：从自然语言抽出意图、时间窗、关键词与目标服务。
+ * 规则优先（诊断 > 报告 > 统计 > 错误查询），无法匹配则为 UNKNOWN。
+ */
 @Slf4j
 @Service
 public class IntentRecognitionServiceImpl implements IntentRecognitionService {
@@ -47,6 +51,9 @@ public class IntentRecognitionServiceImpl implements IntentRecognitionService {
             "mysql|redis|nginx|kafka|es|elasticsearch|docker|kubernetes|k8s|mongodb|postgresql|api|gateway|auth|login|search"
     );
 
+    /**
+     * 解析用户问句，填充意图、时间范围、关键词与 refinedQuery。
+     */
     @Override
     public RecognitionResult recognize(String userQuery) {
         log.info("开始意图识别: [{}]", userQuery);

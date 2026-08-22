@@ -16,6 +16,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
+/**
+ * Runbook 提交/审批/执行入口，非默认交付面。
+ * HTTP 前缀：{@code /api/runbook}。
+ * 提交者可建单与查看自己的；批准、驳回、执行仅管理员。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "Runbook Approval", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController
@@ -55,6 +60,7 @@ public class RunbookApprovalController {
         }
     }
 
+    /** 管理员审批通过后才允许 execute；状态冲突返回 409。 */
     @PostMapping("/{id}/approve")
     public Result<Map<String, Object>> approve(@PathVariable long id, HttpServletRequest request) {
         if (!requestUserResolver.isAdmin(request)) {
@@ -86,6 +92,7 @@ public class RunbookApprovalController {
         }
     }
 
+    /** 仅执行已批准工单，真正触发工具/命令。 */
     @PostMapping("/{id}/execute")
     public Result<Map<String, Object>> execute(@PathVariable long id, HttpServletRequest request) {
         if (!requestUserResolver.isAdmin(request)) {

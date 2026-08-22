@@ -2,6 +2,9 @@ package com.award.log.service;
 
 import java.util.Map;
 
+/**
+ * 告警生命周期：确认、处理、关闭与静默窗口。
+ */
 public interface AlarmLifecycleService {
     boolean acknowledge(String alarmId, String operator);
 

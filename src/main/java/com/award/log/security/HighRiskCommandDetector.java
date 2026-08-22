@@ -9,6 +9,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
+/**
+ * 高危命令检测器：内置正则优先，可选 DSL 规则作为扩展。
+ * 仅做特征判定，不执行命令；规则引擎异常时忽略该规则而非关闭全部检测。
+ */
 @Slf4j
 @Component
 public class HighRiskCommandDetector {
@@ -33,6 +37,7 @@ public class HighRiskCommandDetector {
         ruleCache.put(HighRiskCommandRule.createDefaultRule().getId(), HighRiskCommandRule.createDefaultRule());
     }
 
+    /** 正则或扩展 DSL 命中即视为高危命令。 */
     public boolean isHighRiskCommand(String command) {
         if (command == null || command.trim().isEmpty()) {
             return false;

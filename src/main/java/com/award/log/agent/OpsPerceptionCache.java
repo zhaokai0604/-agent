@@ -8,6 +8,7 @@ import java.util.Map;
 
 /**
  * 自主运维感知快照 TTL 缓存；写操作成功后应 {@link #invalidate()}。
+ * {@code cachedView}/{@code cachedAtMs} 为 volatile，适合单写多读。
  */
 @Component
 public class OpsPerceptionCache {

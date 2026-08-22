@@ -16,6 +16,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * 告警规则注册表：启动加载默认 YAML，运行时以数据库为准并缓存。
+ */
 @Slf4j
 @Service
 @org.springframework.context.annotation.DependsOn("alarmRuleSchemaService")

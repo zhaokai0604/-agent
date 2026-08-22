@@ -7,6 +7,9 @@ import org.apache.ibatis.annotations.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * 用户 API Key Mapper，操作 user_api_key 表（创建、轮换、吊销与最近使用）。
+ */
 @Mapper
 public interface UserApiKeyMapper {
 

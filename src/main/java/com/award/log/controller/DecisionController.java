@@ -16,6 +16,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 决策日志解释/追溯/历史只读查询，非默认交付面。
+ * HTTP 前缀：{@code /api/v1/decision}。
+ * 不触发推理引擎，只读已落库决策与离线指标。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "Decision", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

@@ -1,3 +1,6 @@
+/**
+ * MCP 工具执行封装：HTTP 调用 + 安全门二次确认（口令「确认执行」）+ 结果规范化。
+ */
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { executeMcpTool, confirmMcpExecute } from '../api'
 import { applyMcpWriteConfirmParams } from './mcpWriteParams'

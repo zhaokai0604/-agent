@@ -19,6 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 主机巡检与自动修复 HTTP 入口（历史、关联快照、待确认修复）。
+ * HTTP 前缀：{@code /api/ops/patrol}。
+ * 查询多只读；手动跑巡检需登录；实写修复必须确认码「确认执行」。
+ */
 @Tag(name = "Ops Patrol")
 @RestController
 @RequestMapping("/api/ops/patrol")
@@ -127,6 +132,7 @@ public class OpsPatrolController {
     }
 
     @Operation(summary = "确认并执行待处理修复方案，confirmCode 必须为“确认执行”")
+    /** 将待确认修复落到实写；确认码必须为「确认执行」。 */
     @PostMapping("/remediation/confirm")
     public Result<Map<String, Object>> remediationConfirm(
             @RequestBody(required = false) Map<String, String> body,

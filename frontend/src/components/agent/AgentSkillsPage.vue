@@ -89,6 +89,9 @@
 </template>
 
 <script setup>
+/**
+ * 工具与技能页：展示 MCP 注册表；在线工具可立即执行（写操作走确认）或带入对话。
+ */
 import { computed, onMounted, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { getMcpTools, getPlatformInfo } from '../../api'

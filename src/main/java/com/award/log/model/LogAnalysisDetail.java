@@ -2,6 +2,9 @@ package com.award.log.model;
 
 import lombok.Data;
 
+/**
+ * 单条日志分析明细（等级、异常分、脱敏正文），对应 log_analysis_detail 表。
+ */
 @Data
 public class LogAnalysisDetail {
     private Long id;                // 明细记录唯一ID

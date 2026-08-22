@@ -78,6 +78,10 @@
 </template>
 
 <script setup>
+/**
+ * 对话输入条：多行编辑、附件、语音、发送/停止；Enter 发送、Shift+Enter 换行。
+ * 路由提示由父组件传入，不在此发 SSE。
+ */
 import { ref } from 'vue'
 import { FolderOpened, Microphone, Promotion, VideoPause } from '@element-plus/icons-vue'
 

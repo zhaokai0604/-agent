@@ -122,6 +122,9 @@
 </template>
 
 <script setup>
+/**
+ * 运维实时大屏：消费 useLiveWallFeed（性能 WS + 巡检/溯源）绘制仪表与热点。
+ */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Warning } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'

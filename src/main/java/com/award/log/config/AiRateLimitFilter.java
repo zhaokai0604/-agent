@@ -13,6 +13,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * AI 诊断/助手接口简易限流：同一 IP+路径每分钟最多 60 次，超限返回 429。
+ * 内存计数，不跨实例共享，仅作为单机保护。
+ */
 @Component
 public class AiRateLimitFilter extends OncePerRequestFilter {
 

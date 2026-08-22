@@ -8,6 +8,9 @@ import org.springframework.stereotype.Service;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 用户通知偏好：邮件/短信/任务告警开关；缺记录时用安全默认值。
+ */
 @Service
 public class UserProfilePreferenceServiceImpl implements UserProfilePreferenceService {
 

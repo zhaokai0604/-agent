@@ -15,6 +15,9 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 自然语言 → ES 查询：把意图识别结果转成 NativeQuery 与 Lucene 解释。
+ */
 @Slf4j
 @Service
 public class NLQueryServiceImpl implements NLQueryService {

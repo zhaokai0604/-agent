@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Kafka 集群快照：broker / topic / consumer group；仅在中间件开关打开时注册。
+ */
 @Service
 @ConditionalOnProperty(prefix = "award.middleware", name = "kafka", havingValue = "true")
 public class KafkaMonitorServiceImpl implements KafkaMonitorService {

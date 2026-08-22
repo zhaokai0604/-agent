@@ -29,6 +29,9 @@
 </template>
 
 <script setup>
+/**
+ * 侧栏最近会话列表：按更新时间截取，支持切换与删除。
+ */
 import { computed } from 'vue'
 import { ChatDotRound, Delete } from '@element-plus/icons-vue'
 

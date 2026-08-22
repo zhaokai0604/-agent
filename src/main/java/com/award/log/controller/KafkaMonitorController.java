@@ -11,6 +11,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Kafka 中间件在线状态只读快照，非默认交付面。
+ * HTTP 前缀：{@code /api/kafka}。
+ * 未启用时仍返回 success 且 {@code online=false}，不抛 5xx。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "KafkaMonitor", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

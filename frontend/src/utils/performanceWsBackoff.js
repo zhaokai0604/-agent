@@ -1,3 +1,6 @@
+/**
+ * 性能 WebSocket 退避：连续失败达阈值后冷却数分钟，避免重连风暴。
+ */
 const FAILURE_LIMIT = 3
 const FAILURE_DECAY_MS = 60_000
 const COOLDOWN_MS = 5 * 60_000

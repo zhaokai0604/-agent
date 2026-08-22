@@ -146,6 +146,10 @@
 </template>
 
 <script setup>
+/**
+ * 运维对话主界面：SSE 流式助手、本地高风险拦截、处置计划确认写。
+ * 写操作需用户「确认执行」；巡检待办可续跑。会话由 useAgentSession 持久化。
+ */
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, ArrowDown } from '@element-plus/icons-vue'

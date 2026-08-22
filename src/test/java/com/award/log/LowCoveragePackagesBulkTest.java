@@ -26,7 +26,6 @@ import com.award.log.support.PojoExerciseSupport;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
 import com.award.log.websocket.LogStreamWebSocketHandler;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -66,11 +65,6 @@ class LowCoveragePackagesBulkTest {
     private StatisticsService statisticsService;
     @Mock
     private WebSocketSession webSocketSession;
-
-    @AfterEach
-    void resetLogStreamStaticFlag() {
-        ReflectionTestUtils.setField(LogStreamWebSocketHandler.class, "realTimeAnalysisStarted", false);
-    }
 
     @Test
     void result_successAndErrorFactories() {
@@ -148,8 +142,9 @@ class LowCoveragePackagesBulkTest {
     void logWebSocketHandler_refreshMessage() throws Exception {
         LogWebSocketHandler handler = new LogWebSocketHandler();
         ReflectionTestUtils.setField(handler, "logCollectorManager", logCollectorManager);
-        when(logCollectorManager.takeFanOut()).thenReturn(List.of());
+        when(logCollectorManager.snapshotFanOut(anyInt())).thenReturn(List.of());
         when(webSocketSession.getId()).thenReturn("ws-log-1");
+        lenient().when(webSocketSession.isOpen()).thenReturn(true);
 
         handler.afterConnectionEstablished(webSocketSession);
         ReflectionTestUtils.invokeMethod(handler, "handleTextMessage", webSocketSession, new TextMessage("refresh"));
@@ -186,7 +181,9 @@ class LowCoveragePackagesBulkTest {
         assertEquals(0, handler.getActiveSessionCount());
 
         when(webSocketSession.getId()).thenReturn("stream-1");
+        lenient().when(webSocketSession.isOpen()).thenReturn(true);
         doNothing().when(webSocketSession).sendMessage(any(TextMessage.class));
+        lenient().when(logCollectorManager.takeFanOut(anyInt())).thenReturn(List.of());
         handler.afterConnectionEstablished(webSocketSession);
         assertEquals(1, handler.getActiveSessionCount());
 

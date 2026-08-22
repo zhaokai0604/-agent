@@ -4,6 +4,10 @@ import com.award.log.service.AiAnalysisService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+/**
+ * 大模型决策引擎：在低置信/未知场景给出分析建议作为兜底。
+ * 未接入 AI 或未就绪时仍返回结构化结果，不阻断规则与随机森林路径。
+ */
 @Component
 public class LlmDecisionEngine {
 
@@ -13,6 +17,7 @@ public class LlmDecisionEngine {
     @org.springframework.beans.factory.annotation.Value("${log.pipeline.decision.feature-version:rf-v1}")
     private String featureVersion;
 
+    /** 调用 AI 分析日志并给出兜底建议；告警仍由错误率/FATAL 判定。 */
     public DecisionResult evaluate(DecisionInput input) {
         String analysis = aiAnalysisService == null
                 ? "LLM 服务未接入"

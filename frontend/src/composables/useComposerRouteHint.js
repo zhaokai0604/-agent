@@ -1,3 +1,7 @@
+/**
+ * 输入框路由提示：按话术判断全面巡检 / 确认写 / 管家多步 / 单工具 / 纯对话。
+ * 只改 Composer 提示文案，不发请求。
+ */
 import { computed, unref } from 'vue'
 import {
   shouldUseNaturalLanguageAssistant,
@@ -20,6 +24,7 @@ function guessTool(text) {
   return null
 }
 
+/** 将用户输入映射为 mode + 提示文案（与后端意图分流近似） */
 export function computeRouteHint(text) {
   const raw = (text || '').trim()
   if (!raw) {

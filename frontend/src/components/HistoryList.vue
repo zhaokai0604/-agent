@@ -204,6 +204,9 @@
 </template>
 
 <script setup>
+/**
+ * 分析任务历史：按日期筛选、查看报告、删除任务。
+ */
 import { ref, onMounted, computed } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getHistory, deleteTask, getReport } from '../api'

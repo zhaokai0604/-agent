@@ -12,6 +12,10 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+/**
+ * 用户意图风险分级：提示注入、规则/语义相似度，可选 ML 仅作旁证。
+ * ML 不得把规则 LOW 抬升，也不得单独打出 HIGH；写操作仍由 MCP 门控确认。
+ */
 @Slf4j
 @Component
 public class IntentRiskFilter {
@@ -83,6 +87,7 @@ public class IntentRiskFilter {
         this.semanticJaccardMin = Math.max(0.2, Math.min(0.9, semanticJaccardMin));
     }
 
+    /** 综合注入、规则、语义与可选 ML，输出 HIGH/MEDIUM/LOW。 */
     public RiskLevel evaluate(String userInstruction) {
         userInstruction = AgenticRiskScoreEngine.normalizeUtterance(userInstruction);
         log.info("开始风险评估，用户指令: {}", userInstruction);

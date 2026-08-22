@@ -42,6 +42,7 @@ public class LogSafetyClassifier {
 
     public record FilterResult(List<String> allowed, List<String> deniedReasons) {}
 
+    /** 单路径判定：穿越、保护子串、数据库/中间件关键文件一律拒绝。 */
     public Verdict classifyPath(String filePath) {
         if (filePath == null || filePath.isBlank()) {
             return Verdict.deny("空路径");

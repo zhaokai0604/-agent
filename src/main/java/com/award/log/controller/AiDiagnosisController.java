@@ -25,6 +25,11 @@ import java.util.Map;
 
 import static org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE;
 
+/**
+ * AI 诊断与运维闲聊的 SSE 流式入口。
+ * HTTP 前缀：{@code /log/diagnose}。
+ * 任务诊断需校验归属；流式执行走 {@code sseTaskExecutor}，避免阻塞 Web 线程。
+ */
 @Slf4j
 @Tag(name = "AI Diagnosis Stream")
 @RestController
@@ -45,6 +50,7 @@ public class AiDiagnosisController {
     private ThreadPoolTaskExecutor sseExecutor;
 
     @Operation(summary = "General AI ops chat stream")
+    /** 闲聊 SSE：无任务上下文，只推流不落诊断结果。 */
     @PostMapping(value = "/chat", produces = TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@RequestBody(required = false) Map<String, String> payload) {
         if (payload == null) {
@@ -91,6 +97,7 @@ public class AiDiagnosisController {
     }
 
     @Operation(summary = "Run AI diagnosis stream")
+    /** 任务诊断 SSE：校验归属后推流，完成后回写任务诊断文本。 */
     @GetMapping(value = "/stream/{taskId}", produces = TEXT_EVENT_STREAM_VALUE)
     public SseEmitter performDiagnosisStream(HttpServletRequest request, @PathVariable String taskId) {
         SseEmitter emitter = new SseEmitter(180000L);

@@ -11,6 +11,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 
+/**
+ * 最小权限命令执行器：默认以 {@code award-agent} 用户跑命令；需 root 时先 {@code sudo -l} 校验。
+ * Windows 无 sudo，降级为当前服务进程用户。全局演练模式会拦截写命令并返回模拟输出。
+ */
 @Slf4j
 @Component
 public class MinPrivilegeExecutor extends AbstractCommandExecutor {
@@ -35,6 +39,7 @@ public class MinPrivilegeExecutor extends AbstractCommandExecutor {
                 this.runAsUser, minPrivilegeEnabled, opsDryRunProperties.isGlobalDryRun());
     }
 
+    /** 按最小权限策略执行命令（含全局 dry-run 拦截）。 */
     public CommandResult executeSafely(List<String> command) {
         return executeSafely(command, commandTimeoutMillis());
     }
@@ -56,6 +61,7 @@ public class MinPrivilegeExecutor extends AbstractCommandExecutor {
         return executeAsUser(command, runAsUser, timeoutMillis);
     }
 
+    /** 仅当命令被判定需要 root 时走提权检查，否则仍以降权用户执行。 */
     public CommandResult executeWithRoot(List<String> command) {
         if (!requiresRootPrivilege(command)) {
             log.warn("命令不需要 root 权限，使用普通用户执行: {}", command);
@@ -94,6 +100,7 @@ public class MinPrivilegeExecutor extends AbstractCommandExecutor {
         return new CommandResult(true, simulated, null, 0, false);
     }
 
+    /** 在父类启发式之外，补充 Windows {@code net stop}/{@code sc}/{@code Remove-Item} 等写命令。 */
     @Override
     protected boolean requiresRootPrivilege(List<String> command) {
         if (super.requiresRootPrivilege(command)) {

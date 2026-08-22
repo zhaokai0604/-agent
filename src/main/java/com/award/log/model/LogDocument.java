@@ -19,6 +19,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Elasticsearch 日志文档（正文、等级、异常标记），对应索引 log_analysis。
+ */
 @Data
 @Document(indexName = "log_analysis", createIndex = false)
 @JsonIgnoreProperties(ignoreUnknown = true)

@@ -14,8 +14,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Kafka日志生产者
- * 用于将采集到的日志发送到Kafka消息队列
+ * 将采集到的 {@link RawLogEvent} 发到 Kafka 原始 Topic（仅 {@code award.middleware.kafka=true} 时启用）。
  */
 @Slf4j
 @Component

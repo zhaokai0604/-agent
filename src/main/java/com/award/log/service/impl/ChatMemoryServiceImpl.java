@@ -7,11 +7,19 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PostConstruct;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
+/**
+ * 按 session 保存对话记忆（工具结果、意图摘要等），供后续轮次注入 prompt。
+ * <p>
+ * 必须监听 {@link ChatSessionRetention} 淘汰事件并删除 {@code sessionMemories}，
+ * 否则会出现「索引已淘汰、记忆 Map 仍占堆」的孤儿泄漏。
+ */
 @Slf4j
 @Service
 public class ChatMemoryServiceImpl implements ChatMemoryService {
@@ -22,6 +30,16 @@ public class ChatMemoryServiceImpl implements ChatMemoryService {
     @Autowired
     private ChatSessionRetention sessionRetention;
 
+    /**
+     * 注册 retention 淘汰回调：session 被踢时同步删本类记忆 Map。
+     * 若不注册，索引淘汰后数据仍留在堆上，造成孤儿内存泄漏。
+     */
+    @PostConstruct
+    void registerRetentionListener() {
+        sessionRetention.addEvictionListener(sessionMemories::remove);
+    }
+
+    /** 追加一条记忆并 touch session；超出 {@link #MAX_MEMORY_SIZE} 丢最旧条目。 */
     @Override
     public void addToMemory(String sessionId, MemoryEntry entry) {
         sessionRetention.touch(sessionId);
@@ -56,6 +74,7 @@ public class ChatMemoryServiceImpl implements ChatMemoryService {
         log.info("会话 {} 的记忆已清除", sessionId);
     }
 
+    /** 定时按 TTL 淘汰过期 session，并删本类记忆，避免孤儿条目。 */
     @Scheduled(fixedDelay = 600_000, initialDelay = 180_000)
     public void evictStaleSessions() {
         sessionRetention.evictExpired(sessionId -> sessionMemories.remove(sessionId));

@@ -20,6 +20,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * 对话工具 {@code diagnose_system}：结合近期日志与主机指标生成诊断摘要。
+ */
 @Slf4j
 @Component
 public class SystemDiagnosticTool implements AiTool {

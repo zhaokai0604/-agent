@@ -4,6 +4,9 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 决策引擎一次判定记录，对应 decision_log 表。
+ */
 @Data
 public class DecisionLog {
     private Long id;

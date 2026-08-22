@@ -20,7 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 /**
- * Systemd / Windows 服务只读状态巡检。
+ * 服务状态巡检与受控重启入口：Linux {@code systemctl --failed}/{@code status}；Windows {@code Get-Service}/{@code sc query}。
  */
 @Slf4j
 @Component

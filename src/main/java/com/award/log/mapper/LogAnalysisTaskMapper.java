@@ -8,6 +8,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 日志分析任务 Mapper，操作 log_analysis_task 表（任务 CRUD、分页筛选与趋势统计）。
+ */
 @Mapper
 public interface LogAnalysisTaskMapper {
     LogAnalysisTask selectById(String taskId);

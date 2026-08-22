@@ -3,6 +3,9 @@ package com.award.log.mcp.dispatch;
 import java.util.Map;
 import java.util.regex.Pattern;
 
+/**
+ * MCP 分发参数读取与写操作确认提升：从 Map 取值，并按工具名写入 dryRun/confirm* 标志。
+ */
 public final class McpToolParamReader {
 
     private static final Pattern REAL_WRITE_UTTERANCE = Pattern.compile(
@@ -168,6 +171,7 @@ public final class McpToolParamReader {
         forceConfirmedWriteToolParams(toolName, parameters);
     }
 
+    /** 用户话术或已有 confirm* 是否表明要真实写入（而非仅预览）。 */
     public static boolean shouldEscalateToRealWrite(Map<String, Object> parameters, String userMessage) {
         if (parameters != null) {
             if (Boolean.TRUE.equals(getBoolean(parameters, "confirmDelete"))

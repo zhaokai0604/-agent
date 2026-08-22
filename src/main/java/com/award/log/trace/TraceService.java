@@ -11,6 +11,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 运维审计轨迹门面：把指令闭环（校验→执行→结果）委托给 OpsAuditTraceService 落库。
+ * 提供 steps/CoT 辅助构造，不直接操作 MCP 工具。
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor

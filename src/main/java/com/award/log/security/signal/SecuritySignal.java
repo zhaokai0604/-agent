@@ -4,6 +4,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 归一化后的安全信号：来源类型、严重度、主机/IP 与原始载荷。
+ * 供窗口聚合与威胁摘要使用，不绑定某一厂商事件格式。
+ */
 public record SecuritySignal(
         String signalId,
         String sourceType,
@@ -26,16 +30,19 @@ public record SecuritySignal(
         String detail,
         String rawPayload) {
 
+    /** 严重度分 ≥90 或 CRITICAL。 */
     public boolean isCritical() {
         return severityScore >= 90 || "CRITICAL".equalsIgnoreCase(severity);
     }
 
+    /** 严重度分 ≥70 或 HIGH/CRITICAL。 */
     public boolean isHighOrAbove() {
         return severityScore >= 70
                 || "HIGH".equalsIgnoreCase(severity)
                 || "CRITICAL".equalsIgnoreCase(severity);
     }
 
+    /** 事件时间优先，缺失则用摄入时间。 */
     public long effectiveTimeMs() {
         return eventTimeMs > 0 ? eventTimeMs : ingestTimeMs;
     }

@@ -16,6 +16,11 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * 平台就绪探测（库/Redis/Kafka/AI 配置），只读诊断。
+ * HTTP 前缀：{@code /api/platform}（路径 {@code /readiness}）。
+ * 仅管理员；AI 项只检查密钥是否配置，不发起真实对话。
+ */
 @Slf4j
 @RestController
 @RequestMapping("/api/platform")

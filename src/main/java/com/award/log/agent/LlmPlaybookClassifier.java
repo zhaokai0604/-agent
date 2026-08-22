@@ -25,6 +25,7 @@ import java.util.regex.Pattern;
 /**
  * 规则未命中时的语义 Playbook 兜底：LLM 只输出标签与置信度，
  * 不直接执行工具；写操作仍过安全门与二次确认。
+ * 异步调用并限时（默认 4.5s），超时或低置信度均回退 {@link OpsIntentRouter.Playbook#NONE}。
  */
 @Slf4j
 @Component
@@ -79,6 +80,7 @@ public class LlmPlaybookClassifier {
     }
 
     /**
+     * 语义分类；超时、解析失败或置信度不足返回 empty（调用方视为 NONE）。
      * @param userMessage 当前用户输入
      * @param contextHint 可选近期对话摘要（可空）
      */

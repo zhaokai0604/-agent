@@ -5,25 +5,40 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.*;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 网络日志采集器
- * 支持通过TCP/UDP协议接收网络日志，如Syslog
+ * 网络日志采集器（TCP/UDP Syslog 等）。
+ * <p>
+ * <b>防 OOM：</b>
+ * <ul>
+ *   <li>采集缓冲有硬上限 {@link #DEFAULT_BUFFER_MAX_LINES}，满则丢最旧</li>
+ *   <li>TCP 受理用有界线程池（最多 {@link #MAX_TCP_THREADS}），拒绝时关连接，禁止 CachedThreadPool</li>
+ * </ul>
  */
 @Slf4j
 public class NetworkLogCollector implements LogCollector {
 
+    private static final int DEFAULT_BUFFER_MAX_LINES = 8000;
+    private static final int MAX_TCP_THREADS = 16;
+
     private final int port;
     private final String protocol;
     private final String name;
+    private final int bufferMaxLines;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private final ExecutorService executorService;
-    private final List<String> collectedLogs;
+    private final AtomicLong droppedLines = new AtomicLong();
+    private final ThreadPoolExecutor executorService;
+    private final Deque<String> collectedLogs;
     private ServerSocket tcpServerSocket;
     private DatagramSocket udpServerSocket;
 
@@ -31,8 +46,20 @@ public class NetworkLogCollector implements LogCollector {
         this.port = port;
         this.protocol = protocol.toUpperCase();
         this.name = name;
-        this.executorService = Executors.newCachedThreadPool();
-        this.collectedLogs = new ArrayList<>();
+        this.bufferMaxLines = DEFAULT_BUFFER_MAX_LINES;
+        this.executorService = new ThreadPoolExecutor(
+                1,
+                MAX_TCP_THREADS,
+                60L,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(32),
+                r -> {
+                    Thread t = new Thread(r, "net-log-" + name);
+                    t.setDaemon(true);
+                    return t;
+                },
+                new ThreadPoolExecutor.AbortPolicy());
+        this.collectedLogs = new ArrayDeque<>();
     }
 
     @Override
@@ -64,7 +91,7 @@ public class NetworkLogCollector implements LogCollector {
             if (udpServerSocket != null && !udpServerSocket.isClosed()) {
                 udpServerSocket.close();
             }
-            executorService.shutdown();
+            executorService.shutdownNow();
         }
     }
 
@@ -91,11 +118,19 @@ public class NetworkLogCollector implements LogCollector {
         try {
             tcpServerSocket = new ServerSocket(port);
             log.info("[网络日志采集器] TCP服务器已启动，监听端口: {}", port);
-            
+
             while (running.get()) {
                 try {
                     Socket clientSocket = tcpServerSocket.accept();
-                    executorService.submit(() -> handleTcpClient(clientSocket));
+                    try {
+                        executorService.submit(() -> handleTcpClient(clientSocket));
+                    } catch (RejectedExecutionException e) {
+                        log.warn("[网络日志采集器] TCP 连接过多，关闭新连接");
+                        try {
+                            clientSocket.close();
+                        } catch (IOException ignored) {
+                        }
+                    }
                 } catch (IOException e) {
                     if (running.get()) {
                         log.error("[网络日志采集器] TCP服务器异常", e);
@@ -112,12 +147,10 @@ public class NetworkLogCollector implements LogCollector {
         try (clientSocket;
              var inputStream = clientSocket.getInputStream();
              var reader = new java.io.BufferedReader(new java.io.InputStreamReader(inputStream))) {
-            
+
             String line;
             while ((line = reader.readLine()) != null && running.get()) {
-                synchronized (collectedLogs) {
-                    collectedLogs.add(line);
-                }
+                offerLog(line);
             }
         } catch (IOException e) {
             if (running.get()) {
@@ -130,16 +163,14 @@ public class NetworkLogCollector implements LogCollector {
         try {
             udpServerSocket = new DatagramSocket(port);
             log.info("[网络日志采集器] UDP服务器已启动，监听端口: {}", port);
-            
+
             byte[] buffer = new byte[65536];
             while (running.get()) {
                 try {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     udpServerSocket.receive(packet);
                     String logMessage = new String(packet.getData(), 0, packet.getLength());
-                    synchronized (collectedLogs) {
-                        collectedLogs.add(logMessage);
-                    }
+                    offerLog(logMessage);
                 } catch (IOException e) {
                     if (running.get()) {
                         log.error("[网络日志采集器] UDP服务器异常", e);
@@ -149,6 +180,19 @@ public class NetworkLogCollector implements LogCollector {
         } catch (IOException e) {
             log.error("[网络日志采集器] 启动UDP服务器失败", e);
             running.set(false);
+        }
+    }
+
+    private void offerLog(String line) {
+        synchronized (collectedLogs) {
+            while (collectedLogs.size() >= bufferMaxLines) {
+                collectedLogs.removeFirst();
+                long dropped = droppedLines.incrementAndGet();
+                if (dropped == 1 || dropped % 1000 == 0) {
+                    log.warn("[网络日志采集器] 缓冲已满 ({}), 已丢弃 {} 行", bufferMaxLines, dropped);
+                }
+            }
+            collectedLogs.addLast(line);
         }
     }
 }

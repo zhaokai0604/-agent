@@ -7,7 +7,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 /**
- * 容器运维合一：读（list / inspect）+ 写（restart / stop，默认 dry-run）。
+ * 容器运维合一：读（{@code docker ps}/{@code inspect}）+ 写（{@code restart}/{@code stop}，默认 dry-run）。
  */
 @Component
 @RequiredArgsConstructor
@@ -28,6 +28,7 @@ public class ContainerOpsTool {
         return executeGateway(operation, includeStopped, containerName, dryRun, confirmRestart, confirmStop);
     }
 
+    /** 转发到 {@link DockerTool#executeGateway}。 */
     public String executeGateway(
             String operation,
             Boolean includeStopped,

@@ -42,6 +42,9 @@
 </template>
 
 <script setup>
+/**
+ * 空会话欢迎页：按本机 OS 生成快捷话术芯片，并展示运行模式条。
+ */
 import { computed, onMounted, ref } from 'vue'
 import {
   Coin,

@@ -31,6 +31,9 @@
 </template>
 
 <script setup>
+/**
+ * 运行模式条：展示演练/实写、模型与 MCP 就绪状态，可手动刷新健康检查。
+ */
 import { onMounted } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { usePlatformHealth } from '../composables/usePlatformHealth'

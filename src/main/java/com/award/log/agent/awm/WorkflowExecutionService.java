@@ -29,7 +29,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Replays AWM workflows through the real MCP tools and safety gates.
+ * 将 AWM workflow 逐步回放到真实 MCP 工具，并经过计划门控与治理门。
+ * 占位符参数由变量表替换；写步骤默认 dry-run，未确认则降级为预览，失败即中断后续步。
+ * 回放结果写入运行记录，成功时累计 utility / success。
  */
 @Slf4j
 @Service
@@ -53,6 +55,7 @@ public class WorkflowExecutionService {
     @Value("${agent.assistant.orchestrator.temp-clean-days:7}")
     private int tempCleanDays;
 
+    /** 回放入参：工具面、是否强制写、审计步骤列表、占位符变量。 */
     public record ExecutionRequest(
             String traceId,
             String userMessage,
@@ -63,6 +66,7 @@ public class WorkflowExecutionService {
     ) {
     }
 
+    /** 单步回放结果：READ / PREVIEW / EXECUTE / SKIP。 */
     public record StepResult(
             String toolName,
             String mode,
@@ -85,6 +89,7 @@ public class WorkflowExecutionService {
         }
     }
 
+    /** 整条 workflow 回放汇总：是否形成动作、是否中断、各步明细。 */
     public record WorkflowRunResult(
             OpsWorkflow workflow,
             List<StepResult> stepResults,
@@ -145,6 +150,10 @@ public class WorkflowExecutionService {
         }
     }
 
+    /**
+     * 逐步执行 workflow：计划门控 → 参数解析 → 读写模式判定 → MCP 分发。
+     * 任一步失败或被禁止则停止后续步骤。
+     */
     public WorkflowRunResult execute(OpsWorkflow workflow, ExecutionRequest request) {
         if (workflow == null || request == null) {
             return new WorkflowRunResult(workflow, List.of(), false, false, false, true, true);

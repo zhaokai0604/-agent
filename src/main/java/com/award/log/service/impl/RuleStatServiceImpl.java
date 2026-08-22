@@ -12,6 +12,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 规则命中统计：进程内累加 hit/miss，定时刷库供仪表盘读取。
+ */
 @Service
 public class RuleStatServiceImpl implements RuleStatService {
 

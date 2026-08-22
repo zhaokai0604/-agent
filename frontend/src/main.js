@@ -1,3 +1,6 @@
+/**
+ * 前端入口：挂载 App，注册 Element Plus 与运维控制台主题样式。
+ */
 import { createApp } from 'vue'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'

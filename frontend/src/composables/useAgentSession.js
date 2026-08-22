@@ -1,3 +1,7 @@
+/**
+ * Agent 多会话状态：消息列表写入 localStorage（防抖），会话数/条数有上限。
+ * 供 App 壳、侧栏与运维对话页共用。
+ */
 import { ref, watch } from 'vue'
 
 const STORAGE_KEY = 'threshcore-agent-sessions-v2'

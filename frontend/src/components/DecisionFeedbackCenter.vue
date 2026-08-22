@@ -104,6 +104,9 @@
 </template>
 
 <script setup>
+/**
+ * 决策反馈：标注未训练样本并提交；管理员可触发手工训练。
+ */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import OpsPageHeader from './OpsPageHeader.vue'

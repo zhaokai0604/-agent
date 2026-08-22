@@ -4,6 +4,10 @@ import com.award.log.collector.model.RawLogEvent;
 import lombok.Builder;
 import lombok.Data;
 
+/**
+ * 协同决策引擎的统一输入：原始日志、Drain 模板与 1 分钟窗口统计。
+ * {@code skipLlm} 用于批量分析等场景，避免每条异常都调用大模型。
+ */
 @Data
 @Builder
 public class DecisionInput {

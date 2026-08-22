@@ -15,10 +15,13 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * UDP network log collector with security-signal normalization for IDS/PIDS style events.
+ * UDP 网络日志采集（V2）：解析 Suricata / NetFlow 等安全信号后入缓冲。
+ * 缓冲上限 {@link #BUFFER_MAX_LINES}，满则丢最旧，防止 syslog 洪泛 OOM。
  */
 @Slf4j
 public class NetworkLogCollectorV2 implements LogCollector {
+
+    private static final int BUFFER_MAX_LINES = 8000;
 
     private final int port;
     private final String protocol;
@@ -104,9 +107,7 @@ public class NetworkLogCollectorV2 implements LogCollector {
                 } else if (log.contains("NetFlow")) {
                     processNetFlowLog(log);
                 } else {
-                    synchronized (logs) {
-                        logs.add("[NETWORK] " + log);
-                    }
+                    offerLog("[NETWORK] " + log);
                 }
             }
         } catch (IOException e) {
@@ -120,18 +121,23 @@ public class NetworkLogCollectorV2 implements LogCollector {
 
     private void processSuricataLog(String log) {
         SecuritySignal signal = securitySignalService.ingest("suricata", log);
-        synchronized (logs) {
-            String title = signal != null && signal.title() != null && !signal.title().isBlank()
-                    ? signal.title()
-                    : log;
-            logs.add("[SURICATA] " + title);
-        }
+        String title = signal != null && signal.title() != null && !signal.title().isBlank()
+                ? signal.title()
+                : log;
+        offerLog("[SURICATA] " + title);
     }
 
     private void processNetFlowLog(String log) {
         securitySignalService.ingest("netflow", log);
+        offerLog("[NETFLOW] " + log);
+    }
+
+    private void offerLog(String line) {
         synchronized (logs) {
-            logs.add("[NETFLOW] " + log);
+            while (logs.size() >= BUFFER_MAX_LINES) {
+                logs.remove(0);
+            }
+            logs.add(line);
         }
     }
 }

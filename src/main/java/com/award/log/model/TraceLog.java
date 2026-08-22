@@ -5,6 +5,9 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * Agent/对话链路追踪快照（输入、风险、工具名与结果摘要），供 TraceService 落审计。
+ */
 @Data
 @Builder
 public class TraceLog {

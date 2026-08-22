@@ -149,6 +149,9 @@
 </template>
 
 <script setup>
+/**
+ * 运维效果仪表盘：周期评分、五维雷达与审计/巡检趋势（按需加载 ECharts）。
+ */
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Odometer } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'

@@ -20,7 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 /**
- * Docker 容器只读巡检（docker ps / inspect）。
+ * Docker 容器运维：只读 {@code docker ps}/{@code inspect}；写操作 {@code docker restart}/{@code stop}（默认 dry-run）。
  */
 @Slf4j
 @Component

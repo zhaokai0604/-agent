@@ -27,6 +27,13 @@ import java.util.regex.Pattern;
  * </ol>
  * <p>
  * 线程安全：按令牌长度分桶后仅在桶内加锁，并行分片解析时不同长度桶可并发写入。
+ * <p>
+ * <b>内存上限（防 OOM）：</b>本 Bean 是全局单例，批量分析 / 实时流 / MCP 共用同一棵树。
+ * 高基数日志会不断新建簇和 trie 子节点，因此引入：
+ * <ul>
+ *   <li>{@code maxTemplates}：全局模板数硬上限，到顶后只并入最近簇、不再 new</li>
+ *   <li>{@code maxChildren}：单节点子边上限，过多时走 {@link #PARAM_TOKEN} 边，避免前缀爆炸</li>
+ * </ul>
  */
 @Component
 @Qualifier("drainPlusParser")
@@ -49,16 +56,31 @@ public class DrainPlusParser implements DrainParser {
      * 其中模板侧 {@link #PARAM_TOKEN} 与任意令牌视为匹配。
      */
     private final int similarityThresholdPercent;
+    /** 全局模板（簇）数量硬上限，配置项 log.analyzer.drain.max-templates */
+    private final int maxTemplates;
+    /** Trie 单节点最大子边数，配置项 log.analyzer.drain.max-children */
+    private final int maxChildren;
 
     private final Map<Integer, LengthBucket> lengthBuckets = new ConcurrentHashMap<>();
     private final AtomicLong templateCounter = new AtomicLong(1);
+    /** 当前存活模板数，与 maxTemplates 比较；达到上限后禁止新建簇 */
+    private final AtomicLong liveTemplateCount = new AtomicLong(0);
+
+    /** 测试/手工构造：使用默认上限 8000 / 256。 */
+    public DrainPlusParser(int maxDepth, int similarityThresholdPercent) {
+        this(maxDepth, similarityThresholdPercent, 8_000, 256);
+    }
 
     @Autowired
     public DrainPlusParser(
             @Value("${log.analyzer.drain.max-depth:8}") int maxDepth,
-            @Value("${log.analyzer.drain.sim-threshold:50}") int similarityThresholdPercent) {
+            @Value("${log.analyzer.drain.sim-threshold:50}") int similarityThresholdPercent,
+            @Value("${log.analyzer.drain.max-templates:8000}") int maxTemplates,
+            @Value("${log.analyzer.drain.max-children:256}") int maxChildren) {
         this.maxDepth = Math.max(1, Math.min(32, maxDepth));
         this.similarityThresholdPercent = clamp(similarityThresholdPercent, 1, 100);
+        this.maxTemplates = Math.max(32, maxTemplates);
+        this.maxChildren = Math.max(8, maxChildren);
     }
 
     private static int clamp(int v, int lo, int hi) {
@@ -82,8 +104,10 @@ public class DrainPlusParser implements DrainParser {
         int len = tokens.length;
         LengthBucket bucket = lengthBuckets.computeIfAbsent(len, k -> new LengthBucket());
         synchronized (bucket) {
-            TrieNode leaf = bucket.walkOrCreateLeaf(tokens, maxDepth);
-            return leaf.matchOrCreateCluster(tokens, raw, onNewTemplate, templateCounter, similarityThresholdPercent);
+            TrieNode leaf = bucket.walkOrCreateLeaf(tokens, maxDepth, maxChildren);
+            return leaf.matchOrCreateCluster(
+                    tokens, raw, onNewTemplate, templateCounter, liveTemplateCount,
+                    similarityThresholdPercent, maxTemplates);
         }
     }
 
@@ -142,7 +166,8 @@ public class DrainPlusParser implements DrainParser {
         stats.put("totalTemplates", getTemplateCount());
         stats.put("maxDepth", maxDepth);
         stats.put("simThreshold", similarityThresholdPercent);
-        stats.put("lengthBuckets", lengthBuckets.size());
+        stats.put("maxTemplates", maxTemplates);
+        stats.put("maxChildren", maxChildren);
         stats.put("paramToken", PARAM_TOKEN);
         return stats;
     }
@@ -220,12 +245,21 @@ public class DrainPlusParser implements DrainParser {
             return root.countClustersRecursive();
         }
 
-        TrieNode walkOrCreateLeaf(String[] tokens, int maxDepth) {
+        TrieNode walkOrCreateLeaf(String[] tokens, int maxDepth, int maxChildren) {
             TrieNode cur = root;
             int steps = Math.min(maxDepth, tokens.length);
             for (int i = 0; i < steps; i++) {
                 String key = tokens[i];
-                cur = cur.children.computeIfAbsent(key, TrieNode::new);
+                TrieNode next = cur.children.get(key);
+                if (next == null) {
+                    // 子边过多时折叠到 <*>，避免每个独特前缀都占一个节点
+                    if (cur.children.size() >= maxChildren) {
+                        next = cur.children.computeIfAbsent(PARAM_TOKEN, TrieNode::new);
+                    } else {
+                        next = cur.children.computeIfAbsent(key, TrieNode::new);
+                    }
+                }
+                cur = next;
             }
             return cur;
         }
@@ -253,7 +287,9 @@ public class DrainPlusParser implements DrainParser {
                 String rawLine,
                 Consumer<TemplateInfo> onNewTemplate,
                 AtomicLong templateCounter,
-                int similarityThresholdPercent) {
+                AtomicLong liveTemplateCount,
+                int similarityThresholdPercent,
+                int maxTemplates) {
             double threshold = similarityThresholdPercent / 100.0;
             LogCluster best = null;
             double bestSim = -1.0;
@@ -264,16 +300,23 @@ public class DrainPlusParser implements DrainParser {
                     best = c;
                 }
             }
-            if (best != null && bestSim >= threshold) {
+            boolean atCap = liveTemplateCount.get() >= maxTemplates;
+            // 相似够高，或已达全局上限：一律并入最近簇，禁止树继续长
+            if (best != null && (bestSim >= threshold || atCap)) {
                 best.templateTokens = mergeTemplates(best.templateTokens, tokens);
                 best.representativeLine = rawLine;
                 best.hits.incrementAndGet();
                 return best.templateId;
             }
+            // 本叶无簇但全局已满：返回占位 ID，不再分配新模板
+            if (atCap) {
+                return "TMP-OVERFLOW";
+            }
 
             String newId = "TMP-" + templateCounter.getAndIncrement();
             LogCluster nc = new LogCluster(newId, tokens.clone(), rawLine);
             clusters.add(nc);
+            liveTemplateCount.incrementAndGet();
             if (onNewTemplate != null) {
                 onNewTemplate.accept(nc);
             }

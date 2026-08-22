@@ -21,6 +21,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import jakarta.annotation.PostConstruct;
+
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +31,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 日志分析对话：意图识别 → 可选工具调用 → 模型作答，并按 session 保留历史。
+ * <p>
+ * 进程内 {@code conversationHistories} 必须随 {@link ChatSessionRetention} 一起淘汰，
+ * 否则会出现「retention 已踢 session、本 Map 仍占堆」的孤儿泄漏。
+ */
 @Slf4j
 @Service
 public class ChatAnalysisServiceImpl implements ChatAnalysisService {
@@ -57,8 +65,18 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
     @Autowired
     private ChatSessionRetention sessionRetention;
 
+    /** sessionId → 对话历史；容量由 {@link #MAX_HISTORY_SIZE} 与 retention 共同约束。 */
     private final Map<String, List<ChatMessage>> conversationHistories = new ConcurrentHashMap<>();
     private static final int MAX_HISTORY_SIZE = 50;
+
+    /**
+     * 注册 retention 淘汰回调：session 被踢时同步删本类历史 Map。
+     * 若不注册，索引淘汰后数据仍留在堆上，造成孤儿内存泄漏。
+     */
+    @PostConstruct
+    void registerRetentionListener() {
+        sessionRetention.addEvictionListener(conversationHistories::remove);
+    }
 
     private static final Pattern TOOL_CALL_PATTERN = Pattern.compile(
             "【([a-z_]+)】\\s*\\{\\s*([^}]*?)\\s*\\}",
@@ -72,6 +90,9 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         return sessionId.trim();
     }
 
+    /**
+     * 会话式分析入口：安全校验后识别意图，必要时调工具，再生成回复并写入历史/记忆。
+     */
     @Override
     public Flux<String> chat(String sessionId, String userMessage) {
         final String sid = requireSessionId(sessionId);
@@ -409,6 +430,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         return List.copyOf(conversationHistories.getOrDefault(requireSessionId(sessionId), List.of()));
     }
 
+    /** 清空该 session 的对话历史与记忆。 */
     @Override
     public void clearHistory(String sessionId) {
         String sid = requireSessionId(sessionId);
@@ -416,6 +438,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
         memoryService.clearMemory(sid);
     }
 
+    /** 定时清过期 session；同时清对话历史与记忆，避免只清一边。 */
     @Scheduled(fixedDelay = 600_000, initialDelay = 240_000)
     public void evictStaleConversationHistories() {
         sessionRetention.evictExpired(sessionId -> {

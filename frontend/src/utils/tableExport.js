@@ -1,3 +1,6 @@
+/**
+ * 表格导出：截图 PNG/PDF（展开滚动区）或按列导出 CSV。
+ */
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import { rasterizePdfTextBlock } from './pdfTextRaster.js'

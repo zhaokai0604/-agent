@@ -216,6 +216,10 @@
 </template>
 
 <script setup>
+/**
+ * MCP 工具控制台：拉取注册表、填参立即执行；写操作经二次确认。
+ * 历史与结果弹窗展示规范化工具返回。
+ */
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Cpu, Search } from '@element-plus/icons-vue'

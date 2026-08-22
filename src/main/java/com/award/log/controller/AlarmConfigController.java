@@ -18,6 +18,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 告警阈值配置读写（全局默认 + 按任务覆盖）。
+ * HTTP 前缀：{@code /api/alarm}。
+ * 默认配置仅管理员可写；任务配置需能访问对应分析任务。
+ */
 @Slf4j
 @Tag(name = "AlarmConfig", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

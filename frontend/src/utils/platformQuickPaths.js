@@ -1,3 +1,6 @@
+/**
+ * 按后端 OS / UA 解析本机路径与欢迎页快捷话术（Windows / Linux）。
+ */
 /** 按后端 OS 或浏览器 UA 返回本机可用的路径与话术 */
 export function detectWindows(platformInfo) {
   const os = String(platformInfo?.platform?.osName || platformInfo?.platform?.os || '').toLowerCase()

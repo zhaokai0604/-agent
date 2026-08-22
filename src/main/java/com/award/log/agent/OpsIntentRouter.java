@@ -8,10 +8,11 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * 统一意图路由：决定走运维运行时编排还是 LLM 多步 Tool。
+ * 统一意图路由：把用户话术映射到运维 Playbook，决定走运维运行时编排还是 LLM 多步 Tool。
  * <p>
  * 优先级：规则命中 → 直接 Playbook；规则未命中 → 可选语义 LLM 兜底；
  * 仍不确定 → {@link Playbook#NONE}（交对话 LLM / 追问，不瞎编排）。
+ * 「帮我清理」等仅表达意图时默认预览，须 {@link #forceRemediate} 或二次确认才真写。
  * </p>
  */
 @Component
@@ -81,6 +82,7 @@ public class OpsIntentRouter {
 
     private LlmPlaybookClassifier llmPlaybookClassifier;
 
+    /** 运维剧本：全栈巡检、磁盘清理、CPU 压力、巡检待办续办；NONE 表示不编排。 */
     public enum Playbook {
         PATROL_AUTOMATION,
         DISK_CLEANUP,
@@ -132,6 +134,7 @@ public class OpsIntentRouter {
         return Playbook.NONE;
     }
 
+    /** 结合近期对话上下文二次路由（短确认 / 「继续处理」等）。 */
     public Playbook resolveFromContext(
             String userMessage,
             List<UnifiedAssistantService.ChatTurn> history) {
@@ -160,6 +163,7 @@ public class OpsIntentRouter {
         return llmPlaybookClassifier.classify(userMessage, contextHint).orElse(Playbook.NONE);
     }
 
+    /** 是否应进入编排链路（Playbook 非 NONE）。 */
     public boolean shouldOrchestrate(String userMessage) {
         return resolve(userMessage) != Playbook.NONE;
     }
@@ -173,6 +177,10 @@ public class OpsIntentRouter {
         return resolveFromContext(userMessage, history) != Playbook.NONE;
     }
 
+    /**
+     * 是否允许本轮真实写操作：仅预览口令一律 false；
+     * 确认执行 / 显式路径删除 / 强清理口令才 true。
+     */
     public boolean forceRemediate(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
             return false;

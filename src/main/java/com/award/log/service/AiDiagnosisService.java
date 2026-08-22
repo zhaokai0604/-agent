@@ -5,6 +5,9 @@ import java.util.List;
 
 import reactor.core.publisher.Flux;
 
+/**
+ * AI 诊断：用脱敏日志切片生成 RCA 报告（批量 / 单条 / 流式）。
+ */
 public interface AiDiagnosisService {
     /**
      * 根据异常日志生成诊断报告

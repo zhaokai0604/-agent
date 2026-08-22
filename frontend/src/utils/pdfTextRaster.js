@@ -1,3 +1,6 @@
+/**
+ * 将含中文的标题/摘要栅格为 PNG，供 jsPDF 嵌入（内置 Helvetica 不含 CJK）。
+ */
 const FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Helvetica Neue", sans-serif'
 
 /**

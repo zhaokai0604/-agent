@@ -21,6 +21,7 @@ public final class McpToolResponses {
         return mapper.writeValueAsString(ToolResult.warn(dataJson, durationMs));
     }
 
+    /** {@code durationOrStart} 可为耗时或 startTime，由 {@link ToolResult#error} 归一化。 */
     public static String error(ObjectMapper mapper, String message, long durationOrStart)
             throws JsonProcessingException {
         return mapper.writeValueAsString(ToolResult.error(message, durationOrStart));

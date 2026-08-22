@@ -128,6 +128,9 @@
 </template>
 
 <script setup>
+/**
+ * Agent 工作流记忆面板：展示 AWM 回放、失败反思，并可从审计诱导新工作流。
+ */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {

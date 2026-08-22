@@ -10,6 +10,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Drain 日志模板 CRUD 与定期刷新。
+ */
 @Service
 public class TemplateServiceImpl implements TemplateService {
 

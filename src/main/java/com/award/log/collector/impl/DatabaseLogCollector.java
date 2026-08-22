@@ -17,8 +17,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 数据库日志采集器
- * 支持从关系型数据库中采集日志数据
+ * 从关系型数据库按 SQL 增量拉日志（配合 checkpoint 文件记住 lastId）。
+ * {@code collect()} 由调度器调用，内部 list 在 collect 时整体搬出。
  */
 @Slf4j
 public class DatabaseLogCollector implements LogCollector {

@@ -10,6 +10,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 模型评估：对标注集跑启发式打分，落库 precision/recall 等指标。
+ */
 @Slf4j
 @Service
 public class ModelEvaluationServiceImpl implements ModelEvaluationService {

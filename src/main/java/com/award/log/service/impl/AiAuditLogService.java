@@ -9,6 +9,9 @@ import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * AI 接口审计日志：启动时建表，记录调用方、路径、耗时与状态码。
+ */
 @Slf4j
 @Service
 public class AiAuditLogService {

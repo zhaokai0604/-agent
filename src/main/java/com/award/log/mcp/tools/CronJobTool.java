@@ -19,7 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 计划任务只读巡检：Linux crontab / cron.d；Windows schtasks。
+ * 计划任务只读巡检：Linux {@code crontab -l}/{@code /etc/cron.d}；Windows {@code schtasks}。
  */
 @Slf4j
 @Component

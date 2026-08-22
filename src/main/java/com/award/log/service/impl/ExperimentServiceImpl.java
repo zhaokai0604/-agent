@@ -7,6 +7,9 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 在线实验开关：记录样本数与差异率，用于规则/模型对照。
+ */
 @Service
 public class ExperimentServiceImpl implements ExperimentService {
 

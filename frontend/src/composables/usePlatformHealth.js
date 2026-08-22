@@ -1,3 +1,7 @@
+/**
+ * 平台健康快照：OS/安全模式、知识库、MCP 在线数（约 45s 缓存）。
+ * 供运行模式条、欢迎页与配置引导共用。
+ */
 import { computed, ref } from 'vue'
 import { getPlatformInfo, getKnowledgeStatus, getMcpTools } from '../api'
 import { mergeToolRegistry } from '../utils/mcpToolsMeta'

@@ -4,6 +4,9 @@ import com.award.log.model.TaskAlarmConfig;
 
 import java.util.Map;
 
+/**
+ * 任务告警配置：默认项与按任务覆盖。
+ */
 public interface AlarmConfigService {
     TaskAlarmConfig getDefaultConfig();
 

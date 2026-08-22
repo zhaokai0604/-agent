@@ -15,6 +15,7 @@ public final class WriteToolResultSupport {
     private WriteToolResultSupport() {
     }
 
+    /** 从工具 JSON 提取 data.mode（DELETE/EXECUTED/DRY-RUN 等）。 */
     public static String extractMode(String toolResultJson) {
         if (toolResultJson == null || toolResultJson.isBlank()) {
             return "";
@@ -56,6 +57,7 @@ public final class WriteToolResultSupport {
         return "DELETE".equals(m) || "EXECUTED".equals(m);
     }
 
+    /** 请求参数是否明确要求真实写入（dryRun=false 或 confirm*=true）。 */
     public static boolean requestedRealWrite(Map<String, Object> parameters) {
         if (parameters == null) {
             return false;
@@ -89,6 +91,7 @@ public final class WriteToolResultSupport {
         return null;
     }
 
+    /** 成功且有写落地证据（非空预览、非 dry-run）才视为确认真写。 */
     public static boolean isConfirmedRealWrite(String toolResultJson) {
         if (!isToolSuccess(toolResultJson)) {
             return false;

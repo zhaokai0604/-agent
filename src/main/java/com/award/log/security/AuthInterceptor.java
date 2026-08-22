@@ -9,6 +9,10 @@ import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.nio.charset.StandardCharsets;
 
+/**
+ * HTTP 会话鉴权拦截器：未登录返回 401，管理端路径校验管理员角色。
+ * OPTIONS 与公开路径放行；用户身份优先取 RequestUserResolver（含 API Key 绑定）。
+ */
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
 

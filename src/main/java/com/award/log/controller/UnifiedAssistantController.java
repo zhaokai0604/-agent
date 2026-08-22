@@ -15,12 +15,22 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * 统一运维助手 HTTP 入口（上下文、模型列表、状态预览、SSE 流式对话）。
+ * <p>
+ * SSE 路径注意：客户端断开后必须 dispose Reactor 订阅，否则 LLM/工具流继续跑，
+ * 会占满 {@code sseTaskExecutor}（有界队列 + AbortPolicy）。
+ */
 @Slf4j
 @Tag(name = "Unified Assistant")
 @RestController
@@ -78,38 +88,78 @@ public class UnifiedAssistantController {
         boolean useToolAgent = parseUseToolAgent(payload.get("useToolAgent"));
         boolean confirmRemediation = parseConfirmRemediation(payload.get("confirmRemediation"));
         String modelProfile = parseModelProfile(payload.get("modelProfile"));
+        // 5 分钟超时；断线/超时/出错时 stop 会 dispose 上游 Flux，避免泄漏
         SseEmitter emitter = new SseEmitter(300000L);
-        sseExecutor.execute(() -> {
+        AtomicReference<Disposable> subscription = new AtomicReference<>();
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        Runnable stop = () -> {
+            cancelled.set(true);
+            Disposable d = subscription.getAndSet(null);
+            if (d != null && !d.isDisposed()) {
+                d.dispose();
+            }
+        };
+        emitter.onTimeout(stop);
+        emitter.onCompletion(stop);
+        emitter.onError(e -> stop.run());
+        try {
+            sseExecutor.execute(() -> {
+                // 排队期间客户端已断开则不再启动订阅
+                if (cancelled.get()) {
+                    return;
+                }
+                try {
+                    Flux<String> stream = modelProfile == null
+                            ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation)
+                            : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile);
+                    Disposable d = stream
+                            .doOnNext(chunk -> {
+                                try {
+                                    emitter.send(chunk);
+                                } catch (Exception e) {
+                                    emitter.completeWithError(e);
+                                }
+                            })
+                            .doOnComplete(emitter::complete)
+                            .doOnError(emitter::completeWithError)
+                            .subscribe();
+                    subscription.set(d);
+                    // subscribe 与 disconnect 竞态：若已 cancelled，立刻取消刚挂上的订阅
+                    if (cancelled.get()) {
+                        d.dispose();
+                    }
+                } catch (Exception e) {
+                    log.error("Unified assistant stream failed", e);
+                    emitter.completeWithError(e);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            log.warn("SSE 线程池繁忙，拒绝助手流式请求");
             try {
-                Flux<String> stream = modelProfile == null
-                        ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation)
-                        : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile);
-                stream
-                        .doOnNext(chunk -> {
-                            try {
-                                emitter.send(chunk);
-                            } catch (Exception e) {
-                                emitter.completeWithError(e);
-                            }
-                        })
-                        .doOnComplete(emitter::complete)
-                        .doOnError(emitter::completeWithError)
-                        .subscribe();
-            } catch (Exception e) {
-                log.error("Unified assistant stream failed", e);
+                emitter.send("当前请求较多，请稍后重试");
+                emitter.complete();
+            } catch (Exception ignored) {
                 emitter.completeWithError(e);
             }
-        });
+        }
         return emitter;
     }
 
-    @SuppressWarnings("unchecked")
-    private static List<UnifiedAssistantService.ChatTurn> parseHistory(Object raw) {
+    /**
+     * 解析客户端 history：只保留最近 {@link UnifiedAssistantService#MAX_HISTORY_TURNS} 轮，
+     * 每轮内容截断到 {@link UnifiedAssistantService#MAX_TURN_CHARS}。
+     * 必须在 Controller 入口就截，不能等 Service 的 trimHistory——否则 Jackson 已把超大 List 建在堆上。
+     */
+    static List<UnifiedAssistantService.ChatTurn> parseHistory(Object raw) {
         if (!(raw instanceof List<?> list)) {
             return List.of();
         }
+        int maxTurns = UnifiedAssistantService.MAX_HISTORY_TURNS;
+        int maxChars = UnifiedAssistantService.MAX_TURN_CHARS;
+        int from = Math.max(0, list.size() - maxTurns);
         List<UnifiedAssistantService.ChatTurn> turns = new ArrayList<>();
-        for (Object item : list) {
+        for (int i = from; i < list.size(); i++) {
+            Object item = list.get(i);
             if (!(item instanceof Map<?, ?> map)) {
                 continue;
             }
@@ -120,9 +170,13 @@ public class UnifiedAssistantController {
             }
             String r = String.valueOf(role).trim();
             String c = String.valueOf(content).trim();
-            if (!c.isEmpty()) {
-                turns.add(new UnifiedAssistantService.ChatTurn(r, c));
+            if (c.isEmpty()) {
+                continue;
             }
+            if (c.length() > maxChars) {
+                c = c.substring(0, maxChars) + "\n...[truncated]";
+            }
+            turns.add(new UnifiedAssistantService.ChatTurn(r, c));
         }
         return turns;
     }

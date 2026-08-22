@@ -155,6 +155,9 @@
 </template>
 
 <script setup>
+/**
+ * 顶部性能条：WebSocket 推送主机指标，断线后指数退避并短暂回退 HTTP 轮询。
+ */
 import { reactive, ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 
 const props = defineProps({

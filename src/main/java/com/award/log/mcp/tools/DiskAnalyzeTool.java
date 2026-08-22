@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 磁盘综合分析（只读）：聚合全局使用率 + 可选热点目录扫描，用于「磁盘满 / I/O 异常」排查场景。
+ * 磁盘综合分析（只读）：聚合 {@code df} 使用率 + 可选 {@code du} 热点目录扫描，用于「磁盘满 / I/O 异常」排查。
  * 热点扫描复用 {@link DiskTool} 的白名单策略。
  */
 @Slf4j

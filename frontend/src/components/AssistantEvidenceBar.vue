@@ -70,6 +70,9 @@
 </template>
 
 <script setup>
+/**
+ * 助手证据条：展示 RAG 命中、已用工具与安全门结论，便于核对回答依据。
+ */
 import { computed } from 'vue'
 import { mcpToolDisplayName } from '../utils/mcpToolsMeta'
 import { securityOutcomeLabel } from '../utils/assistantSseMeta'

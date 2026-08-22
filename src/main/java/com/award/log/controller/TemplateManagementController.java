@@ -10,6 +10,11 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 日志模板库维护（改名/等级/合并/删除），非默认交付面。
+ * HTTP 前缀：{@code /api/v1/templates}。
+ * 删除仅允许未使用模板，避免破坏已绑定规则。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "Template", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

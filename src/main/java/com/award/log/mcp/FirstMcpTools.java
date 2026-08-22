@@ -7,6 +7,9 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
+/**
+ * 对话 {@code @Tool} 实验用占位（服务器时间 / echo），不执行操作系统命令；HTTP 面默认禁止。
+ */
 @Component
 public class FirstMcpTools {
 

@@ -24,6 +24,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+/**
+ * 日志分析任务管理器：负责任务生命周期、分页查询与明细落库。
+ * 终态（COMPLETED/FAILED/CANCELLED）禁止被进度/失败/取消覆盖；删除时级联明细与产物。
+ */
 @Slf4j
 @Component
 public class AnalysisTaskManager {
@@ -63,6 +67,7 @@ public class AnalysisTaskManager {
         return new PageResult<>(list, total);
     }
 
+    /** 非管理员仅能看到自身 userId 下的任务分页。 */
     public PageResult<TaskInfo> getTasksPageForUser(Integer userId, boolean admin, int pageNum, int pageSize,
                                                     String fileName, String status, String startTime, String endTime) {
         if (admin) {
@@ -156,6 +161,7 @@ public class AnalysisTaskManager {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    /** 将任务标为 COMPLETED 并分批落库解析明细。 */
     public void completeTask(String taskId, List<EnhancedLogParseResultEntity> result, TaskInfo.TaskSummary summary) {
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
@@ -253,6 +259,7 @@ public class AnalysisTaskManager {
         taskMapper.updateById(task);
     }
 
+    /** 已完成/失败/取消视为终态，后续状态写入应忽略。 */
     public boolean isTerminalDbStatus(String taskId) {
         LogAnalysisTask existing = taskMapper.selectById(taskId);
         if (existing == null || existing.getStatus() == null) {

@@ -12,6 +12,9 @@
 </template>
 
 <script setup>
+/**
+ * 对话右侧上下文：纵向性能条 + 驾驶舱提醒（可嵌入主工作区）。
+ */
 import TopPerformanceBar from '../TopPerformanceBar.vue'
 import OpsSideAlerts from './OpsSideAlerts.vue'
 

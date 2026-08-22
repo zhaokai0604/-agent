@@ -3,6 +3,9 @@ package com.award.log.service;
 import com.award.log.service.IntentRecognitionService.RecognitionResult;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 
+/**
+ * 自然语言 → ES 查询：把意图识别结果转成 NativeQuery 与 Lucene 解释。
+ */
 public interface NLQueryService {
 
     class QueryContext {

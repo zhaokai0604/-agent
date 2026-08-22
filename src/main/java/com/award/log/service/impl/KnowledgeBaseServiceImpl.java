@@ -37,6 +37,11 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+/**
+ * 运维知识库：文档切块后写入 Qdrant，检索优先向量、无命中再关键词降级。
+ * <p>
+ * 集合状态与文档数有短 TTL 缓存，避免每次搜索都打 Qdrant。
+ */
 @Slf4j
 @Service
 public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
@@ -128,6 +133,9 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         }
     }
 
+    /**
+     * 集合为空时写入内置 Runbook；已有文档则跳过。供启动线程与手动触发共用。
+     */
     @Override
     public Map<String, Object> seedBuiltinIfEmpty() {
         Map<String, Object> out = new LinkedHashMap<>();
@@ -161,6 +169,9 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         return upload(title, content, "general", "manual");
     }
 
+    /**
+     * 切块 + Embedding 后 upsert 到 Qdrant；同一文档多 chunk 共享 documentId。
+     */
     @Override
     public Map<String, Object> upload(String title, String content, String category, String source) {
         if (!knowledgeProperties.isEnabled()) {
@@ -226,6 +237,10 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         return List.of(meta);
     }
 
+    /**
+     * 向量检索；无命中时按标题/正文关键词重叠降级。
+     * 知识库关闭或集合不存在时返回空列表而非抛错。
+     */
     @Override
     public List<Map<String, Object>> search(String query, int topK) {
         if (!knowledgeProperties.isEnabled()) {
@@ -343,6 +358,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         return true;
     }
 
+    /** 探测 Qdrant 连通性、集合是否存在及文档数，供前端展示就绪状态。 */
     @Override
     public Map<String, Object> getStatus() {
         Map<String, Object> status = new LinkedHashMap<>();

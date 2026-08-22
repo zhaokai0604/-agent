@@ -7,6 +7,9 @@ import org.apache.ibatis.annotations.Param;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 决策日志 Mapper，操作 decision_log 表（写入、按决策 ID/条件查询及离线对照样本）。
+ */
 @Mapper
 public interface DecisionLogMapper {
     int insert(DecisionLog log);

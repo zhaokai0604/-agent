@@ -1,3 +1,6 @@
+/**
+ * MCP 工具元数据：展示名、命令提示、默认参数，以及注册表与本地目录合并。
+ */
 import { resolveOpsPaths } from './platformQuickPaths'
 
 export { applyMcpWriteConfirmParams, userRequestedRealWrite } from './mcpWriteParams'
@@ -42,6 +45,7 @@ export const MCP_TOOL_COMMAND_HINT = {
 /** 已注册 MCP 工具名（与后端 McpToolCatalog 对齐，用于从报告正文反查真实工具） */
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(MCP_TOOL_COMMAND_HINT))
 
+/** 从助手正文反查实际调用过的 MCP 工具名（反引号或 `Name [` 形态） */
 export function extractToolsUsedFromText(text) {
   if (!text || typeof text !== 'string') return []
   const found = []
@@ -310,6 +314,7 @@ function buildToolDefinitions(platformInfo) {
 /** @deprecated 使用 buildToolDefinitions(platformInfo) */
 export const MCP_TOOL_DEFINITIONS = buildToolDefinitions(null)
 
+/** 合并后端 MCP 注册表与本地目录，补展示名/默认参数/在线状态 */
 export function mergeToolRegistry(serverResponse, options = {}) {
   const platformInfo = options.platformInfo ?? null
   const definitions = buildToolDefinitions(platformInfo)

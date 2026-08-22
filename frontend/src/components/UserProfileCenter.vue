@@ -191,6 +191,9 @@
 </template>
 
 <script setup>
+/**
+ * 个人中心：资料、改密、API Key 与访问轨迹。
+ */
 import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {

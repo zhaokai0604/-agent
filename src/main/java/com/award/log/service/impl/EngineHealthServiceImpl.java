@@ -17,6 +17,9 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * 引擎健康检查：Drain、规则、随机森林、实验开关与模型可达性的定期快照。
+ */
 @Service
 public class EngineHealthServiceImpl implements EngineHealthService {
 

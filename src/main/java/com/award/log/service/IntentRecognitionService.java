@@ -3,6 +3,9 @@ package com.award.log.service;
 import lombok.Data;
 import java.util.List;
 
+/**
+ * 聊天意图识别：从自然语言抽出意图、时间窗、关键词与目标服务。
+ */
 public interface IntentRecognitionService {
 
     enum Intent {

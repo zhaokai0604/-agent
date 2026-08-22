@@ -3,8 +3,8 @@ package com.award.log.collector;
 import java.util.List;
 
 /**
- * 日志采集器接口
- * 定义日志采集的核心方法
+ * 日志采集器接口：start/stop 控制生命周期，{@link #collect()} 由调度器周期性排水。
+ * 实现类内部缓冲必须有上限（参见 FileLogCollector / NetworkLogCollector），否则 collect 跟不上生产会 OOM。
  */
 public interface LogCollector {
 

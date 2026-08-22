@@ -18,6 +18,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 
+/**
+ * 运维延时任务：在允许的 MCP 工具集合内预约执行或取消。
+ */
 @Slf4j
 @Service
 public class OpsDeferredTaskService {

@@ -165,6 +165,9 @@
 </template>
 
 <script setup>
+/**
+ * 用户服务协议弹窗：需滚读到底才能确认，供登录/注册勾选同意。
+ */
 import { ref, watch, nextTick } from 'vue'
 
 const props = defineProps({

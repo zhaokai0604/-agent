@@ -125,6 +125,10 @@
 </template>
 
 <script setup>
+/**
+ * 运维溯源中心：最近链路列表与 CoT 步骤明细，支持 CSV 导出。
+ * 步骤标题经 traceStepLabels 中文化。
+ */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getOpsTraceRecent, getOpsTraceDetail } from '../api'

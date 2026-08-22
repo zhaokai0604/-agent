@@ -21,6 +21,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * 对话工具 {@code query_logs}：优先 ES 检索，不可用时回退数据库。
+ */
 @Slf4j
 @Component
 public class LogQueryTool implements AiTool {

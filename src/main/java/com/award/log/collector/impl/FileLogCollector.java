@@ -19,8 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 文件日志采集器
- * 支持从本地文件或目录中采集日志
+ * 文件/目录日志采集器：WatchService 或轮询增量读。
+ * 内部 {@code collectedLogs} 有硬上限 {@link #DEFAULT_BUFFER_MAX_LINES}，满则丢弃新行并计数，
+ * 避免磁盘狂写时调度器排水跟不上导致 OOM。
  */
 @Slf4j
 public class FileLogCollector implements LogCollector {

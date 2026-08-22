@@ -19,7 +19,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 赛题要求的 OS 深度感知：journalctl / ss / lsof（参数与白名单受限）。
+ * OS 深度感知（只读）：Linux {@code journalctl}/{@code ss}/{@code lsof}；
+ * Windows {@code Get-WinEvent}/{@code Get-NetTCPConnection}/{@code Get-Process.Modules}。
  */
 @Slf4j
 @Component
@@ -109,6 +110,7 @@ public class OsInsightTool extends AbstractCommandExecutor {
         return executeGateway(operation, sinceMinutes, maxLines, pid, null);
     }
 
+    /** MCP HTTP 网关：operation = journal | ss | lsof。 */
     public String executeGateway(String operation, Integer sinceMinutes, Integer maxLines, Integer pid, Boolean jsonOutput) throws JsonProcessingException {
         if (operation == null || operation.isBlank()) {
             operation = "journal";

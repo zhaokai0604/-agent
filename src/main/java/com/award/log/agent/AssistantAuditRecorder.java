@@ -24,6 +24,7 @@ public class AssistantAuditRecorder {
     private final OpsPathPolicy opsPathPolicy;
     private final HttpAuditSubject httpAuditSubject;
 
+    /** 落库一条助手/编排审计轨迹（含 CoT 步骤），供交班追溯与 AWM 诱导。 */
     public void record(
             String traceId,
             String userInput,

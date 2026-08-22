@@ -10,6 +10,7 @@ public final class McpDurationSupport {
     private McpDurationSupport() {
     }
 
+    /** 若传入值像 epoch 毫秒则换算为距今耗时，否则原样当作 duration。 */
     public static long normalize(long durationOrStartTime) {
         long value = Math.max(0L, durationOrStartTime);
         long now = System.currentTimeMillis();

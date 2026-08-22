@@ -11,6 +11,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 从审计轨迹表加载 {@link OpsExperience}，供离线诱导扫描成功链路。
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -19,6 +22,7 @@ public class OpsExperienceLoader {
     private final OpsAuditTraceService opsAuditTraceService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** 按 traceId 取单条经验；不存在或解析失败返回 null。 */
     public OpsExperience loadByTraceId(String traceId) {
         if (traceId == null || traceId.isBlank()) {
             return null;
@@ -35,6 +39,7 @@ public class OpsExperienceLoader {
         }
     }
 
+    /** 拉取近期 executionOk 轨迹，最多 {@code limit} 条。 */
     public List<OpsExperience> loadRecentSuccessful(int limit) {
         List<OpsExperience> out = new ArrayList<>();
         try {

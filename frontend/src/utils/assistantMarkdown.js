@@ -1,3 +1,6 @@
+/**
+ * 助手回复 Markdown 渲染：安全 HTML、表格/徽章，以及代码块复制按钮绑定。
+ */
 import MarkdownIt from 'markdown-it'
 
 const md = new MarkdownIt({
@@ -481,6 +484,7 @@ export function renderAssistantMarkdown(raw, options = {}) {
   return enhanceProseHtml(html)
 }
 
+/** 给渲染后的代码块绑定一键复制（幂等，靠 data-bound） */
 export function bindProseCopyButtons(rootEl) {
   if (!rootEl) return
   rootEl.querySelectorAll('.prose-code-copy').forEach(btn => {

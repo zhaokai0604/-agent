@@ -31,6 +31,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * AI 告警：模型从日志样本抽出 level/rootCause/solution，再按配置决定是否落库与推送。
+ * <p>
+ * 静默窗口内跳过生成；同指纹有冷却；可选按任务+等级+根因聚合，减少重复告警。
+ */
 @Slf4j
 @Service
 public class AiLogAlarmServiceImpl implements AiLogAlarmService {
@@ -54,6 +59,7 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
     @Autowired
     private AnalysisTaskManager analysisTaskManager;
 
+    /** 告警指纹 → 上次推送时间；与任务冷却窗口配合抑制重复推送。 */
     private final ConcurrentHashMap<String, Long> fingerprintCooldownMap = new ConcurrentHashMap<>();
 
     @Value("${alarm.aggregation.enabled:true}")
@@ -74,6 +80,10 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
             %s
             """;
 
+    /**
+     * 用日志样本生成一条告警：静默则跳过；模型失败写默认告警。
+     * 命中聚合窗口时只标记 AGGREGATED，不落新记录。
+     */
     @Override
     public LogAlarm analyzeLogAndGenerateAlarm(String taskId, String logContent) {
         log.info("Analyze alarm for task {}", taskId);
@@ -131,6 +141,9 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
         return alarm;
     }
 
+    /**
+     * 按任务配置评估是否允许推送：开关、等级阈值、错误条数、指纹冷却。
+     */
     private AlarmDecision evaluatePushPolicy(LogAlarm alarm, TaskAlarmConfig config) {
         if (config == null) {
             return AlarmDecision.skip("CONFIG_NOT_FOUND");
@@ -184,6 +197,9 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
         return currentPriority >= minPriority;
     }
 
+    /**
+     * 真正落地推送：静默/策略未过则只改状态；通过则记 RECORDED 并刷新指纹冷却。
+     */
     @Override
     public boolean pushAlarm(LogAlarm alarm) {
         if (alarmLifecycleService != null && alarmLifecycleService.isSilencedNow()) {
@@ -226,6 +242,9 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
         processAlarmsByTaskIdForUser(taskId, null, true);
     }
 
+    /**
+     * 按任务补偿告警：无历史则从分析结果抽样生成；有未成功记录则重试推送。
+     */
     @Override
     public void processAlarmsByTaskIdForUser(String taskId, Integer userId, boolean admin) {
         if (!analysisTaskManager.canAccessTask(taskId, userId, admin)) {
@@ -428,6 +447,9 @@ public class AiLogAlarmServiceImpl implements AiLogAlarmService {
         }
     }
 
+    /**
+     * 时间窗口内同任务+等级+根因前缀视为重复，避免刷屏。
+     */
     private boolean shouldAggregate(LogAlarm alarm) {
         if (!aggregationEnabled) {
             return false;

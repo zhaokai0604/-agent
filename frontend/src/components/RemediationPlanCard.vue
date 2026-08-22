@@ -18,6 +18,9 @@
 </template>
 
 <script setup>
+/**
+ * 修复预案卡片：展示步骤与确认按钮；observeOnly 时仅预览不可实写。
+ */
 import { computed } from 'vue'
 import { List } from '@element-plus/icons-vue'
 

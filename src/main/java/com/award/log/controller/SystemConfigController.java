@@ -18,6 +18,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 统一系统配置有效视图与平台自适配重探测。
+ * HTTP 前缀：{@code /api/system-config}。
+ * 有效视图可读；保存与 bootstrap 纠正仅管理员。
+ */
 @Tag(name = "System Config")
 @RestController
 @RequestMapping("/api/system-config")

@@ -30,6 +30,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * MCP 工具 HTTP 执行入口：目录查询、安全门预检、确认后实写。
+ * HTTP 前缀：{@code /api/mcp}。
+ * 中高风险写操作必须走待确认 + 能力凭证；延时调度走独立安全评估。
+ */
 @Slf4j
 @RestController
 @RequestMapping("/api/mcp")
@@ -55,6 +60,7 @@ public class McpExecuteController {
         return response;
     }
 
+    /** 安全门先裁决：拦截、待确认或放行；放行后仍受会话风险预算约束。 */
     @PostMapping("/execute")
     public Map<String, Object> executeTool(@RequestBody Map<String, Object> request) {
         if (request == null) {
@@ -159,6 +165,7 @@ public class McpExecuteController {
         return decorateEnvelope(execResponse, toolName, traceId, Boolean.TRUE.equals(execResponse.get("success")) ? 200 : 500);
     }
 
+    /** 确认写：核销 pending 与能力凭证后强制实写参数，并再次过安全门。 */
     @PostMapping("/confirmExecute")
     public Map<String, Object> confirmExecuteTool(@RequestBody Map<String, Object> request) {
         long startTime = System.currentTimeMillis();
@@ -280,6 +287,7 @@ public class McpExecuteController {
         return decorateEnvelope(execResponse, toolName, traceId, Boolean.TRUE.equals(execResponse.get("success")) ? 200 : 500);
     }
 
+    /** 延时任务到期回调：不走确认码，但仍过 deferred 安全评估。 */
     public Map<String, Object> executeDeferredScheduledTool(String toolName, Map<String, Object> parameters) {
         long startTime = System.currentTimeMillis();
         String traceId = UUID.randomUUID().toString();

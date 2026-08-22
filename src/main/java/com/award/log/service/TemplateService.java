@@ -5,6 +5,9 @@ import com.award.log.model.LogTemplateRecord;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Drain 日志模板 CRUD 与定期刷新。
+ */
 public interface TemplateService {
     List<LogTemplateRecord> page(int pageNum, int pageSize);
 

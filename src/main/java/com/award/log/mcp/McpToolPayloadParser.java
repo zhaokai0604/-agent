@@ -13,6 +13,7 @@ public final class McpToolPayloadParser {
     private McpToolPayloadParser() {
     }
 
+    /** 解析原始 JSON；非法则返回 null。 */
     public static JsonNode parseRoot(ObjectMapper mapper, String raw) {
         if (raw == null || raw.isBlank()) {
             return null;

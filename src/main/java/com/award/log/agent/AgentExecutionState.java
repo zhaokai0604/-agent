@@ -9,7 +9,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Backend contract for the visible agent loop: objective -> plan -> act -> verify -> reflect.
+ * 前端可见 Agent 闭环的后端契约：objective → plan → act → verify → reflect。
+ * 把写确认、计划工具、AWM 命中与安全结论折叠成统一 executionState JSON。
  */
 public final class AgentExecutionState {
 
@@ -18,6 +19,9 @@ public final class AgentExecutionState {
     private AgentExecutionState() {
     }
 
+    /**
+     * 组装一帧执行状态（计划项、护栏文案、阶段轨迹），供 SSE / 工作台渲染。
+     */
     public static Map<String, Object> build(
             String replyMode,
             boolean writeConfirmed,

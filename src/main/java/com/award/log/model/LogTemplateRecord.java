@@ -4,6 +4,9 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * Drain 日志模板记录（模板内容、使用次数），对应 log_template 表。
+ */
 @Data
 public class LogTemplateRecord {
     private Long id;

@@ -5,6 +5,9 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 运维知识库：文档切块后检索，优先向量、无命中再关键词降级。
+ */
 public interface KnowledgeBaseService {
 
     Map<String, Object> upload(String title, String content);

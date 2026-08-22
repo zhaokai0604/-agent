@@ -10,6 +10,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 安全门一键自检：用探针走真实 Gate，不执行系统命令。
+ * HTTP 前缀：{@code /api/security}（路径 {@code /self-check}）。
+ * 只读诊断，不改变策略或产生实写。
+ */
 @Tag(name = "安全自检")
 @RestController
 @RequestMapping("/api/security")

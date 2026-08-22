@@ -34,6 +34,7 @@ public class RemediationEffectEvaluator {
         return snap;
     }
 
+    /** 对比修复前后磁盘/CPU/内存，生成 0–100 评分与摘要。 */
     public Map<String, Object> evaluate(Map<String, Object> before, Map<String, Object> after, int remediationsExecuted) {
         Map<String, Object> effect = new LinkedHashMap<>();
         effect.put("before", before != null ? before : Map.of());

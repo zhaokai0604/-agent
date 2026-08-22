@@ -1,3 +1,6 @@
+/**
+ * 助手 SSE 载荷分流：ASSISTANT_META / ASSISTANT_EVENT 不进入对话正文。
+ */
 export const ASSISTANT_META_PREFIX = 'ASSISTANT_META:'
 export const ASSISTANT_EVENT_PREFIX = 'ASSISTANT_EVENT:'
 

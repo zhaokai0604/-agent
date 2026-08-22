@@ -72,6 +72,9 @@
 </template>
 
 <script setup>
+/**
+ * 环境就绪页：平台信息、知识库状态与 MCP 工具清单的只读总览。
+ */
 import { computed, onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getPlatformInfo, getKnowledgeStatus, getMcpTools } from '../api'

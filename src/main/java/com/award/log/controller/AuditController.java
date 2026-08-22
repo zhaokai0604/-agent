@@ -10,6 +10,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 统一审计流水只读入口（MCP/运维等异构记录汇聚）。
+ * HTTP 前缀：{@code /api/audit}。
+ * 不提供写入；详情需 {@code entryId} 或 {@code traceId}。
+ */
 @RestController
 @RequestMapping("/api/audit")
 public class AuditController {

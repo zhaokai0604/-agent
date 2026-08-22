@@ -11,6 +11,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 离线指标任务：每日汇总各决策引擎的样本与误报，写入 {@code engine_offline_metric}。
+ */
 @Slf4j
 @Service
 public class OfflineMetricJob {
@@ -24,6 +27,9 @@ public class OfflineMetricJob {
         this.decisionLogMapper = decisionLogMapper;
     }
 
+    /**
+     * 每天凌晨汇总各引擎离线指标（样本、FP 等）。
+     */
     @Scheduled(cron = "0 30 2 * * ?")
     public void calc() {
         LocalDateTime now = LocalDateTime.now();

@@ -274,6 +274,10 @@
 </template>
 
 <script setup>
+/**
+ * 日志分析页：上传日志、轮询任务状态，SSE 拉取报告并展示异常/诊断。
+ * 高异常或失败任务可预填跳转到运维对话深挖。
+ */
 import { ref, reactive, computed, nextTick, onMounted, onUnmounted, defineExpose } from 'vue'
 import { UploadFilled, WarningFilled, Warning, CircleCheck, Refresh, Download, Cpu, Timer, CircleCheckFilled, ArrowDown, CircleClose, Service } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'

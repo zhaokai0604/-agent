@@ -72,13 +72,21 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * 统一运维助手：按意图规划回复模式，走纯对话流或 Tool Agent / 巡检编排。
+ * <p>
+ * SSE 流式输出；写操作默认只诊断，需用户确认后才挂载写工具。
+ * 历史会按 {@link #MAX_HISTORY_TURNS} / {@link #MAX_TURN_CHARS} 截断，避免 prompt 撑爆上下文窗口。
+ */
 @Slf4j
 @Service
 public class UnifiedAssistantService {
 
+    /** 一轮对话的角色与正文（注入模型前会再截断）。 */
     public record ChatTurn(String role, String content) {
     }
 
+    /** SSE 元数据行前缀；前端据此解析 JSON，勿当 Markdown 正文。 */
     public static final String ASSISTANT_META_PREFIX = "ASSISTANT_META:";
 
     private record ToolAgentCompletion(
@@ -94,8 +102,10 @@ public class UnifiedAssistantService {
     ) {
     }
 
-    private static final int MAX_HISTORY_TURNS = 24;
-    private static final int MAX_TURN_CHARS = 2800;
+    /** 注入模型的历史轮数上限（只保留最近 N 轮）。 */
+    public static final int MAX_HISTORY_TURNS = 24;
+    /** 单轮内容截断字符数；超长尾部追加 {@code ...[truncated]}。 */
+    public static final int MAX_TURN_CHARS = 2800;
 
     @Autowired
     private ChatModel chatModel;
@@ -193,10 +203,16 @@ public class UnifiedAssistantService {
     @Value("${agent.ai.default-context-window:32768}")
     private int configuredContextWindow;
 
+    /** 无用户话术时的运维快照（性能、告警、知识库等）。 */
     public Map<String, Object> getAssistantContext() {
         return getAssistantContext(null);
     }
 
+    /**
+     * 组装注入模型的运维上下文。
+     *
+     * @param userMessage 可空；非空时尝试带上 RAG / 多 Agent 命中
+     */
     public Map<String, Object> getAssistantContext(String userMessage) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("agentHostOs", buildAgentHostOsSummary());
@@ -278,6 +294,7 @@ public class UnifiedAssistantService {
         return context;
     }
 
+    /** 无历史、默认是否走 Tool Agent。 */
     public Flux<String> chatStream(String userMessage) {
         return chatStream(userMessage, List.of());
     }
@@ -297,6 +314,15 @@ public class UnifiedAssistantService {
         return chatStream(userMessage, history, useToolAgent, confirmRemediation, null);
     }
 
+    /**
+     * 对话流式入口：限长 → 截断历史 → Planner 分流。
+     * <p>
+     * Tool Agent 路径会先做注入/高危命令拦截；写工具仅在 {@code confirmRemediation} 或强制处置意图时挂载。
+     *
+     * @param useToolAgent          调用方请求走工具增强；最终是否走该路径由 Planner 决定
+     * @param confirmRemediation    用户已确认写操作
+     * @param requestedModelProfile 可选模型档位；空则走路由默认
+     */
     public Flux<String> chatStream(String userMessage,
                                    List<ChatTurn> history,
                                    boolean useToolAgent,
@@ -307,6 +333,8 @@ public class UnifiedAssistantService {
         if (safe.isBlank()) {
             return Flux.just("请输入您的问题或需求。");
         }
+        // 入口先截 history，再做意图规划，避免超大上下文进入工具链
+        history = trimHistory(history);
         AssistantReplyPlanner.ReplyPlan plan = assistantReplyPlanner.plan(
                 safe, history, useToolAgent, confirmRemediation, orchestratorEnabled, opsRuntimeService);
         if (plan.useToolAgentPath()) {
@@ -315,12 +343,16 @@ public class UnifiedAssistantService {
         return chatStreamPlain(safe, history, plan, requestedModelProfile);
     }
 
+    /**
+     * 不真正调模型，只预览本轮计划（意图、拟用工具、是否等待写确认）。
+     */
     public Map<String, Object> previewAgentState(String userMessage,
                                                  List<ChatTurn> history,
                                                  boolean useToolAgent,
                                                  boolean confirmRemediation) {
         String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
                 userMessage == null ? "" : userMessage.trim(), 32_000);
+        history = trimHistory(history);
         AssistantReplyPlanner.ReplyPlan plan = assistantReplyPlanner.plan(
                 safe, history, useToolAgent, confirmRemediation, orchestratorEnabled, opsRuntimeService);
         boolean allowWrite = confirmRemediation || (opsIntentRouter != null && opsIntentRouter.forceRemediate(safe));
@@ -1383,7 +1415,15 @@ public class UnifiedAssistantService {
         return sb.toString();
     }
 
-    private List<ChatTurn> trimHistory(List<ChatTurn> history) {
+    /**
+     * 只保留最近 {@link #MAX_HISTORY_TURNS} 轮，且每轮正文不超过 {@link #MAX_TURN_CHARS}。
+     * 空历史返回空列表，不返回 null。
+     */
+    /**
+     * 截断对话历史：只留最近若干轮，并限制每轮长度。
+     * Controller 侧也应调用同等限制，防止反序列化阶段就 OOM。
+     */
+    static List<ChatTurn> trimHistory(List<ChatTurn> history) {
         if (history == null || history.isEmpty()) {
             return List.of();
         }

@@ -5,6 +5,10 @@ import io.swagger.v3.oas.models.info.Info;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * OpenAPI / Knife4j 文档元数据配置（标题、描述、联系人）。
+ * 不注册安全方案，仅填充 {@link OpenAPI} Info。
+ */
 @Configuration
 public class Knife4jConfig {
 

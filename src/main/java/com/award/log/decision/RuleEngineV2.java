@@ -13,6 +13,10 @@ import java.lang.management.OperatingSystemMXBean;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * 规则决策引擎 V2：从规则注册表拉取 DSL 规则，结合静默窗口与 CPU 上下文求值。
+ * 命中即告警并记录规则统计；静默期内抑制，不替代随机森林/LLM。
+ */
 @Component
 public class RuleEngineV2 {
 
@@ -34,6 +38,7 @@ public class RuleEngineV2 {
         this.ruleStatService = ruleStatService;
     }
 
+    /** 静默期抑制；否则用 DSL 规则库求值，命中即告警。 */
     public DecisionResult evaluate(DecisionInput input) {
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("LEVEL", input.getEvent().getLevel());

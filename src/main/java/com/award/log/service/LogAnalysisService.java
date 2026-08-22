@@ -6,6 +6,9 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 
+/**
+ * 日志文件分析引擎：分片并行解析、多维异常检测、任务启停与报告导出。
+ */
 public interface LogAnalysisService {
     /**
      * 异步启动分析任务

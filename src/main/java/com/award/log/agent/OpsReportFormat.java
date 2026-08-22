@@ -9,7 +9,8 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Shared markdown formatting helpers for ops reports.
+ * 运维报告 Markdown 共用格式化：结论、发现项、AWM 段落、预览/已执行页脚。
+ * 与前端确认口令、编排器报告结构对齐。
  */
 public final class OpsReportFormat {
 

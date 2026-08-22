@@ -19,6 +19,7 @@ public class OpsPatrolAutomationService {
     private final OpsPatrolService opsPatrolService;
     private final OpsAutoRemediationService opsAutoRemediationService;
 
+    /** 跑一轮巡检周期并附带修复摘要 / 待确认方案，返回统一 {@link OpsRunResult}。 */
     public OpsRunResult run() {
         opsPatrolService.runPatrolCycle();
         Map<String, Object> rawRemediation = opsAutoRemediationService != null

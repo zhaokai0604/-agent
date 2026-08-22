@@ -10,6 +10,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.*;
 
+/**
+ * MCP 工具进程执行基类：同步/异步拉起外部命令并收集 stdout/stderr。
+ * <p>
+ * 实现要点：
+ * <ul>
+ *   <li>{@code STREAM_DRAIN_EXECUTOR} 为有界线程池（core=2, max=16, queue=64），避免每条命令各开排空线程导致线程爆炸；</li>
+ *   <li>stdout/stderr 使用 {@link StringBuffer} 缓冲，保证跨排空线程的并发写入安全；</li>
+ *   <li>进程超时后 {@code destroyForcibly}，再 {@link #awaitDrain} 最多等待 1s 收尾，防止管道阻塞与 Future 泄漏。</li>
+ * </ul>
+ */
 @Slf4j
 public abstract class AbstractCommandExecutor {
 
@@ -20,11 +30,22 @@ public abstract class AbstractCommandExecutor {
     private static final int MAX_STDOUT_CHARS = 512 * 1024;
     private static final int MAX_STDERR_CHARS = 256 * 1024;
 
-    private static final ExecutorService STREAM_DRAIN_EXECUTOR = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r, "mcp-stream-drain");
-        t.setDaemon(true);
-        return t;
-    });
+    /**
+     * 有界排空线程池：避免每条命令各开两个无界线程导致线程爆炸。
+     * 队列满时 CallerRuns，把压力打回调用线程而不是无限排队。
+     */
+    private static final ExecutorService STREAM_DRAIN_EXECUTOR = new ThreadPoolExecutor(
+            2,
+            16,
+            60L,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(64),
+            r -> {
+                Thread t = new Thread(r, "mcp-stream-drain");
+                t.setDaemon(true);
+                return t;
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy());
 
     protected final ExecutorService executor;
 
@@ -42,6 +63,7 @@ public abstract class AbstractCommandExecutor {
         return McpDurationSupport.normalize(durationOrStartTime);
     }
 
+    /** 在工具线程池异步执行，外层再加固定超时；超时/异常均返回失败 {@link CommandResult}。 */
     protected CompletableFuture<CommandResult> executeCommandAsync(List<String> command) {
         return CompletableFuture
             .supplyAsync(() -> executeWithRetry(command, commandTimeoutMillis()), executor)
@@ -78,6 +100,9 @@ public abstract class AbstractCommandExecutor {
         return executeAsUser(command, runAsUser, commandTimeoutMillis());
     }
 
+    /**
+     * 以指定用户执行：Linux {@code sudo -u}；Windows 无 sudo，降级为当前进程用户。
+     */
     protected CommandResult executeAsUser(List<String> command, String runAsUser, long timeoutMillis) {
         if (runAsUser == null || runAsUser.isEmpty()) {
             return executeWithRetry(command, timeoutMillis);
@@ -98,6 +123,7 @@ public abstract class AbstractCommandExecutor {
         return executeWithRetry(sudoCommand, timeoutMillis);
     }
 
+    /** 启发式判断命令是否需要 root（systemctl/docker/iptables 等）。 */
     protected boolean requiresRootPrivilege(List<String> command) {
         String firstArg = command.get(0);
         String fullCommand = String.join(" ", command);
@@ -119,6 +145,7 @@ public abstract class AbstractCommandExecutor {
                fullCommand.contains("rm -rf /");
     }
 
+    /** 通过 {@code sudo -l -U} 检查目标用户是否被授权执行该命令（Windows 直接放行）。 */
     protected boolean checkSudoPrivilege(String runAsUser, List<String> command) {
         if (OsRuntime.isWindows()) {
             return true;
@@ -149,6 +176,7 @@ public abstract class AbstractCommandExecutor {
         return executeWithRetry(command, commandTimeoutMillis());
     }
 
+    /** 失败最多重试 {@value #MAX_RETRIES} 次；每次独立进程超时。 */
     protected CommandResult executeWithRetry(List<String> command, long timeoutMillis) {
         long perAttemptTimeout = timeoutMillis > 0 ? timeoutMillis : commandTimeoutMillis();
         int attempts = 0;
@@ -170,8 +198,10 @@ public abstract class AbstractCommandExecutor {
     }
 
     private CommandResult doExecute(List<String> command, long timeoutMillis) {
-        StringBuilder output = new StringBuilder();
-        StringBuilder errorOutput = new StringBuilder();
+        // StringBuffer 线程安全：drain 在 STREAM_DRAIN_EXECUTOR 写，主线程读
+        // StringBuffer：stdout/stderr 由排空线程并发写入，需线程安全
+        StringBuffer output = new StringBuffer();
+        StringBuffer errorOutput = new StringBuffer();
         int exitCode = -1;
 
         try {
@@ -194,8 +224,7 @@ public abstract class AbstractCommandExecutor {
                 boolean finished = process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS);
                 if (!finished) {
                     process.destroyForcibly();
-                    stdoutFuture.cancel(true);
-                    stderrFuture.cancel(true);
+                    awaitDrain(stdoutFuture, stderrFuture);
                     log.warn("命令执行超时 ({} ms): {}", timeoutMillis, command);
                     return new CommandResult(false, output.toString(), "command timeout", -1, true);
                 }
@@ -221,6 +250,7 @@ public abstract class AbstractCommandExecutor {
         }
     }
 
+    /** Windows 控制台输出多为 GBK，Linux 为 UTF-8。 */
     private static Charset commandOutputCharset() {
         if (OsRuntime.isWindows()) {
             return Charset.forName("GBK");
@@ -228,7 +258,17 @@ public abstract class AbstractCommandExecutor {
         return StandardCharsets.UTF_8;
     }
 
-    private static void drainStream(java.io.InputStream stream, StringBuilder target, int maxChars, String label) {
+    /** 超时杀进程后最多再等 1s 排空管道，避免 Future 悬挂；超时则 cancel。 */
+    private static void awaitDrain(CompletableFuture<Void> stdoutFuture, CompletableFuture<Void> stderrFuture) {
+        try {
+            CompletableFuture.allOf(stdoutFuture, stderrFuture).get(1, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            stdoutFuture.cancel(true);
+            stderrFuture.cancel(true);
+        }
+    }
+
+    private static void drainStream(java.io.InputStream stream, StringBuffer target, int maxChars, String label) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, commandOutputCharset()))) {
             String line;
             int chars = 0;
@@ -255,6 +295,7 @@ public abstract class AbstractCommandExecutor {
         }
     }
 
+    /** 单次命令结果。{@code timeout=true} 表示进程等待超时（已被强制销毁）。 */
     public record CommandResult(
         boolean success,
         String output,

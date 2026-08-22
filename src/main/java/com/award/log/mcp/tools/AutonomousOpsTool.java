@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 兼容旧自主运维工具名，现统一转为巡检自动修复单轨入口。
+ * 兼容旧自主运维工具名：触发巡检自动修复单轨（编排其它 MCP 工具，自身不直接跑 OS 命令）。
  */
 @Component
 public class AutonomousOpsTool {
@@ -86,6 +86,7 @@ public class AutonomousOpsTool {
         return pending instanceof Map<?, ?> p && Boolean.TRUE.equals(p.get("hasPending"));
     }
 
+    /** HTTP 入口，转发到 {@link #runAutonomousOps}。 */
     public String executeGateway(String userIntent, Boolean forceRemediate) throws JsonProcessingException {
         return runAutonomousOps(userIntent, forceRemediate);
     }

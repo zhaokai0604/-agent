@@ -8,6 +8,9 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * AI 对话工具注册表：收集全部 {@link AiTool} 并生成 prompt Schema。
+ */
 @Slf4j
 @Service
 public class ToolRegistryService {

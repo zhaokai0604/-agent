@@ -17,7 +17,8 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 采集层调度器：从采集器拉取日志并推送到Kafka原始Topic
+ * 采集层调度器：定时 {@link LogCollectorManager#collectAll()} 排水，
+ * 可选再推 Kafka 原始 Topic。这是 fan-out 的<strong>唯一主消费者入口</strong>。
  */
 @Slf4j
 @Component

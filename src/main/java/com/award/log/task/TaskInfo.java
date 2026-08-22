@@ -8,6 +8,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 分析任务对外 DTO：进度、摘要与结果抽样。
+ * {@code result} 默认为异常抽样而非全量明细，全量请走 details 接口。
+ */
 @Data
 public class TaskInfo {
     private String taskId;
@@ -23,6 +27,10 @@ public class TaskInfo {
     private LocalDateTime createTime;
     private TaskSummary summary;
 
+    /**
+     * 任务统计摘要：总量、异常率、是否截断及等级分布。
+     * 供列表/报告展示，不包含逐条日志正文。
+     */
     @Data
     public static class TaskSummary {
         private int totalLogs;

@@ -26,6 +26,10 @@ import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 磁盘只读观测：Linux {@code df -h}/{@code du -xk}；Windows {@code Get-PSDrive} 与目录占用扫描。
+ * {@code DiskInsightTool} 别名由 {@link #rankDiskUsageUnderPath} 提供。
+ */
 @Slf4j
 @Component
 public class DiskTool extends AbstractCommandExecutor {

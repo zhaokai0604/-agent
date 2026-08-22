@@ -19,7 +19,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 /**
- * Workflow Memory 持久化与内存缓存（AWM M + W）。
+ * Agent Workflow Memory 的持久化与内存缓存（AWM 的 M + W）。
+ * 启动时建表、加载已启用 workflow，并可按域补种 seed。
+ * 热路径读 {@link java.util.concurrent.CopyOnWriteArrayList} 缓存；写库后 {@link #reloadCache()} 全量刷新。
  */
 @Slf4j
 @Service
@@ -139,6 +141,7 @@ public class WorkflowMemoryService {
         }
     }
 
+    /** 从库全量刷新内存缓存；关闭 AWM 时清空。 */
     public void reloadCache() {
         cache.clear();
         if (!enabled) {
@@ -193,6 +196,8 @@ public class WorkflowMemoryService {
     }
 
     /**
+     * 按 workflowId upsert；{@code incrementUtility} 为 true 时累计命中次数。
+     * seed 来源不会覆盖已有非 seed 的 source_type。
      * @return true 表示写入成功；失败返回 false（异常已记日志）
      */
     public boolean upsert(OpsWorkflow workflow, boolean incrementUtility) {
@@ -244,6 +249,7 @@ public class WorkflowMemoryService {
         }
     }
 
+    /** 命中/回放成功后累计 utility，供检索排序。 */
     public void recordUtility(String workflowId) {
         if (workflowId == null || workflowId.isBlank()) {
             return;
@@ -258,6 +264,7 @@ public class WorkflowMemoryService {
         }
     }
 
+    /** 回放完成（含只读诊断）后累计 success_count。 */
     public void recordSuccess(String workflowId) {
         if (workflowId == null || workflowId.isBlank()) {
             return;
@@ -272,6 +279,7 @@ public class WorkflowMemoryService {
         }
     }
 
+    /** 写入一次回放运行记录（ops_workflow_run），不影响缓存。 */
     public void recordRun(
             String workflowId,
             String traceId,
@@ -378,6 +386,7 @@ public class WorkflowMemoryService {
         }
     }
 
+    /** 同域是否已存在相同工具序列，避免重复诱导。 */
     public boolean existsWithToolSequence(String domainTag, List<String> toolSequence) {
         if (toolSequence == null || toolSequence.size() < 2) {
             return false;
@@ -437,6 +446,7 @@ public class WorkflowMemoryService {
         return (int) cache.stream().filter(w -> domain.equals(w.domainTag())).count();
     }
 
+    /** 该域启用 workflow 是否已达上限。 */
     public boolean isDomainFull(String domainTag) {
         return countByDomain(domainTag) >= maxWorkflowsPerDomain;
     }

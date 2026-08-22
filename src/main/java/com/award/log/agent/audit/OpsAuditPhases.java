@@ -1,7 +1,8 @@
 package com.award.log.agent.audit;
 
 /**
- * 赛题闭环六步（与 ThreshCore 审计展示一致）。
+ * 赛题运维闭环六步常量（接收→感知→推理→安全校验→执行→验证）。
+ * 与 ThreshCore 审计时间线、编排器 CoT 步骤标题对齐。
  */
 public final class OpsAuditPhases {
 
@@ -22,6 +23,7 @@ public final class OpsAuditPhases {
     private OpsAuditPhases() {
     }
 
+    /** 按 1–6 步返回中文标题，超出范围回退「步骤N」。 */
     public static String titleCn(int stepIndex) {
         return switch (stepIndex) {
             case 1 -> RECEIVE_CN;

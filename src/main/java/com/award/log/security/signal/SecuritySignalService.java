@@ -13,6 +13,10 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Collectors;
 
+/**
+ * 安全信号内存窗口服务：摄入、保留最近 N 条并按时间窗汇总威胁。
+ * 不持久化；超限淘汰最旧记录，供巡检/对话威胁摘要读取。
+ */
 @Service
 public class SecuritySignalService {
 
@@ -31,6 +35,7 @@ public class SecuritySignalService {
         this.timeSource = timeSource;
     }
 
+    /** 归一化并入队一条信号，超出容量则丢弃最旧。 */
     public SecuritySignal ingest(String sourceHint, Object payload) {
         SecuritySignal signal = normalizer.normalize(sourceHint, payload, timeSource.currentTimeMillis());
         recentSignals.addFirst(signal);
@@ -83,6 +88,7 @@ public class SecuritySignalService {
         return recentHighPriority(limit, windowMs).stream().map(SecuritySignal::toMap).toList();
     }
 
+    /** 窗口内存在 critical 或至少 2 条高优先级信号则视为有威胁。 */
     public boolean hasThreatSignals(long windowMs) {
         Map<String, Object> summary = summary(windowMs);
         return Boolean.TRUE.equals(summary.get("hasThreat"));

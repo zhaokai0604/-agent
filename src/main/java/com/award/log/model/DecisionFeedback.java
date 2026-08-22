@@ -4,6 +4,9 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 决策人工反馈与训练样本，对应 decision_feedback 表。
+ */
 @Data
 public class DecisionFeedback {
     private Long id;

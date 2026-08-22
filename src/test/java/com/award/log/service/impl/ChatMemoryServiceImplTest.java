@@ -72,4 +72,14 @@ class ChatMemoryServiceImplTest {
         assertEquals("analyze_logs", summary.getLastIntent());
         assertTrue(summary.getLastTopic().endsWith("..."));
     }
+
+    @Test
+    void overflowShouldEvictOldestSessionMemory() {
+        service.registerRetentionListener();
+        for (int i = 0; i < ChatSessionRetention.MAX_SESSIONS + 3; i++) {
+            service.addToMemory("session-" + i, new MemoryEntry("user", "msg-" + i));
+        }
+        assertEquals(0, service.getMemorySize("session-0"));
+        assertTrue(service.getMemorySize("session-" + ChatSessionRetention.MAX_SESSIONS) > 0);
+    }
 }

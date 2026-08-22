@@ -15,6 +15,7 @@ public final class McpNestedResultSupport {
     private McpNestedResultSupport() {
     }
 
+    /** 成功则返回 data（字符串再 JSON 解析）；失败则抽出 error。 */
     public static Object unwrap(ObjectMapper objectMapper, String raw) {
         if (raw == null || raw.isBlank()) {
             return null;

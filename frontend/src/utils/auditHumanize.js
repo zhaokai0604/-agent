@@ -1,3 +1,6 @@
+/**
+ * 审计记录中文化：通道、工具名、结论与思维链步骤正文。
+ */
 import { mcpToolDisplayName } from './mcpToolsMeta.js'
 
 const KIND_LABEL = {

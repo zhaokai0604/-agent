@@ -8,6 +8,9 @@ import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
+/**
+ * Elasticsearch 日志文档仓储，按时间、协议、等级、异常与任务查询 log_analysis 索引。
+ */
 @Repository
 public interface LogDocumentRepository extends ElasticsearchRepository<LogDocument, String> {
 

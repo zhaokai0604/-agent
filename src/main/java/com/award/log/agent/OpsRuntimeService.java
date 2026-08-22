@@ -10,7 +10,8 @@ import org.springframework.stereotype.Service;
 import java.util.Map;
 
 /**
- * Runtime router for patrol automation and playbook orchestration.
+ * 运维运行时门面：按 Playbook 分发给巡检自动化或 {@link AssistantOrchestrator}。
+ * 对话助手只依赖本类，避免直接耦合两套编排器。
  */
 @Service
 @RequiredArgsConstructor
@@ -39,6 +40,7 @@ public class OpsRuntimeService {
         return runResolved(userMessage, surface, intentRisk, playbook);
     }
 
+    /** 结合对话历史解析 Playbook 后再分发。 */
     public OpsRunResult runFromContext(
             String userMessage,
             java.util.List<com.award.log.service.impl.UnifiedAssistantService.ChatTurn> history,
@@ -82,6 +84,7 @@ public class OpsRuntimeService {
         };
     }
 
+    /** 定时自主运维：force 且 Bean 可用时走全栈编排，否则走巡检单轨。 */
     public OpsRunResult runScheduledAutonomous(McpToolSurface surface, boolean forceRemediate) {
         AutonomousOpsOrchestrator orchestrator = autonomousOpsOrchestrator.getIfAvailable();
         if (orchestrator != null && forceRemediate) {

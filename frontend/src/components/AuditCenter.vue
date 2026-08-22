@@ -229,6 +229,10 @@
 </template>
 
 <script setup>
+/**
+ * 统一审计中心：工具/访问/对话流水，详情含思维链步骤。
+ * 可拉取安全自检与 ops_audit_trace 明细。
+ */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {

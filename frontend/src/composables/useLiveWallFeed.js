@@ -1,3 +1,7 @@
+/**
+ * 实时大屏数据：性能 WebSocket（失败退避）+ HTTP 轮询巡检/溯源/平台信息。
+ * WS 成功推送后短时间内跳过性能 HTTP，避免双通道重复打点。
+ */
 import { reactive, ref, computed, onMounted, onUnmounted } from 'vue'
 import {
   buildManagementWsUrl,

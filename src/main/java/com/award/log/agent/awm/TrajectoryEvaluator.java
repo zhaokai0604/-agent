@@ -10,6 +10,7 @@ import java.util.Map;
 @Component
 public class TrajectoryEvaluator {
 
+    /** 仅 executionOk 且 outcome 为 EXECUTED/DIAGNOSED/REMEDIATED 等成功态才允许诱导。 */
     public boolean shouldInduce(OpsExperience experience) {
         if (experience == null || !experience.executionOk()) {
             return false;

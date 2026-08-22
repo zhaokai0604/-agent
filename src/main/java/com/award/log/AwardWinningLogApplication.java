@@ -12,6 +12,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
+/**
+ * ThreshCore 后端启动类：启用异步、定时任务，并扫描 MyBatis Mapper。
+ * 启动成功后打印控制台与 Knife4j 文档地址，不在此注册业务 Bean。
+ */
 @Slf4j
 @EnableAsync
 @EnableScheduling

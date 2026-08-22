@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * TCP 端口连通性探测（纯 Java Socket，无 shell 依赖）。
+ * TCP 端口连通性探测（纯 Java Socket connect，无 shell；只读，不发应用层数据）。
  */
 @Slf4j
 @Component

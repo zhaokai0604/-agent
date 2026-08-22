@@ -15,7 +15,9 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Reflexion 失败记忆：仅从 REJECT 轨迹沉淀教训，不诱导可执行 workflow。
+ * Reflexion 失败记忆：仅从安全拦截 / REJECT 轨迹沉淀自然语言教训，不诱导可执行 workflow。
+ * 供助手提示词与工作台面板注入；不得用于绕过 OpsTrustPolicy。
+ * 读路径走 {@link java.util.concurrent.CopyOnWriteArrayList} 缓存，落库后全量 reload。
  */
 @Slf4j
 @Service
@@ -116,6 +118,7 @@ public class FailureInsightService {
         }
     }
 
+    /** 从库全量刷新内存缓存；关闭开关时清空。 */
     public void reloadCache() {
         cache.clear();
         if (!enabled) {
@@ -187,6 +190,7 @@ public class FailureInsightService {
         }
     }
 
+    /** 按用户话术对教训打分，返回 Top-K，用于提示词选择性注入。 */
     public List<FailureInsight> relevantForMessage(String userMessage, int limit) {
         if (!enabled || cache.isEmpty()) {
             return List.of();
@@ -223,6 +227,7 @@ public class FailureInsightService {
         return out;
     }
 
+    /** 结构化上下文（前端 / 多角色摘要），含「不得绕过安全门」说明。 */
     public Map<String, Object> buildContextMap(String userMessage) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("enabled", enabled);
@@ -233,6 +238,7 @@ public class FailureInsightService {
         return m;
     }
 
+    /** 拼进系统提示词的精简 Reflexion 段落；无相关教训时返回空串。 */
     public String buildPromptSection(String userMessage) {
         if (!enabled) {
             return "";

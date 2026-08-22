@@ -75,6 +75,9 @@ public class MultiAgentContextBuilder {
         return buildForUser(userMessage, null);
     }
 
+    /**
+     * 按当前用户话术拼装多角色只读摘要；{@code prefetched} 可复用已采集感知，避免重复 MCP。
+     */
     public Map<String, Object> buildForUser(String userMessage, Map<String, Object> prefetched) {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("perceptionAgent", buildPerception(prefetched));

@@ -45,10 +45,15 @@ class ChatSessionRetentionTest {
     }
 
     @Test
-    void touchShouldTrimWhenExceedingMaxSessions() {
+    void touchShouldTrimWhenExceedingMaxSessionsAndNotifyListeners() {
+        List<String> evicted = new ArrayList<>();
+        retention.addEvictionListener(evicted::add);
         for (int i = 0; i < ChatSessionRetention.MAX_SESSIONS + 5; i++) {
             retention.touch("session-" + i);
         }
-        assertDoesNotThrow(() -> retention.touch("session-final"));
+        retention.touch("session-final");
+        assertFalse(evicted.isEmpty());
+        assertTrue(evicted.contains("session-0"));
+        assertEquals(ChatSessionRetention.MAX_SESSIONS, retention.trackedSessionCount());
     }
 }

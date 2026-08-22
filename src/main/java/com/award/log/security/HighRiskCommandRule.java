@@ -5,6 +5,10 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 高危命令扩展规则：DSL 表达式 + 启停状态。
+ * 默认规则默认关闭，以免与内置正则重复且 DSL 未必支持 CONTAINS。
+ */
 @Data
 @Builder
 public class HighRiskCommandRule {
@@ -16,6 +20,7 @@ public class HighRiskCommandRule {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    /** 内置默认 DSL 规则（默认 disabled），供扩展引擎使用。 */
     public static HighRiskCommandRule createDefaultRule() {
         return HighRiskCommandRule.builder()
                 .id("DEFAULT_HIGH_RISK_COMMAND_RULE")

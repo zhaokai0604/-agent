@@ -4,6 +4,9 @@ import reactor.core.publisher.Flux;
 
 import java.util.List;
 
+/**
+ * 日志分析对话：意图识别 → 可选工具调用 → 模型作答，并按 session 保留历史。
+ */
 public interface ChatAnalysisService {
 
     Flux<String> chat(String sessionId, String userMessage);

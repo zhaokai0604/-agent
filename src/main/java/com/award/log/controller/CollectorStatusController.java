@@ -9,6 +9,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * 采集器调度快照只读入口，非默认交付面。
+ * HTTP 前缀：{@code /api/collector}。
+ * 仅返回内存快照，不触发采集或改配置。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "CollectorStatus", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

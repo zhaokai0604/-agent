@@ -10,6 +10,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * MCP 写操作待确认票据：登记、TTL 过期与一次性领取。
+ */
 @Service
 public class McpPendingConfirmationService {
 

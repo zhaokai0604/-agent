@@ -44,6 +44,9 @@
 </template>
 
 <script setup>
+/**
+ * MCP 工具结果弹窗：展示结构化输出、复制与风险提示。
+ */
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import StructuredResultView from './StructuredResultView.vue'

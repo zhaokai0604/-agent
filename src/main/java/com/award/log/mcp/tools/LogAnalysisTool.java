@@ -45,6 +45,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.concurrent.ExecutorService;
 
+/**
+ * 日志只读分析：在白名单路径下 tail 日志，经 Drain 模板聚类；不修改文件。
+ */
 @Slf4j
 @Component
 public class LogAnalysisTool extends AbstractCommandExecutor {
@@ -185,6 +188,7 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
     /**
      * 兼容旧调用点：仅路径 + 行数（等价于无时间窗、无关键词过滤）。
      */
+    /** 无过滤条件时的兼容重载，委托四参数版本。 */
     public String analyzeLogs(String logPath, Integer lines) throws JsonProcessingException {
         return analyzeLogs(logPath, lines, null, null);
     }

@@ -210,4 +210,27 @@ class DrainParserTest {
             Assertions.assertTrue(info.getCount() >= 0);
         }
     }
+
+    @Test
+    void shouldCapTemplateCountUnderHighCardinality() {
+        DrainPlusParser parser = new DrainPlusParser(8, 50, 64, 16);
+        for (int i = 0; i < 400; i++) {
+            parser.parse("fatal crash in module " + alphaLabel(i) + " during startup sequence");
+        }
+        Assertions.assertTrue(parser.getTemplateCount() <= 64, () -> "count=" + parser.getTemplateCount());
+        Map<String, Object> stats = parser.getStats();
+        Assertions.assertEquals(64, stats.get("maxTemplates"));
+        Assertions.assertEquals(16, stats.get("maxChildren"));
+    }
+
+    private static String alphaLabel(int n) {
+        StringBuilder sb = new StringBuilder();
+        int value = n + 1;
+        while (value > 0) {
+            value--;
+            sb.append((char) ('a' + (value % 26)));
+            value /= 26;
+        }
+        return sb.toString();
+    }
 }

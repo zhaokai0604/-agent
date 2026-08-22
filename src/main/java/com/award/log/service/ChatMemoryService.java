@@ -4,6 +4,9 @@ import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * 按 session 保存对话记忆（工具结果、意图摘要等），供后续轮次注入 prompt。
+ */
 public interface ChatMemoryService {
 
     void addToMemory(String sessionId, MemoryEntry entry);

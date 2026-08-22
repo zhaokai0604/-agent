@@ -246,6 +246,11 @@
 
 
 <script setup>
+/**
+ * 应用壳：未登录走 Login；登录后为侧栏 + 主工作台页签。
+ * 运维对话/技能页用 Agent 布局；其余页异步加载。
+ * 监听 ops-navigate-agent，切换到对话并预填输入。
+ */
 
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 

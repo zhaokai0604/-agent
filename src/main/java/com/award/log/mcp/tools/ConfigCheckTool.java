@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * 配置语法只读探测：按路径识别 nginx/sshd/crontab 等，执行 {@code nginx -t}、{@code sshd -t} 等校验命令。
+ */
 @Slf4j
 @Component
 public class ConfigCheckTool extends AbstractCommandExecutor {

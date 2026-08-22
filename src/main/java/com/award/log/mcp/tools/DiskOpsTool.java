@@ -10,7 +10,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 /**
- * 磁盘运维合一：读（df / 热点 / 综合诊断）+ 写（临时目录清理，默认 dry-run）。
+ * 磁盘运维合一：读（{@code df}/{@code du} 热点/综合诊断）+ 写（白名单临时目录清理，默认 dry-run）。
  * <p>HTTP toolName: {@code DiskOpsTool}，通过 {@code operation} 选择能力；兼容独立 {@code DiskTool} 等旧名。
  */
 @Slf4j
@@ -39,6 +39,7 @@ public class DiskOpsTool {
         return executeGateway(operation, path, days, dryRun, confirmDelete, rootPath, maxDepth, topN, includeHotspots);
     }
 
+    /** HTTP/延时任务入口：按 operation 转发到 DiskTool / DiskAnalyzeTool / CleanTempTool。 */
     public String executeGateway(
             String operation,
             String path,

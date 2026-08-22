@@ -2,6 +2,10 @@ package com.award.log.decision;
 
 import org.springframework.stereotype.Component;
 
+/**
+ * 协同决策路由器：依次调用规则 V2、随机森林与 LLM，再交给融合层。
+ * {@code skipLlm=true} 时用空 LLM 结果参与融合，避免批量场景放大模型调用。
+ */
 @Component
 public class IntelligentRouter {
 
@@ -20,6 +24,7 @@ public class IntelligentRouter {
         this.ensembleService = ensembleService;
     }
 
+    /** 按输入路由三引擎并融合；批量模式跳过真实 LLM 调用。 */
     public DecisionResult decide(DecisionInput input) {
         DecisionResult rule = ruleEngineV2.evaluate(input);
         DecisionResult rf = randomForestDecisionEngine.evaluate(input);

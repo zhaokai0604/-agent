@@ -8,6 +8,10 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 
+/**
+ * WebSocket 端点注册：性能监控 {@code /ws/performance} 与日志流 {@code /ws/logs}。
+ * 握手需经会话鉴权拦截器，跨域来自 AppCorsProperties。
+ */
 @Configuration
 @EnableWebSocket
 public class WebSocketConfig implements WebSocketConfigurer {

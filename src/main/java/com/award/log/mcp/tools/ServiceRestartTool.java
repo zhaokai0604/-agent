@@ -22,7 +22,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 受控服务重启（写操作）：仅允许配置白名单内的单元名；默认 dry-run 展示将执行的命令。
+ * 受控服务重启（写操作）：仅允许配置白名单内的单元名；默认 dry-run。
+ * Linux {@code systemctl restart}；Windows {@code Restart-Service}。
  */
 @Slf4j
 @Component

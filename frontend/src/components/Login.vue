@@ -249,6 +249,10 @@
 </template>
 
 <script setup>
+/**
+ * 登录/注册门：须先读完用户协议才可勾选同意。
+ * 成功后向 App 壳抛 login-success。
+ */
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Check, Close, View, Hide, ArrowRight } from '@element-plus/icons-vue'

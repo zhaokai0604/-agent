@@ -17,6 +17,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
+/**
+ * 将 Suricata / Wazuh / Sysmon / 通用 JSON 归一为 {@link SecuritySignal}。
+ * 按 sourceHint 与字段特征分流；无法识别时走 generic，不丢弃原始载荷。
+ */
 @Component
 public class SecuritySignalNormalizer {
 
@@ -33,6 +37,7 @@ public class SecuritySignalNormalizer {
         this.objectMapper = objectMapper;
     }
 
+    /** 按来源提示与载荷结构选择对应归一化路径。 */
     public SecuritySignal normalize(String sourceHint, Object payload, long ingestTimeMs) {
         JsonNode node = toJsonNode(payload);
         String rawPayload = toRawPayload(payload);

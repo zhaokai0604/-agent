@@ -29,6 +29,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
+/**
+ * Runbook 审批流：提交 → 批准/拒绝 → 经 MCP 安全门执行写工具。
+ * <p>
+ * 持久化到 {@code ops_runbook_approval}，进程内 cache 加速列表；
+ * 执行前会 {@code forceConfirmedWrite} 并走二次安全评估，BLOCK 则不落地。
+ */
 @Slf4j
 @Service
 public class RunbookApprovalService {
@@ -75,6 +81,9 @@ public class RunbookApprovalService {
         warmCache();
     }
 
+    /**
+     * 提交待审批 Runbook。须提供已注册 MCP 工具，或 action/command 可解析出工具名。
+     */
     public Map<String, Object> submit(
             String title,
             String action,
@@ -119,6 +128,7 @@ public class RunbookApprovalService {
         return snapshot(item);
     }
 
+    /** 仅 PENDING 可批准；不立刻执行。 */
     public Map<String, Object> approve(long id, Object approver) {
         Map<String, Object> item = mutableCopy(getById(id));
         ensureStatus(item, STATUS_PENDING, "Only pending runbooks can be approved");
@@ -130,6 +140,7 @@ public class RunbookApprovalService {
         return snapshot(item);
     }
 
+    /** PENDING 或 APPROVED 可拒绝。 */
     public Map<String, Object> reject(long id, Object approver, String reason) {
         Map<String, Object> item = mutableCopy(getById(id));
         String status = String.valueOf(item.get("status"));
@@ -146,6 +157,10 @@ public class RunbookApprovalService {
         return snapshot(item);
     }
 
+    /**
+     * 仅 APPROVED 可执行：强制确认写参 → 安全门 → MCP 调用。
+     * 安全门 BLOCK 时记 EXECUTION_FAILED，不真正调工具。
+     */
     public Map<String, Object> execute(long id, Object operator) {
         Map<String, Object> item = mutableCopy(getById(id));
         ensureStatus(item, STATUS_APPROVED, "Only approved runbooks can be executed");
@@ -217,6 +232,7 @@ public class RunbookApprovalService {
         return snapshot(item);
     }
 
+    /** 列表：管理员看全部，否则按 requester 过滤；DB 不可用时回退内存 cache。 */
     public List<Map<String, Object>> list(String requester, boolean admin) {
         List<Map<String, Object>> rows = queryList(requester, admin);
         if (rows == null) {

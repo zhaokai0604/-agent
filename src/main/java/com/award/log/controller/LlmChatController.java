@@ -12,6 +12,11 @@ import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 旧版 LLM 对话兼容入口（SSE 与同步），非默认交付面。
+ * HTTP 前缀：{@code /api/v1/llm}。
+ * 新对话应走统一助手；本接口用独立守护线程推 SSE。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "LLM Chat", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController
@@ -25,6 +30,7 @@ public class LlmChatController {
     }
 
     @Operation(summary = "流式对话与工具调用")
+    /** SSE 逐字推送；断线后工作线程仍可能跑完分析，勿当主对话通道。 */
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody(required = false) Map<String, Object> body) {
         String prompt = extractPrompt(body);

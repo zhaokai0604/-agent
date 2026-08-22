@@ -4,6 +4,7 @@ import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import com.award.log.service.PerformanceAnalysisService;
 import jakarta.annotation.Resource;
@@ -26,14 +27,20 @@ import java.util.Map;
 import com.award.log.service.StatisticsService;
 
 /**
- * 性能监控WebSocket处理器
- * 用于实时推送系统性能数据
+ * 性能监控 WebSocket（{@code /ws/performance}）：周期推送本机 CPU/内存等，
+ * 也承接巡检/自愈的 {@link #broadcastJson} 告警信封。
+ * <p>
+ * 周期推送线程与业务广播可能并发写同一会话，因此建连时包装为
+ * {@link ConcurrentWebSocketSessionDecorator}。
  */
 @Slf4j
 @Component
 public class PerformanceWebSocketHandler extends TextWebSocketHandler {
 
     private static final long SNAPSHOT_CACHE_TTL_MS = 1_000L;
+    /** 与日志流 WS 相同思路：限制单次发送阻塞与缓冲，防慢客户端拖垮推送 */
+    private static final int SEND_TIME_LIMIT_MS = 10_000;
+    private static final int SEND_BUFFER_LIMIT = 256 * 1024;
 
     private final WebSocketMessageBuffer messageBuffer;
 
@@ -59,18 +66,19 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        sessions.add(session);
-        log.info("WebSocket连接建立: {}", session.getId());
+        WebSocketSession safe = wrap(session);
+        sessions.add(safe);
+        log.info("WebSocket连接建立: {}", safe.getId());
 
         if (sessions.size() == 1) {
             startPeriodicDataPush();
         }
-        pushImmediateSnapshot(session);
+        pushImmediateSnapshot(safe);
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        sessions.remove(session);
+        sessions.removeIf(s -> s.getId().equals(session.getId()));
         log.info("WebSocket连接关闭: {}, 状态: {}", session.getId(), status);
 
         if (sessions.isEmpty()) {
@@ -83,10 +91,11 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
         String payload = message.getPayload();
         log.debug("收到客户端消息: {}", payload);
 
+        WebSocketSession safe = resolve(session);
         if ("refresh".equals(payload)) {
-            pushImmediateSnapshot(session);
+            pushImmediateSnapshot(safe);
         } else if ("sync".equalsIgnoreCase(payload.trim())) {
-            replayBufferedMessages(session);
+            replayBufferedMessages(safe);
         }
     }
 
@@ -151,9 +160,7 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
             TextMessage textMessage = new TextMessage(jsonMessage);
 
             for (WebSocketSession session : sessions) {
-                if (session.isOpen()) {
-                    session.sendMessage(textMessage);
-                }
+                sendQuietly(session, textMessage);
             }
 
             log.debug("推送性能数据成功，活跃连接数: {}", sessions.size());
@@ -223,12 +230,40 @@ public class PerformanceWebSocketHandler extends TextWebSocketHandler {
             String json = com.alibaba.fastjson.JSON.toJSONString(envelope);
             TextMessage textMessage = new TextMessage(json);
             for (WebSocketSession session : sessions) {
-                if (session.isOpen()) {
-                    session.sendMessage(textMessage);
-                }
+                sendQuietly(session, textMessage);
             }
         } catch (Exception e) {
             log.warn("WebSocket 广播失败: {}", e.getMessage());
+        }
+    }
+
+    private WebSocketSession resolve(WebSocketSession session) {
+        if (session == null) {
+            return null;
+        }
+        for (WebSocketSession stored : sessions) {
+            if (stored.getId().equals(session.getId())) {
+                return stored;
+            }
+        }
+        return wrap(session);
+    }
+
+    private static WebSocketSession wrap(WebSocketSession session) {
+        if (session instanceof ConcurrentWebSocketSessionDecorator) {
+            return session;
+        }
+        return new ConcurrentWebSocketSessionDecorator(session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
+    }
+
+    private static void sendQuietly(WebSocketSession session, TextMessage message) {
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+        try {
+            session.sendMessage(message);
+        } catch (Exception e) {
+            log.warn("发送 WebSocket 消息失败 session={}: {}", session.getId(), e.getMessage());
         }
     }
 

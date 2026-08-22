@@ -16,7 +16,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * AWM induction service. Current MVP is rule-based with optional LLM fallback.
+ * 从成功运维轨迹归纳可复用 workflow（AWM induction）。
+ * 默认按规则抽取工具序列并抽象参数；可选 LLM 归纳，失败回退规则。
+ * 仅 {@link TrajectoryEvaluator} 判定合格、工具步 ≥ 2 且域未满时写入 Memory。
  */
 @Slf4j
 @Service
@@ -35,6 +37,9 @@ public class WorkflowInductionService {
     @org.springframework.beans.factory.annotation.Value("${agent.awm.llm-induction-enabled:false}")
     private boolean llmInductionEnabled;
 
+    /**
+     * 编排成功后的在线诱导：已有相同工具序则只加 utility，否则新建 online workflow。
+     */
     public void afterSuccessfulRun(
             String traceId,
             String userMessage,
@@ -89,6 +94,7 @@ public class WorkflowInductionService {
         }
     }
 
+    /** 离线归纳统计：扫描/新建/跳过原因，供演示面板展示。 */
     public record InductionResult(
             int scanned,
             int created,
@@ -134,6 +140,7 @@ public class WorkflowInductionService {
         }
     }
 
+    /** 从近期审计成功轨迹批量离线归纳，返回跳过原因统计（演示/运维面板）。 */
     public InductionResult induceFromRecentTraces(int limit) {
         if (!workflowMemoryService.isEnabled()) {
             return new InductionResult(0, 0, 0, 0, 0, 0, 0, false);

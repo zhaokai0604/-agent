@@ -19,6 +19,9 @@ import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 网络连通性诊断（只读）：Linux {@code ping}/{@code traceroute}；Windows {@code ping}/{@code tracert}。
+ */
 @Slf4j
 @Component
 public class NetworkTool extends AbstractCommandExecutor {

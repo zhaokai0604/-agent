@@ -10,7 +10,9 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * 根据用户话术 / 对话上下文推断「计划调用的工具序列」，供 Plan-then-Act 与 AWM 偏置。
+ * 无状态工具计划器：按话术 / 对话上下文推断「计划调用的工具序列」。
+ * 供 Plan-then-Act 前端展示、写工具挂载判定，以及 AWM 成功套路前置偏置。
+ * 短确认口令会改用对话上下文还原意图，避免只看到「确认执行」而丢掉磁盘/CPU 场景。
  */
 public final class AgentSkillPlan {
 
@@ -33,6 +35,7 @@ public final class AgentSkillPlan {
     private AgentSkillPlan() {
     }
 
+    /** 粗分域：巡检 / CPU / 磁盘（默认）。 */
     public static String guessDomain(String userMessage) {
         String u = normalize(userMessage);
         if (isPatrolRequest(u)) {
@@ -64,6 +67,7 @@ public final class AgentSkillPlan {
                 || normalized.contains("检查本机");
     }
 
+    /** 编排路径的默认工具序（感知 + 对应写工具预览）。 */
     public static List<String> forOrchestrate(String userMessage) {
         String domain = guessDomain(userMessage);
         LinkedHashSet<String> tools = new LinkedHashSet<>();
@@ -96,6 +100,7 @@ public final class AgentSkillPlan {
         return List.copyOf(tools);
     }
 
+    /** Tool-Agent 路径：在编排序上按关键词补端口/服务/进程工具。 */
     public static List<String> forToolAgent(String userMessage) {
         LinkedHashSet<String> tools = new LinkedHashSet<>(forOrchestrate(userMessage));
         String u = normalize(userMessage);
@@ -128,6 +133,7 @@ public final class AgentSkillPlan {
         return preferAwm(base, awm);
     }
 
+    /** 短确认话术改用对话上下文作规划种子，避免丢掉磁盘/CPU 场景。 */
     public static String planningSeed(String userMessage, String conversationContext) {
         if (isShortConfirm(userMessage)
                 && conversationContext != null

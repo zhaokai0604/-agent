@@ -20,6 +20,10 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * API Key 鉴权过滤器：无会话时校验 X-API-Key，且仅允许只读 GET 白名单路径。
+ * 已有登录会话则跳过 Key 校验；登录/注册接口不拦截。
+ */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)
 public class ApiKeyAuthFilter extends OncePerRequestFilter {

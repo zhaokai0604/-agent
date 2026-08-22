@@ -30,10 +30,11 @@ import java.util.Map;
 
 
 
+/**
+ * 对话工具 {@code generate_report}：按意图从任务/统计数据拼 Markdown 报告。
+ */
 @Slf4j
-
 @Component
-
 public class GenerateReportTool implements AiTool {
 
 

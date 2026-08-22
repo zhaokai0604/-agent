@@ -21,8 +21,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Elasticsearch服务实现类
- * 实现Elasticsearch的核心功能
+ * Elasticsearch 日志索引：写入、检索、按任务/等级清理。
+ * 仅在 {@code spring.elasticsearch.enabled=true} 时注册。
  */
 @Slf4j
 @Service
@@ -92,6 +92,10 @@ public class ElasticsearchServiceImpl implements ElasticsearchService {
         return searchLogs(query, null, null, null, null, pageable);
     }
 
+    /**
+     * 组合 content/severity/anomaly/时间范围条件检索。
+     * 单条 hit 解析失败会跳过，避免脏数据拖垮整页。
+     */
     @Override
     public Page<LogDocument> searchLogs(String query, String severity, Boolean anomaly, LocalDateTime startTime, LocalDateTime endTime, Pageable pageable) {
         try {
@@ -120,6 +124,9 @@ public class ElasticsearchServiceImpl implements ElasticsearchService {
         }
     }
 
+    /**
+     * 拼 StringQuery 内部 bool DSL（不要再包 {@code {"query":...}} 外壳）。
+     */
     private String buildSearchQuery(String query, String severity, Boolean anomaly, LocalDateTime startTime, LocalDateTime endTime) {
         // StringQuery 需要 query 内部 DSL（bool/...），不要包 {"query":...} 外壳
         StringBuilder builder = new StringBuilder();

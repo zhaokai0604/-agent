@@ -14,6 +14,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 用户 API Key：明文只在创建时返回一次，库内保存 BCrypt 哈希。
+ */
 @Service
 public class UserApiKeyServiceImpl implements UserApiKeyService {
 

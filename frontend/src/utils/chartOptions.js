@@ -1,3 +1,6 @@
+/**
+ * ECharts 公共布局：稀疏柱宽、日期轴标签与空数据占位。
+ */
 /** 稀疏类目轴柱状图：避免只有 1～2 个点时柱子撑满整屏 */
 export function sparseBarLayout(count) {
   const n = Math.max(1, Number(count) || 1)

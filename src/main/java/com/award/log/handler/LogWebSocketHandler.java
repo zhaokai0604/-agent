@@ -3,6 +3,7 @@ package com.award.log.handler;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
 import jakarta.annotation.Resource;
@@ -22,11 +23,17 @@ import java.util.ArrayList;
 import com.award.log.collector.LogCollectorManager;
 
 /**
- * 日志监控WebSocket处理器
- * 用于实时推送系统日志数据
+ * 旧版日志监控 WebSocket（未在 {@code WebSocketConfig} 注册主路径，测试/兼容仍会用到）。
+ * <p>
+ * <b>不要</b>调用 {@code takeFanOut()} 抢主队列；只读 {@code snapshotFanOut}。
+ * 会话同样包装 {@link ConcurrentWebSocketSessionDecorator}。
  */
 @Slf4j
 public class LogWebSocketHandler extends TextWebSocketHandler {
+
+    private static final int SEND_TIME_LIMIT_MS = 10_000;
+    private static final int SEND_BUFFER_LIMIT = 256 * 1024;
+    private static final int SNAPSHOT_MAX_LINES = 200;
 
     // 存储所有活跃的WebSocket会话
     private final CopyOnWriteArrayList<WebSocketSession> sessions = new CopyOnWriteArrayList<>();
@@ -40,7 +47,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         // 连接建立时添加会话到列表
-        sessions.add(session);
+        sessions.add(wrap(session));
         log.info("WebSocket连接建立: {}", session.getId());
 
         // 如果是第一个连接，启动定时推送任务
@@ -52,7 +59,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         // 连接关闭时从列表中移除会话
-        sessions.remove(session);
+        sessions.removeIf(s -> s.getId().equals(session.getId()));
         log.info("WebSocket连接关闭: {}, 状态: {}", session.getId(), status);
 
         if (sessions.isEmpty()) {
@@ -117,9 +124,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
 
                         // 推送给所有活跃的客户端
                         for (WebSocketSession session : sessions) {
-                            if (session.isOpen()) {
-                                session.sendMessage(textMessage);
-                            }
+                            sendQuietly(session, textMessage);
                         }
                     }
                 }
@@ -139,7 +144,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
     private List<String> collectRealLogs() {
         if (logCollectorManager != null) {
             try {
-                return logCollectorManager.takeFanOut();
+                return logCollectorManager.snapshotFanOut(SNAPSHOT_MAX_LINES);
             } catch (Exception e) {
                 log.error("收集真实日志数据失败", e);
                 return new ArrayList<>();
@@ -188,6 +193,24 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
         } catch (Exception e) {
             log.error("解析日志条目失败", e);
             return null;
+        }
+    }
+
+    private static WebSocketSession wrap(WebSocketSession session) {
+        if (session instanceof ConcurrentWebSocketSessionDecorator) {
+            return session;
+        }
+        return new ConcurrentWebSocketSessionDecorator(session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT);
+    }
+
+    private static void sendQuietly(WebSocketSession session, TextMessage message) {
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+        try {
+            session.sendMessage(message);
+        } catch (Exception e) {
+            log.warn("发送 WebSocket 消息失败 session={}: {}", session.getId(), e.getMessage());
         }
     }
 

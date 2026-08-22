@@ -9,6 +9,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
+/**
+ * 提示注入防护：内置正则优先，可选 DSL 规则扩展。
+ * 命中后由意图层抬升为 HIGH；默认 DSL 规则关闭，避免语法不兼容误拦。
+ */
 @Slf4j
 @Component
 public class PromptInjectionGuard {
@@ -30,6 +34,7 @@ public class PromptInjectionGuard {
         ruleCache.put(InjectionRule.createDefaultRule().getId(), InjectionRule.createDefaultRule());
     }
 
+    /** 判定用户输入是否像提示注入/越狱指令。 */
     public boolean isInjection(String userInput) {
         if (userInput == null || userInput.trim().isEmpty()) {
             return false;
@@ -109,6 +114,9 @@ public class PromptInjectionGuard {
         }
     }
 
+    /**
+     * 提示注入扩展规则（DSL 表达式），与内置正则互补，默认规则关闭。
+     */
     public static class InjectionRule {
         private String id;
         private String name;
@@ -150,6 +158,9 @@ public class PromptInjectionGuard {
             return enabled;
         }
 
+        /**
+         * InjectionRule 链式构建器，仅组装字段。
+         */
         public static class Builder {
             private final InjectionRule rule = new InjectionRule();
 

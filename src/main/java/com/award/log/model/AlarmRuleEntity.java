@@ -4,6 +4,9 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 告警规则实体，对应 alarm_rule 表（表达式、等级、推送渠道与启停）。
+ */
 @Data
 public class AlarmRuleEntity {
     private Long id;

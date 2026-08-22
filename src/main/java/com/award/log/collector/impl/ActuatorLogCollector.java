@@ -12,8 +12,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Spring Boot Actuator应用日志采集器
- * 用于收集应用的运行状态和日志信息
+ * 通过 HTTP 拉取 Spring Boot Actuator 端点，把健康/日志类信息转成采集行。
  */
 @Slf4j
 public class ActuatorLogCollector implements LogCollector {

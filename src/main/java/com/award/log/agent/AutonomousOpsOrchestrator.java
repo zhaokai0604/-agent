@@ -50,7 +50,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
- * Compatibility autonomous orchestrator kept for perception and patrol automation.
+ * 兼容层自主运维编排器：并行感知 → 诊断 → 可选修复 → 验证。
+ * 主要服务巡检自动化与工作台感知快照；对话闭环优先走 {@link AssistantOrchestrator}。
+ * 感知使用守护线程池 {@code autonomous-ops-perceive} 并行调用 MCP 只读工具（超时 90s）。
+ * 写操作须过治理门与确认；成功后使 {@link OpsPerceptionCache} 失效。
  */
 @Slf4j
 @Service
@@ -185,6 +188,7 @@ public class AutonomousOpsOrchestrator {
     public record RunResult(String markdown, String traceId, Map<String, Object> report) {
     }
 
+    /** 仅当意图路由为全栈巡检剧本时承接本编排器。 */
     public boolean supports(String userMessage) {
         if (!enabled || userMessage == null || userMessage.isBlank()) {
             return false;
@@ -192,6 +196,7 @@ public class AutonomousOpsOrchestrator {
         return opsIntentRouter.resolve(userMessage) == OpsIntentRouter.Playbook.PATROL_AUTOMATION;
     }
 
+    /** 热更新健康检查端口与 ping 目标（不重启 Bean）。 */
     public void applyHotConfig(String healthCheckPortsRaw, String pingTarget) {
         if (healthCheckPortsRaw != null && !healthCheckPortsRaw.isBlank()) {
             this.healthCheckPortsRaw = healthCheckPortsRaw;
@@ -201,6 +206,7 @@ public class AutonomousOpsOrchestrator {
         }
     }
 
+    /** 采集主机感知快照；{@code useCache=true} 时命中 TTL 缓存。 */
     public Map<String, Object> buildPerceptionView(boolean useCache, McpToolSurface surface) {
         long now = timeSource.currentTimeMillis();
         if (useCache) {
@@ -227,6 +233,7 @@ public class AutonomousOpsOrchestrator {
         }
     }
 
+    /** 执行一轮感知-诊断-修复-验证；会话已确认写则强制落地。 */
     public RunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
         boolean force = opsIntentRouter.forceRemediate(userMessage);
         OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
@@ -236,6 +243,7 @@ public class AutonomousOpsOrchestrator {
         return runInternal(userMessage, surface, intentRisk, force);
     }
 
+    /** 定时巡检入口：与对话共用同一套闭环，是否真写由调度策略决定。 */
     public RunResult runScheduled(McpToolSurface surface, boolean forceRemediate) {
         return runInternal("[scheduled-autonomous-ops]", surface, RiskLevel.LOW, forceRemediate);
     }

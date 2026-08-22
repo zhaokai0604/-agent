@@ -35,6 +35,9 @@
 </template>
 
 <script setup>
+/**
+ * 侧栏导航菜单：按分组渲染工作台入口，并维护当前高亮 tab。
+ */
 import { shallowRef, watch, nextTick, onBeforeUnmount } from 'vue'
 
 const props = defineProps({

@@ -11,9 +11,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * 规则 DSL 表达式求值器（ANTLR）：在给定上下文字典上计算布尔结果。
+ * 表达式会规范化为大写；语法错误由解析器抛出，调用方需自行兜底。
+ */
 @Component
 public class RuleExpressionEvaluator {
 
+    /** 将表达式解析为 AST 并在 context 上求值。 */
     public boolean evaluate(String expression, Map<String, Object> context) {
         String expr = normalize(expression);
         RuleExprLexer lexer = new RuleExprLexer(CharStreams.fromString(expr));

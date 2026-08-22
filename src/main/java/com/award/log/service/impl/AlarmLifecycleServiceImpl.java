@@ -18,6 +18,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * 告警生命周期：静默窗口、升级与归档。
+ * 静默区间持久化到 {@code data/alarm-silence.json}，重启后仍生效。
+ */
 @Slf4j
 @Service
 @org.springframework.context.annotation.DependsOn("logAlarmSchemaService")

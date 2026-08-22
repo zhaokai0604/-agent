@@ -19,6 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 延时运维任务调度（到期后走 MCP 延时执行通道）。
+ * HTTP 前缀：{@code /api/ops-schedule}。
+ * 创建仅管理员；列表/取消按操作者隔离（管理员可见全部）。
+ */
 @Slf4j
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "OpsSchedule", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")

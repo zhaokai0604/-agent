@@ -24,6 +24,10 @@ import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 进程观测与受控结束：Linux {@code ps}/{@code kill}/{@code /proc}；Windows WMI/{@code taskkill}。
+ * 写操作（kill）默认 dry-run，禁止 PID≤10。
+ */
 @Slf4j
 @Component
 public class ProcessTool extends AbstractCommandExecutor {

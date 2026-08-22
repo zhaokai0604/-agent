@@ -16,6 +16,9 @@
 </template>
 
 <script setup>
+/**
+ * 对话快捷条：巡检/磁盘/负载/清理预览/确认执行；有巡检待办时插入续办入口。
+ */
 import { computed } from 'vue'
 
 const props = defineProps({

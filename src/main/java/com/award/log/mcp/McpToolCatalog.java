@@ -19,7 +19,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Discovers MCP tools and exposes API metadata.
+ * MCP 工具目录：启动时扫描 {@code mcp.tools} 包内 {@code *Tool} Bean，登记 HTTP 白名单、只读标记与基线风险分。
+ * 并为前端/Agent 提供平台能力、默认参数与分组元数据。
  */
 @Slf4j
 @Component
@@ -48,6 +49,7 @@ public class McpToolCatalog {
         this.httpAllowAllRegistered = httpAllowAllRegistered;
     }
 
+    /** 启动时扫描工具 Bean，并补齐 {@link McpKnownTools} 可调度名。 */
     @PostConstruct
     void discover() {
         Map<String, McpToolDescriptor> map = new LinkedHashMap<>();
@@ -163,6 +165,7 @@ public class McpToolCatalog {
         return isReadOnlyByConvention(toolName) || isHttpAllowedWriteTool(toolName);
     }
 
+    /** 是否已登记或属于 {@link McpKnownTools} 可调度名。 */
     public boolean isRegistered(String toolName) {
         if (toolName == null || toolName.isBlank()) {
             return false;
@@ -171,6 +174,7 @@ public class McpToolCatalog {
         return descriptors.containsKey(key) || McpKnownTools.isDispatchable(key);
     }
 
+    /** HTTP /api/mcp 是否允许执行；开启 allow-all 时对可调度名放行。 */
     public boolean isHttpAllowed(String toolName) {
         if (toolName == null || toolName.isBlank()) {
             return false;
@@ -200,10 +204,12 @@ public class McpToolCatalog {
         }
     }
 
+    /** 是否只读观测工具（写操作二次确认与感知缓存失效会跳过）。 */
     public boolean isReadOnlyObservation(String toolName) {
         return readOnlyObservationToolNames.contains(toolName);
     }
 
+    /** 工具基线风险分；未标注时按内置约定回退。 */
     public double defaultRiskScore(String toolName) {
         McpToolDescriptor descriptor = descriptors.get(toolName);
         if (descriptor == null) {
@@ -212,6 +218,7 @@ public class McpToolCatalog {
         return descriptor.resolvedRiskScore(defaultRiskFor(toolName));
     }
 
+    /** 供前端/Agent 的工具目录：仅 HTTP 可执行项，含分组、平台能力与默认参数。 */
     public List<Map<String, Object>> listToolsForApi() {
         List<Map<String, Object>> out = new ArrayList<>();
         for (McpToolDescriptor descriptor : descriptors.values()) {
@@ -250,6 +257,7 @@ public class McpToolCatalog {
         return out;
     }
 
+    /** 当前 OS 是否具备该工具依赖（docker/systemctl/powershell 等）。 */
     public Map<String, Object> describePlatformSupport(String toolName) {
         LinkedHashMap<String, Object> support = new LinkedHashMap<>();
         Map<String, Object> capabilities = SystemBootstrapSupport.buildCapabilitySnapshot();

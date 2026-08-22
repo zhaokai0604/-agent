@@ -18,6 +18,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 告警历史与统计查询，按用户隔离可见任务范围。
+ * HTTP 前缀：{@code /api/alarm/history}。
+ * 列表/趋势只读；调试汇总仅管理员；按任务补处理会触发写路径。
+ */
 @Slf4j
 @Tag(name = "AlarmHistory", description = "非默认交付面：无挂载 UI / 仅 API，见 docs/deployment/交付API白名单.md")
 @RestController

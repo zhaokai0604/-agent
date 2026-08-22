@@ -448,6 +448,10 @@
 </template>
 
 <script setup>
+/**
+ * 系统配置中心：生效配置读写、巡检/AI/路径策略与引导对账。
+ * 部分项保存后需重启后端。
+ */
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Download, Refresh } from '@element-plus/icons-vue'

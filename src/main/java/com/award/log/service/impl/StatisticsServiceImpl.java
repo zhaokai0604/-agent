@@ -31,7 +31,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 数据统计Service实现
+ * 仪表盘统计：近期日志汇总、主机性能、任务状态、异常分布。
+ * <p>
+ * Redis 优先；未启用时用进程内短 TTL。龙架构/OSHI 不可用时降级 MXBean/proc。
  */
 @Slf4j
 @Service
@@ -109,6 +111,9 @@ public class StatisticsServiceImpl implements StatisticsService {
         return oshiAvailable;
     }
 
+    /**
+     * 近 N 天任务/日志/异常汇总；命中 Redis 则跳过库查询。
+     */
     @Override
     public Map<String, Object> getRecentLogSummary(int days) {
         String cacheKey = LOG_SUMMARY_KEY_PREFIX + days;
@@ -178,6 +183,12 @@ public class StatisticsServiceImpl implements StatisticsService {
     private static long[] prevTicks = null;
     private static boolean initialized = false;
 
+    /**
+     * 采集本机 CPU/内存/磁盘/网络。优先 OSHI；龙架构或初始化失败时走 MXBean/proc。
+     * 结果有约 20s 进程内缓存，避免高频轮询打满采集开销。
+     *
+     * @param preferredNetworkInterface 指定网卡名；空则取最活跃非环回网卡
+     */
     @Override
     public Map<String, Object> getSystemPerformance(String preferredNetworkInterface) {
         String cacheKey = preferredNetworkInterface == null ? "" : preferredNetworkInterface.trim();
@@ -541,6 +552,7 @@ public class StatisticsServiceImpl implements StatisticsService {
 
 
 
+    /** 各任务状态数量、完成情况与平均耗时（Redis 缓存 10 分钟）。 */
     @Override
     public Map<String, Object> getTaskStatusStatistics() {
         // 尝试从缓存获取
@@ -605,6 +617,7 @@ public class StatisticsServiceImpl implements StatisticsService {
 
 
 
+    /** 近 N 天异常日志统计；无 Redis 时走进程内短缓存。 */
     @Override
     public Map<String, Object> getAnomalyLogStatistics(int days) {
         int windowDays = Math.max(1, days);

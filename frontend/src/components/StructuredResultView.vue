@@ -94,6 +94,9 @@
 </template>
 
 <script setup>
+/**
+ * 结构化工具结果视图：将 MCP JSON 转成表格/键值/嵌套块，避免原始 JSON 难读。
+ */
 import { computed } from 'vue'
 import { buildStructuredViewModel, formatTableCell } from '../utils/structuredDataView'
 

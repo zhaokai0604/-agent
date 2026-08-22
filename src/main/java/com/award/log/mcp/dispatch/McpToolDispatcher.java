@@ -16,6 +16,7 @@ import static com.award.log.mcp.dispatch.McpToolParamReader.*;
 
 /**
  * MCP HTTP 与延时任务统一工具分发（替代 Controller 巨型 switch）。
+ * 写操作成功且确认真写后会使运维感知缓存失效。
  */
 @Slf4j
 @Component
@@ -52,6 +53,10 @@ public class McpToolDispatcher {
     private final ContainerOpsTool containerOpsTool;
     private final ProcessOpsTool processOpsTool;
 
+    /**
+     * 按 toolName 路由到具体工具；未知名返回失败。
+     * 真实写成功后调用 {@link OpsPerceptionCache#invalidate()}。
+     */
     public McpToolDispatchResult dispatch(String toolName, Map<String, Object> parameters) {
         if (toolName == null || toolName.isBlank()) {
             return McpToolDispatchResult.fail("工具名称不能为空");

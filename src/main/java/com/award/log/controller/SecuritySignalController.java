@@ -16,6 +16,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * IDS/PIDS/HIDS 安全信号接入与近期摘要。
+ * HTTP 前缀：{@code /api/security/signals}。
+ * ingest 写入信号缓冲；recent/summary 只读。
+ */
 @Deprecated(since = "delivery-2026-07", forRemoval = false)
 @Tag(name = "安全信号接入", description = "非默认交付面：安全信号采集面（ingest 可用）/ 无默认 UI，见 docs/deployment/交付API白名单.md")
 @RestController

@@ -10,7 +10,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 /**
- * 日志运维合一：读（采样分析）+ 写（陈旧日志清理，默认 dry-run）。
+ * 日志运维合一：读（白名单日志采样/Drain 分析）+ 写（陈旧日志 {@code rm}，默认 dry-run）。
  */
 @Slf4j
 @Component
@@ -37,6 +37,7 @@ public class LogOpsTool {
         return executeGateway(operation, logPath, lines, sinceHours, keywordContains, path, days, dryRun, confirmDelete);
     }
 
+    /** HTTP/延时任务入口：analyze 走 LogAnalysisTool，cleanup 走 LogCleanupTool。 */
     public String executeGateway(
             String operation,
             String logPath,

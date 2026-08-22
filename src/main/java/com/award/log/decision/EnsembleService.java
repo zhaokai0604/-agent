@@ -4,9 +4,14 @@ import org.springframework.stereotype.Service;
 
 import java.util.Map;
 
+/**
+ * 多引擎融合：对规则、随机森林、LLM 三路结果做加权置信度与多数投票告警。
+ * 推荐文案取置信度最高的一路；不负责调度各引擎执行。
+ */
 @Service
 public class EnsembleService {
 
+    /** 三路融合：告警按多数票，置信度取加权与赢家中的较大值。 */
     public DecisionResult fuse(DecisionResult rule, DecisionResult rf, DecisionResult llm) {
         double weighted = rule.getConfidence() * 0.4 + rf.getConfidence() * 0.35 + llm.getConfidence() * 0.25;
         int alertCount = (rule.isShouldAlert() ? 1 : 0) + (rf.isShouldAlert() ? 1 : 0) + (llm.isShouldAlert() ? 1 : 0);

@@ -13,6 +13,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
+/**
+ * 集中持有全部 MCP {@code @Tool} Bean，并向 Spring AI ChatClient 提供按会话面过滤的 ToolCallback。
+ * HTTP 执行入口走 {@link com.award.log.mcp.dispatch.McpToolDispatcher}，不经过本注册表回调。
+ */
 @Slf4j
 @Component
 public class McpToolRegistry {

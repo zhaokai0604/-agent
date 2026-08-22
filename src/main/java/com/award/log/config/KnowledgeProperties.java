@@ -4,6 +4,10 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+/**
+ * 知识库 RAG 配置（knowledge.*）：分块、检索 Top-K、向量维度与启动种子。
+ * 字段默认值可被 application 配置覆盖；不包含实际向量检索逻辑。
+ */
 @Data
 @Component
 @ConfigurationProperties(prefix = "knowledge")

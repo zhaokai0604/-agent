@@ -12,6 +12,10 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * AI 诊断/助手 POST 请求幂等过滤器：按 X-Idempotency-Key 在 30s 内拒绝重复提交。
+ * 无该头则放行；作用范围限于 diagnose 与 assistant 路径。
+ */
 @Component
 public class AiIdempotencyFilter extends OncePerRequestFilter {
 

@@ -139,6 +139,10 @@
 </template>
 
 <script setup>
+/**
+ * 日志分析仪表盘：汇总趋势、任务状态与性能图，支持 PDF 导出。
+ * 可跳转任务详情或预填 Agent 对话。
+ */
 import { ref, onMounted, onUnmounted, nextTick, defineEmits } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'

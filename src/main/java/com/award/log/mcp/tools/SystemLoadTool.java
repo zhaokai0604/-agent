@@ -24,6 +24,9 @@ import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 系统负载只读观测：Linux {@code top -bn1} 与 {@code /proc/loadavg}；Windows 性能计数器，失败回退 JVM/OSHI。
+ */
 @Slf4j
 @Component
 public class SystemLoadTool extends AbstractCommandExecutor {

@@ -20,6 +20,11 @@ import java.time.Duration;
 
 import reactor.core.publisher.Flux;
 
+/**
+ * AI 诊断：用脱敏日志切片生成 RCA 报告（批量 / 单条 / 流式）。
+ * <p>
+ * Prompt 强制证据边界，禁止编造时间、条数或与片段无关的系统名。
+ */
 @Slf4j
 @Service
 public class AiDiagnosisServiceImpl implements AiDiagnosisService {
@@ -131,6 +136,9 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         return new Prompt(List.of(systemMessage, userMessage));
     }
 
+    /**
+     * 仅用异常列表生成诊断（无正常对照样本）。
+     */
     @Override
     public String generateDiagnosis(List<EnhancedLogParseResultEntity> anomalies) {
         log.info("生成 AI 诊断报告，异常条目数: [{}]", anomalies == null ? 0 : anomalies.size());
@@ -149,6 +157,9 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
     }
 
+    /**
+     * 从全量解析结果抽焦点异常 + 正常对照，再生成诊断，降低误报套话。
+     */
     @Override
     public String generateDiagnosisFromFullResult(List<EnhancedLogParseResultEntity> fullResult) {
         log.info("生成 AI 诊断报告（完整上下文），总行数: [{}]", fullResult == null ? 0 : fullResult.size());
@@ -172,6 +183,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
     }
 
+    /** 单条日志超压缩 RCA（三行以内，给值班侧边栏）。 */
     @Override
     public String diagnoseSingleLog(EnhancedLogParseResultEntity logEntry) {
         if (logEntry == null) {
@@ -208,6 +220,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
     }
 
+    /** 批量诊断的 SSE 流式版本。 */
     @Override
     public Flux<String> generateDiagnosisStream(List<EnhancedLogParseResultEntity> anomalies) {
         log.info("启动 AI 流式诊断报告生成...");
@@ -229,6 +242,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
     }
 
+    /** 全量上下文诊断的 SSE 流式版本。 */
     @Override
     public Flux<String> generateDiagnosisStreamFromFullResult(List<EnhancedLogParseResultEntity> fullResult) {
         log.info("启动 AI 流式诊断报告生成（完整上下文）...");
@@ -255,6 +269,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
     }
 
+    /** 单条日志诊断的 SSE 流式版本。 */
     @Override
     public Flux<String> generateSingleLogDiagnosisStream(EnhancedLogParseResultEntity logEntry) {
         if (logEntry == null) {
@@ -292,6 +307,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
     }
 
+    /** 自由问答流（无结构化日志切片）；用户粘贴日志时仍须证据约束。 */
     @Override
     public Flux<String> chatStream(String userMessageText) {
         if (userMessageText == null || userMessageText.isBlank()) {

@@ -16,6 +16,9 @@ import reactor.core.publisher.Flux;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
@@ -93,5 +96,22 @@ class UnifiedAssistantControllerSmokeTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"message\":\"   \"}"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void parseHistoryShouldKeepLastTurnsAndTruncateContent() {
+        List<Map<String, String>> raw = new java.util.ArrayList<>();
+        for (int i = 0; i < UnifiedAssistantService.MAX_HISTORY_TURNS + 10; i++) {
+            raw.add(Map.of("role", "user", "content", "turn-" + i));
+        }
+        String huge = "x".repeat(UnifiedAssistantService.MAX_TURN_CHARS + 80);
+        raw.add(Map.of("role", "assistant", "content", huge));
+
+        List<UnifiedAssistantService.ChatTurn> turns = UnifiedAssistantController.parseHistory(raw);
+        assertEquals(UnifiedAssistantService.MAX_HISTORY_TURNS, turns.size());
+        assertEquals("turn-" + (raw.size() - UnifiedAssistantService.MAX_HISTORY_TURNS), turns.get(0).content());
+        UnifiedAssistantService.ChatTurn last = turns.get(turns.size() - 1);
+        assertTrue(last.content().length() <= UnifiedAssistantService.MAX_TURN_CHARS + 20);
+        assertTrue(last.content().contains("[truncated]"));
     }
 }

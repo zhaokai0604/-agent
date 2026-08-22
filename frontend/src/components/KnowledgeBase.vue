@@ -150,6 +150,10 @@
 </template>
 
 <script setup>
+/**
+ * 知识库：文档上传/检索/删除与内置种子，依赖 Qdrant 与嵌入模式。
+ * 供助手 RAG 引用。
+ */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'

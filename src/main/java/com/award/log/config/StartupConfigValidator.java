@@ -10,6 +10,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+/**
+ * 启动期关键配置校验：检查数据源及按需检查 ES/Kafka/AI Key。
+ * prod 缺失即失败退出；非 prod 仅告警，允许降级启动。
+ */
 @Slf4j
 @Component
 public class StartupConfigValidator {
@@ -21,6 +25,7 @@ public class StartupConfigValidator {
     }
 
     @PostConstruct
+    /** 启动后立即校验关键配置，prod 缺失则抛 IllegalStateException。 */
     public void validate() {
         boolean prod = Arrays.stream(environment.getActiveProfiles()).anyMatch("prod"::equalsIgnoreCase);
         List<String> missing = new ArrayList<>();

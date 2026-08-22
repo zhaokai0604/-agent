@@ -33,6 +33,10 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * 临时目录清理（写操作）：白名单 Temp 下按天数扫描并可选 {@code rm}；默认 dry-run。
+ * Linux {@code /tmp}；Windows 各盘符 Temp / 用户 TEMP。
+ */
 @Slf4j
 @Component
 public class CleanTempTool extends AbstractCommandExecutor {

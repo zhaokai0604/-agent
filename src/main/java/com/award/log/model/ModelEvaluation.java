@@ -4,6 +4,9 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
+/**
+ * 模型评估结果（accuracy/precision/recall 等），对应 model_evaluation 表。
+ */
 @Data
 public class ModelEvaluation {
     private Long id;

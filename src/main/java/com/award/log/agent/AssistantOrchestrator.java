@@ -42,7 +42,9 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * 工作台运维闭环：感知 → 预览 →（策略内）执行 → 验证，减少「空确认」、提高真实可运维性。
+ * 工作台对话运维闭环：感知 → 预览 →（策略内）执行 → 验证。
+ * 承接磁盘清理、CPU 压力、巡检待办续办；全栈巡检由 {@link AutonomousOpsOrchestrator} 负责。
+ * 优先回放 AWM workflow，未命中再走内置清理/重启；写操作默认预览，须「确认执行」。
  */
 @Slf4j
 @Service
@@ -131,6 +133,7 @@ public class AssistantOrchestrator {
         }
     }
 
+    /** 磁盘清理 / CPU 压力 / 巡检续办三类剧本由本编排器承接。 */
     public boolean supports(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
             return false;
@@ -141,6 +144,7 @@ public class AssistantOrchestrator {
                 || pb == OpsIntentRouter.Playbook.PATROL_CONTINUATION;
     }
 
+    /** 按意图路由分发到磁盘闭环、CPU 闭环或巡检待办确认。 */
     public RunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
         OpsIntentRouter.Playbook playbook = opsIntentRouter.resolve(userMessage);
         if (playbook == OpsIntentRouter.Playbook.PATROL_CONTINUATION) {

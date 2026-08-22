@@ -43,6 +43,9 @@
 </template>
 
 <script setup>
+/**
+ * 助手消息正文：Markdown 渲染 + 代码块复制；流式输出时保持滚动。
+ */
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { renderAssistantMarkdown, bindProseCopyButtons } from '../../utils/assistantMarkdown'
 

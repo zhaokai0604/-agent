@@ -14,6 +14,10 @@ import org.springframework.web.socket.server.HandshakeInterceptor;
 
 import java.util.Map;
 
+/**
+ * WebSocket 握手鉴权：必须已有登录会话，且 Origin 在 CORS 白名单内。
+ * 未登录 401，非法来源 403；不在此处理消息级鉴权。
+ */
 @Component
 public class WebSocketAuthHandshakeInterceptor implements HandshakeInterceptor {
 

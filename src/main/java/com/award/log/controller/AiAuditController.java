@@ -13,6 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * AI 调用审计只读入口，供回看近期模型调用记录。
+ * HTTP 前缀：{@code /admin/audit/ai}。
+ * 默认仅管理员可读；{@code app.security.ai-audit-relaxed-read} 可放宽（演示用）。
+ */
 @RestController
 @RequestMapping("/admin/audit/ai")
 public class AiAuditController {

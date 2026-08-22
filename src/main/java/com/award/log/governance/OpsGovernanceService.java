@@ -9,6 +9,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * 运维治理服务：按资产分级与动作准入矩阵裁决清理/重启等写步骤。
+ * 未启用治理时放行；FORBIDDEN 步骤从方案中剔除，不执行真实系统命令。
+ */
 @Slf4j
 @Service
 public class OpsGovernanceService {
@@ -36,6 +40,7 @@ public class OpsGovernanceService {
         return out;
     }
 
+    /** 剔除 FORBIDDEN 步骤并给其余步骤打上治理标签。 */
     public List<Map<String, Object>> filterPlanSteps(List<Map<String, Object>> steps) {
         if (!properties.isEnabled() || steps == null || steps.isEmpty()) {
             return steps == null ? List.of() : steps;
@@ -143,6 +148,7 @@ public class OpsGovernanceService {
         return "";
     }
 
+    /** 按步骤 kind 解析动作并套用资产分级与准入矩阵。 */
     public GovernanceEvaluation evaluateStep(Map<String, Object> step) {
         OpsActionType action = OpsActionType.fromStepKind(String.valueOf(step.getOrDefault("kind", "")));
         if (action == null) {
@@ -312,6 +318,9 @@ public class OpsGovernanceService {
                 || n.startsWith("c:/programfiles/");
     }
 
+    /**
+     * 单步治理裁决：准入结论、资产分级、目标与原因。
+     */
     public record GovernanceEvaluation(
             GovernanceAdmissionVerdict verdict,
             AssetTier assetTier,

@@ -1,3 +1,6 @@
+/**
+ * Vite 开发配置：Vue 单页 + 将 API/WS 代理到后端 8088，避免前后端跨域。
+ */
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath } from 'node:url'

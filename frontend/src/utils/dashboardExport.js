@@ -1,3 +1,6 @@
+/**
+ * 仪表盘导出：多图 PNG 拼入 A4 横向 PDF（中文标题先栅格化）。
+ */
 import { jsPDF } from 'jspdf'
 import { rasterizePdfTextBlock } from './pdfTextRaster.js'
 

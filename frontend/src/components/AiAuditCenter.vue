@@ -52,6 +52,10 @@
 </template>
 
 <script setup>
+/**
+ * 遗留访问审计页（未挂主导航）：API/页面访问记录，可导出 CSV。
+ * 能力已并入统一审计中心。
+ */
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAiAuditRecent } from '../api'

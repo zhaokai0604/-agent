@@ -20,6 +20,9 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * 权限边界只读探测：文件读写执行位（Linux {@code test} / Java NIO；Windows ACL）与 {@code sudo -l}。
+ */
 @Slf4j
 @Component
 public class PrivilegeTool extends AbstractCommandExecutor {

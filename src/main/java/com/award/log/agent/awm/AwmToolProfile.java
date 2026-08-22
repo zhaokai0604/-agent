@@ -4,7 +4,8 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Centralizes the MCP tool subset that AWM is allowed to induce and replay.
+ * AWM 允许诱导与回放的 MCP 工具白名单（只读集 + 受治理写工具）。
+ * 写工具仅 CleanTemp / LogCleanup / ServiceRestart；归纳阶段额外排除敏感只读工具。
  */
 public final class AwmToolProfile {
 
@@ -70,6 +71,7 @@ public final class AwmToolProfile {
         return java.util.Collections.unmodifiableSet(out);
     }
 
+    /** 统一别名（如 CleanTemp → CleanTempTool），未知名补 Tool 后缀。 */
     public static String normalize(String toolName) {
         if (toolName == null) {
             return "";

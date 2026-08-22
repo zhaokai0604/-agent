@@ -2,6 +2,9 @@ package com.award.log.service;
 
 import java.util.Map;
 
+/**
+ * 对话可调用工具契约：名称、参数 Schema、执行与可选二次确认。
+ */
 public interface AiTool {
 
     String getName();

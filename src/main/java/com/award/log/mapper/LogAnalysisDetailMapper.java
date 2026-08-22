@@ -7,6 +7,9 @@ import org.apache.ibatis.annotations.Param;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 日志分析明细 Mapper，操作 log_analysis_detail 表（按任务写入、分页、异常统计与删除）。
+ */
 @Mapper
 public interface LogAnalysisDetailMapper {
     List<LogAnalysisDetail> selectByTaskId(String taskId);

@@ -13,6 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * Agent 可执行路径策略管理：限制工具落盘与命令白名单。
+ * HTTP 前缀：{@code /api/agent/path-policy}。
+ * 查看与保存均需管理员，避免普通用户改写执行边界。
+ */
 @RestController
 @RequestMapping("/api/agent/path-policy")
 @RequiredArgsConstructor

@@ -1,3 +1,6 @@
+/**
+ * 日期展示：本地日历日与 createTime 多格式兼容（Jackson 数组 / ISO / 时间戳）。
+ */
 /** 本地日历日 YYYY-MM-DD（避免 toISOString 时区偏移） */
 export function formatLocalDateKey(date) {
   const d = date instanceof Date ? date : new Date(date)

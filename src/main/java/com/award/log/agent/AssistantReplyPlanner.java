@@ -6,7 +6,9 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 统一助手回复规划器（按意图优先级路由回复模式）。
+ * 统一助手回复规划器：按意图优先级决定回复模式（怎么走链路），先于 Playbook 编排。
+ * Category 决定「说什么」，Mode 决定是否注入指标、是否走工具/编排。
+ * 无共享可变状态，可并发调用。
  *
  * <pre>
  * P0  空消息           → CHITCHAT / EMPTY
@@ -44,6 +46,9 @@ public class AssistantReplyPlanner {
         }
     }
 
+    /**
+     * 主入口：结合当前话术、历史、工具开关与编排开关产出 {@link ReplyPlan}。
+     */
     public ReplyPlan plan(String userMessage,
                           List<UnifiedAssistantService.ChatTurn> history,
                           boolean useToolAgentRequested,

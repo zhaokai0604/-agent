@@ -22,6 +22,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 持续学习：样本达阈值后导出训练数据并调用 {@code train_model.py}。
+ */
 @Slf4j
 @Service
 public class ContinuousLearningService {

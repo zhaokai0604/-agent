@@ -11,6 +11,9 @@
 </template>
 
 <script setup>
+/**
+ * 运维子页统一页头：标题 + 可选副标题。
+ */
 defineProps({
   title: { type: String, required: true },
   subtitle: { type: String, default: '' }

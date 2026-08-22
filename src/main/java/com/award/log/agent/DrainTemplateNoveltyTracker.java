@@ -6,7 +6,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 记录 Drain 模板 ID 首次出现时间，用于「近期新模板」统计与 Agent 上下文提示。
+ * 进程内记录 Drain 模板 ID 的首次出现时间，用于「近期新模板」统计与 Agent 上下文提示。
+ * 使用 {@link java.util.concurrent.ConcurrentHashMap#putIfAbsent}，可被日志分析与助手并发调用。
+ * 非持久化：进程重启后首次见到的模板会再次计为 novel。
  */
 @Component
 public class DrainTemplateNoveltyTracker {
@@ -40,6 +42,7 @@ public class DrainTemplateNoveltyTracker {
         return firstSeenEpochMs.values().stream().filter(ts -> ts >= cutoff).count();
     }
 
+    /** 供助手 / 巡检注入的轻量快照：已跟踪种类数 + 近 1 小时新模板数。 */
     public Map<String, Object> snapshotForContext() {
         long hourMs = 3_600_000L;
         return Map.of(

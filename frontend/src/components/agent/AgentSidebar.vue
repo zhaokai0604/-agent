@@ -91,6 +91,9 @@
 </template>
 
 <script setup>
+/**
+ * 工作台侧栏：品牌、新建会话、对话/技能入口、最近会话与运维页签导航。
+ */
 import { computed, ref } from 'vue'
 import {
   ArrowDown,

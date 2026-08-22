@@ -246,6 +246,10 @@
 </template>
 
 <script setup>
+/**
+ * 安全驾驶舱：策略快照、一键自检、单工具/计划效果图回放与治理对比。
+ * 探针走真实安全门，不执行系统命令。
+ */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import OpsPageHeader from './OpsPageHeader.vue'

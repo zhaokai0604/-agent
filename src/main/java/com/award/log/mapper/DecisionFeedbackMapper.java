@@ -6,6 +6,9 @@ import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
+/**
+ * 决策反馈 Mapper，操作 decision_feedback 表（训练样本写入、未训练查询与标记已训练）。
+ */
 @Mapper
 public interface DecisionFeedbackMapper {
     int upsert(DecisionFeedback feedback);

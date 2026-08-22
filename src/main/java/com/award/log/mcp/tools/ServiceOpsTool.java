@@ -10,7 +10,8 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 /**
- * 服务运维合一：读（failed / status）+ 写（白名单内重启，默认 dry-run）。
+ * 服务运维合一：读（{@code systemctl --failed}/{@code status}）+ 写（白名单 {@code systemctl restart}，默认 dry-run）。
+ * Windows 对应 Get-Service / sc。
  */
 @Slf4j
 @Component
@@ -32,6 +33,7 @@ public class ServiceOpsTool {
         return executeGateway(operation, serviceName, dryRun, confirmRestart);
     }
 
+    /** HTTP/延时任务入口：failed/status 走 SystemdTool，restart 走 ServiceRestartTool。 */
     public String executeGateway(
             String operation,
             String serviceName,
