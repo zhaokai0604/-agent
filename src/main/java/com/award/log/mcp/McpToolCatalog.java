@@ -134,6 +134,8 @@ public class McpToolCatalog {
             case "ConfigCheckTool", "DiskAnalyzeTool", "DiskInsightTool", "PortHealthTool", "SslCertTool",
                     "ConfigDriftTool" -> 1.0;
             case "PrivilegeTool", "OsInsightTool", "DockerTool", "CronJobTool", "FirewallTool", "SystemdTool" -> 2.0;
+            case "K8sTool" -> 2.5;
+            case "RecycleBinTool" -> 4.0;
             case "AutonomousOpsTool" -> 5.0;
             case "CleanTempTool", "DiskOpsTool", "LogCleanupTool", "LogOpsTool" -> 7.0;
             case "ServiceRestartTool", "ServiceOpsTool" -> 7.0;
@@ -148,7 +150,7 @@ public class McpToolCatalog {
             case "DiskTool", "DiskAnalyzeTool", "DiskInsightTool", "ProcessTool", "SystemLoadTool",
                     "LogAnalysisTool", "NetworkTool", "ConfigCheckTool", "PrivilegeTool", "OsInsightTool",
                     "PortHealthTool", "DockerTool", "CronJobTool", "FirewallTool", "SslCertTool",
-                    "SystemdTool", "ConfigDriftTool" -> true;
+                    "SystemdTool", "ConfigDriftTool", "K8sTool" -> true;
             default -> false;
         };
     }
@@ -156,7 +158,8 @@ public class McpToolCatalog {
     private static boolean isHttpAllowedWriteTool(String toolName) {
         return switch (toolName) {
             case "CleanTempTool", "LogCleanupTool", "ServiceRestartTool", "AutonomousOpsTool",
-                    "DiskOpsTool", "LogOpsTool", "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool" -> true;
+                    "DiskOpsTool", "LogOpsTool", "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool",
+                    "RecycleBinTool" -> true;
             default -> false;
         };
     }
@@ -450,6 +453,8 @@ public class McpToolCatalog {
         map.put("ServiceOpsTool", new ToolUiMeta("Service ops", "Unified service read/write gateway", "gateway"));
         map.put("ContainerOpsTool", new ToolUiMeta("Container ops", "Unified container gateway", "gateway"));
         map.put("ProcessOpsTool", new ToolUiMeta("Process ops", "Unified process gateway", "gateway"));
+        map.put("K8sTool", new ToolUiMeta("K8s diagnose", "Read-only kubectl get/describe", "kubectl get"));
+        map.put("RecycleBinTool", new ToolUiMeta("Recycle bin", "List/restore/purge safe deletes", "recycle meta"));
         return Collections.unmodifiableMap(map);
     }
 }

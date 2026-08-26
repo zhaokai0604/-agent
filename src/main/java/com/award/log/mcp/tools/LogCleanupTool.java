@@ -7,6 +7,7 @@ import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
 import com.award.log.security.ChatWriteExecutionPolicy;
 import com.award.log.security.OpsPathPolicy;
+import com.award.log.service.SafeDeleteSupport;
 import com.award.log.util.OsRuntime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -41,6 +42,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
     private final OpsPathPolicy opsPathPolicy;
     private final LogSafetyClassifier logSafetyClassifier;
     private final OpsRemediationProperties remediationProperties;
+    private final SafeDeleteSupport safeDeleteSupport;
 
     @Autowired
     public LogCleanupTool(
@@ -49,7 +51,8 @@ public class LogCleanupTool extends AbstractCommandExecutor {
             MinPrivilegeExecutor minPrivilegeExecutor,
             OpsPathPolicy opsPathPolicy,
             LogSafetyClassifier logSafetyClassifier,
-            OpsRemediationProperties remediationProperties) {
+            OpsRemediationProperties remediationProperties,
+            @Autowired(required = false) SafeDeleteSupport safeDeleteSupport) {
         super(mcpToolExecutor != null ? mcpToolExecutor : Executors.newCachedThreadPool());
         this.objectMapper = objectMapper;
         this.minPrivilegeExecutor = minPrivilegeExecutor;
@@ -58,6 +61,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
         this.remediationProperties = remediationProperties != null
                 ? remediationProperties
                 : new OpsRemediationProperties();
+        this.safeDeleteSupport = safeDeleteSupport;
     }
 
     @Tool(name = "cleanupOldLogs",
@@ -140,9 +144,20 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                         lockedSkipped++;
                         continue;
                     }
-                    AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
-                    if (delResult.success() && !isSimulatedDryRun(delResult)) {
-                        filesDeleted++;
+                    boolean recycled = false;
+                    if (safeDeleteSupport != null) {
+                        SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
+                                Path.of(file), null, true);
+                        if (outcome.success()) {
+                            filesDeleted++;
+                            recycled = true;
+                        }
+                    }
+                    if (!recycled) {
+                        AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
+                        if (delResult.success() && !isSimulatedDryRun(delResult)) {
+                            filesDeleted++;
+                        }
                     }
                 }
             }
@@ -223,12 +238,23 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                     lockedSkipped++;
                     continue;
                 }
-                String f = file.replace("'", "''");
-                AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
-                        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                        "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
-                if (delResult.success() && !isSimulatedDryRun(delResult)) {
-                    filesDeleted++;
+                boolean recycled = false;
+                if (safeDeleteSupport != null) {
+                    SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
+                            Path.of(file), null, true);
+                    if (outcome.success()) {
+                        filesDeleted++;
+                        recycled = true;
+                    }
+                }
+                if (!recycled) {
+                    String f = file.replace("'", "''");
+                    AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
+                            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                            "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
+                    if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
+                        filesDeleted++;
+                    }
                 }
             }
         }

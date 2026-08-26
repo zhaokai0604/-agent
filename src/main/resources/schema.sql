@@ -378,3 +378,17 @@ CREATE TABLE IF NOT EXISTS `ops_runbook_approval` (
   KEY `idx_runbook_requester_created` (`requester`, `created_at`),
   KEY `idx_runbook_status_created` (`status`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Runbook approval and execution records';
+
+CREATE TABLE IF NOT EXISTS `ops_recycle_entry` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `handle` varchar(32) NOT NULL,
+  `original_path` varchar(1024) NOT NULL,
+  `staged_path` varchar(1024) NOT NULL,
+  `size_bytes` bigint(20) DEFAULT '0',
+  `trace_id` varchar(64) DEFAULT NULL,
+  `expires_at` datetime NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_recycle_handle` (`handle`),
+  KEY `idx_recycle_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='可逆删除回收站元数据';

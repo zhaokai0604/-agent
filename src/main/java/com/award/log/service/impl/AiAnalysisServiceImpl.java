@@ -1,11 +1,17 @@
 package com.award.log.service.impl;
 
+import com.award.log.agent.OpsAnalysisSkillCatalog;
 import com.award.log.service.AiAnalysisService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * AI 分析服务：接入 Spring AI（DashScope 兼容接口），未配置密钥时不返回伪造结论。
@@ -44,30 +50,38 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
     }
 
     @Override
+    public List<Map<String, Object>> listAnalysisSkills() {
+        return OpsAnalysisSkillCatalog.listViews();
+    }
+
+    @Override
+    public String invokeSkill(String skillId, Map<String, Object> input) {
+        return OpsAnalysisSkillCatalog.find(skillId)
+                .map(def -> ask(def.systemPrompt(), def.buildUserPrompt(input)))
+                .orElse("未找到 Skill：" + skillId);
+    }
+
+    @Override
     public String analyzeLog(String logContent) {
-        return ask(
-                "你是资深 Linux 运维工程师。根据用户提供的日志片段，指出异常模式、可能根因与可执行的排查/修复步骤。回答简洁、可落地，不要编造未出现的日志行。",
-                "请分析以下日志：\n" + (logContent == null ? "" : logContent));
+        return invokeSkill("log_analysis", Map.of("content", logContent == null ? "" : logContent));
     }
 
     @Override
     public String analyzePerformance(String metricName, double value) {
-        return ask(
-                "你是系统性能分析专家。结合指标名称与当前数值，判断是否正常并给出运维建议。",
-                String.format("指标 %s 当前值为 %.4f，请评估并给出建议。", metricName, value));
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("metricName", metricName);
+        input.put("metricValue", value);
+        return invokeSkill("performance_analysis", input);
     }
 
     @Override
     public String analyzeAlert(String alertContent) {
-        return ask(
-                "你是告警处置专家。根据告警内容评估严重级别、影响面与优先处置步骤。",
-                "告警内容：\n" + (alertContent == null ? "" : alertContent));
+        return invokeSkill("alert_triage", Map.of("content", alertContent == null ? "" : alertContent));
     }
 
     @Override
     public String generateReport(String period) {
-        return ask(
-                "你是运维报告撰写助手。基于给定时间范围，输出结构化的运行摘要（状态、风险、建议）。若缺少具体指标数据，请明确说明需补充哪些采集项，不要虚构数字。",
-                "请生成过去 " + (period == null ? "24h" : period) + " 的系统运行分析报告。");
+        return invokeSkill("ops_report", Map.of(
+                "period", period == null ? "24h" : period.trim().toLowerCase(Locale.ROOT)));
     }
 }

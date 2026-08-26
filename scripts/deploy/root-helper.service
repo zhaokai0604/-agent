@@ -1,0 +1,14 @@
+[Unit]
+Description=Award Agent Root Helper
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=ROOT_HELPER_SOCKET=/var/run/award-root-helper.sock
+Environment=ROOT_HELPER_POLICY=/etc/award-agent/root-helper-policy.json
+ExecStart=/usr/bin/python3 /opt/award-agent/scripts/deploy/root_helper.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+id: cpu-pressure
+playbook: cpu-pressure
+description: CPU/负载持续升高归因
+tools:
+  - SystemLoadTool
+  - ProcessTool
+  - NetworkTool
+decision_rules:
+  confidence_gate:
+    min_independent_signals: 2
+stop_conditions:
+  - evidence_insufficient
+  - safety_block
+red_lines:
+  - no_write_without_pep

@@ -363,3 +363,17 @@ CREATE TABLE IF NOT EXISTS user_profile_preference (
   update_time datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id)
 );
+
+CREATE TABLE IF NOT EXISTS ops_recycle_entry (
+  id bigint NOT NULL AUTO_INCREMENT,
+  handle varchar(32) NOT NULL,
+  original_path varchar(1024) NOT NULL,
+  staged_path varchar(1024) NOT NULL,
+  size_bytes bigint DEFAULT 0,
+  trace_id varchar(64) DEFAULT NULL,
+  expires_at datetime NOT NULL,
+  created_at datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_recycle_handle (handle),
+  KEY idx_recycle_expires (expires_at)
+);

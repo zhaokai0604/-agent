@@ -49,6 +49,9 @@ public class McpToolRegistry {
             ServiceOpsTool serviceOpsTool,
             ContainerOpsTool containerOpsTool,
             ProcessOpsTool processOpsTool,
+            K8sTool k8sTool,
+            RecycleBinTool recycleBinTool,
+            OpsAnalysisSkillTool opsAnalysisSkillTool,
             FirstMcpTools firstMcpTools
     ) {
         this.toolBeans = new ArrayList<>();
@@ -80,6 +83,9 @@ public class McpToolRegistry {
         this.toolBeans.add(serviceOpsTool);
         this.toolBeans.add(containerOpsTool);
         this.toolBeans.add(processOpsTool);
+        this.toolBeans.add(k8sTool);
+        this.toolBeans.add(recycleBinTool);
+        this.toolBeans.add(opsAnalysisSkillTool);
         // FirstMcpTools 仅用于对话 @Tool 实验；HTTP /api/mcp 白名单见 McpInvocationSecurityGate.allowedToolNames()
         this.toolBeans.add(firstMcpTools);
 

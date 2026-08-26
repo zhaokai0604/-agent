@@ -340,6 +340,9 @@ agent:
     cache-ttl-ms: ${AGENT_MCP_CACHE_TTL_MS:45000}
   assistant:
     use-tool-agent-default: ${AGENT_ASSISTANT_USE_TOOLS:true}
+    # 对话 Agent 开放工具权限：挂载全量 MCP + 写工具，跳过确认门（仍保留注入/治理等硬护栏）
+    open-tool-permissions: ${AGENT_ASSISTANT_OPEN_PERMISSIONS:true}
+    analysis-skills-prompt-max: ${AGENT_ASSISTANT_ANALYSIS_SKILLS_MAX:10}
     tool-agent-stream-chunk-chars: ${AGENT_ASSISTANT_TOOL_CHUNK:900}
     tool-catalog-prompt-max: ${AGENT_ASSISTANT_TOOL_CATALOG_MAX:28}
     orchestrator:
@@ -369,6 +372,23 @@ agent:
     ping-target: ${AGENT_AUTONOMOUS_PING_TARGET:8.8.8.8}
     # 已废弃：巡检后全栈 autonomous 双轨已下线，固定仅保留巡检自动修复单轨
     run-after-patrol: false
+  guardrails:
+    max-failures-per-trace: ${AGENT_GUARDRAILS_MAX_FAILURES:5}
+  sandbox:
+    enabled: ${AGENT_SANDBOX_ENABLED:false}
+    bwrap-binary: ${AGENT_SANDBOX_BWRAP:bwrap}
+    extra-bind-mounts: ${AGENT_SANDBOX_BIND_MOUNTS:}
+    root-helper:
+      enabled: ${AGENT_ROOT_HELPER_ENABLED:false}
+      socket-path: ${AGENT_ROOT_HELPER_SOCKET:/var/run/award-root-helper.sock}
+      timeout-ms: ${AGENT_ROOT_HELPER_TIMEOUT_MS:30000}
+  injection-guard:
+    sidecar-enabled: ${AGENT_INJECTION_SIDECAR:false}
+    sidecar-url: ${AGENT_INJECTION_SIDECAR_URL:http://127.0.0.1:8099}
+    timeout-ms: ${AGENT_INJECTION_SIDECAR_TIMEOUT_MS:2000}
+    scan-tool-output: ${AGENT_INJECTION_SCAN_TOOL_OUTPUT:true}
+  recycle:
+    root: ${AGENT_RECYCLE_ROOT:${java.io.tmpdir}/award-recycle-bin}
   trust:
     notify-max: ${AGENT_TRUST_NOTIFY_MAX:6.0}
   log-safety:
@@ -423,6 +443,11 @@ audit:
   cleanup-cron: ${AUDIT_CLEANUP_CRON:0 0 3 * * ?}
 
 ops:
+  pep:
+    enabled: ${OPS_PEP_ENABLED:true}
+    confirm-hmac-key: ${OPS_CONFIRM_HMAC_KEY:}
+    confirm-ttl-ms: ${OPS_CONFIRM_TTL_MS:900000}
+    recycle-ttl-days: ${OPS_RECYCLE_TTL_DAYS:7}
   governance:
     enabled: ${OPS_GOVERNANCE_ENABLED:true}
     delivery-profile: prod-kylin

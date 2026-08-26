@@ -1,6 +1,8 @@
 package com.award.log.controller;
 
 import com.award.log.agent.awm.FailureInsightService;
+import com.award.log.governance.OpsExecutionPipeline;
+import com.award.log.config.OpsPepProperties;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.dispatch.McpToolParamReader;
@@ -50,6 +52,8 @@ public class McpExecuteController {
     private final HttpAuditSubject httpAuditSubject;
     private final ToolEffectResolver toolEffectResolver;
     private final SessionRiskBudgetService sessionRiskBudgetService;
+    private final OpsExecutionPipeline opsExecutionPipeline;
+    private final OpsPepProperties opsPepProperties;
 
     @GetMapping("/tools")
     public Map<String, Object> getMcpTools() {
@@ -70,6 +74,18 @@ public class McpExecuteController {
         String toolName = stringField(request, "toolName");
         Map<String, Object> parameters = extractParameters(request);
         String userMessage = stringField(request, "userMessage");
+        String requester = currentRequester();
+        boolean previewOnly = Boolean.TRUE.equals(request.get("previewOnly"));
+
+        if (opsPepProperties.isEnabled()) {
+            OpsExecutionPipeline.PipelineResult result;
+            if (previewOnly) {
+                result = opsExecutionPipeline.preview(toolName, parameters, userMessage, requester);
+            } else {
+                result = opsExecutionPipeline.executeDirect(toolName, parameters, userMessage, requester);
+            }
+            return decoratePipelineResult(result, toolName);
+        }
 
         long startTime = System.currentTimeMillis();
         String traceId = UUID.randomUUID().toString();
@@ -87,7 +103,6 @@ public class McpExecuteController {
         String userInstruction = mcpSecurityService.buildAuditInstruction(userMessage, toolName, parameters);
         ToolEffect effect = toolEffectResolver.resolve(toolName, parameters);
         String effectFingerprint = EffectFingerprint.of(toolName, parameters, effect);
-        String requester = currentRequester();
 
         if (decision.getType() == GateDecision.Type.BLOCK) {
             log.warn("MCP 安全门拦截: tool={} code={}", toolName, decision.getCode());
@@ -178,11 +193,22 @@ public class McpExecuteController {
         String confirmCode = stringField(request, "confirmCode");
         String confirmationId = stringField(request, "confirmationId");
         String capabilityToken = stringField(request, "capabilityToken");
+        String confirmToken = stringField(request, "confirmToken");
         if (confirmationId.isBlank()) {
             confirmationId = stringField(request, "traceId");
         }
 
         log.info("收到 MCP 确认执行请求: confirmationId={}, confirmCode={}", confirmationId, confirmCode);
+
+        if (opsPepProperties.isEnabled()) {
+            String requester = currentRequester();
+            OpsExecutionPipeline.PipelineResult result = opsExecutionPipeline.executeConfirmed(
+                    confirmationId, capabilityToken, confirmToken, confirmCode, requester);
+            String toolName = result.toolName() == null || result.toolName().isBlank()
+                    ? stringField(request, "toolName")
+                    : result.toolName();
+            return decoratePipelineResult(result, toolName);
+        }
 
         if (!"确认执行".equals(confirmCode)) {
             return errorResponse("确认码不正确，请输入 '确认执行'", traceId, startTime, "", 400);
@@ -331,6 +357,28 @@ public class McpExecuteController {
     private String currentRequester() {
         String requester = httpAuditSubject.currentOperatorId();
         return requester == null || requester.isBlank() ? "anonymous" : requester;
+    }
+
+    private Map<String, Object> decoratePipelineResult(OpsExecutionPipeline.PipelineResult result, String toolName) {
+        Map<String, Object> body = result.body() != null ? new LinkedHashMap<>(result.body()) : new LinkedHashMap<>();
+        String traceId = String.valueOf(body.getOrDefault("traceId", result.traceId()));
+        int status = Boolean.TRUE.equals(body.get("success")) ? 200
+                : Boolean.TRUE.equals(body.get("needConfirm")) ? 202
+                : body.containsKey("securityCode") ? 403
+                : isUnknownToolError(body) ? 404
+                : 500;
+        if (result.effect() != null) {
+            body.put("toolEffect", result.effect().toMap());
+        }
+        if (result.effectFingerprint() != null && !result.effectFingerprint().isBlank()) {
+            body.put("effectFingerprint", result.effectFingerprint());
+        }
+        return decorateEnvelope(body, toolName, traceId, status);
+    }
+
+    private static boolean isUnknownToolError(Map<String, Object> body) {
+        Object err = body.get("error");
+        return err != null && String.valueOf(err).contains("未找到可执行工具");
     }
 
     private Map<String, Object> decorateEnvelope(Map<String, Object> raw,

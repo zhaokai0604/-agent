@@ -123,6 +123,17 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 - [ ] `agent.paths` 白名单与现场目录一致  
 - [ ] `agent.autonomous.run-after-patrol=false`（默认已是 false；与 `ops.auto-remediation` 勿同时全开）
 
+### PEP / 沙箱 / 可逆删除（国赛对标项）
+
+- [ ] `OPS_PEP_ENABLED=true` 且 `OPS_CONFIRM_HMAC_KEY` 已设为随机密钥（非 CHANGE_ME）
+- [ ] `AGENT_SANDBOX_ENABLED=true`；`bwrap --version` 可用
+- [ ] `systemctl status root-helper` 为 active；`/var/run/award-root-helper.sock` 存在
+- [ ] `AGENT_ROOT_HELPER_ENABLED=true`（需 root-helper 与策略文件 `/etc/award-agent/root-helper-policy.json`）
+- [ ] 写工具二次确认：MCP 预览返回 `dryRunPreviewHash` + `confirmToken`，参数变更后令牌失效
+- [ ] 表 `ops_recycle_entry` 已创建（`schema.sql`）；清理类工具删除优先进回收站
+- [ ] `GET /api/ops/skills/yaml` 返回结构化 SOP 列表（登录后）
+- [ ] SecuritySelfCheck 对标项 pep / bwrap / yamlSkills 为 pass（管理端自检接口）
+
 ---
 
 ## 八、回滚

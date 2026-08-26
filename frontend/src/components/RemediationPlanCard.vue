@@ -8,6 +8,11 @@
     </div>
     <p class="plan-body">{{ planSummary }}</p>
     <p v-if="pendingWriteLabel" class="plan-pending">待挂载写工具：{{ pendingWriteLabel }}</p>
+    <div v-if="pepMeta && (pepMeta.confirmToken || pepMeta.dryRunPreviewHash)" class="plan-pep">
+      <p v-if="pepMeta.dryRunPreviewHash">预览哈希：{{ pepMeta.dryRunPreviewHash }}</p>
+      <p v-if="pepMeta.expiresAtMs">令牌有效期至：{{ formatExpire(pepMeta.expiresAtMs) }}</p>
+      <p v-if="pepMeta.confirmToken" class="plan-hint">HMAC 确认令牌已绑定预览，参数变更将失效</p>
+    </div>
     <div v-if="showConfirm" class="plan-actions">
       <el-button type="primary" size="small" :loading="loading" @click="$emit('confirm')">
         确认执行
@@ -29,7 +34,8 @@ const props = defineProps({
   showConfirm: { type: Boolean, default: true },
   loading: { type: Boolean, default: false },
   observeOnly: { type: Boolean, default: false },
-  pendingWriteTools: { type: Array, default: () => [] }
+  pendingWriteTools: { type: Array, default: () => [] },
+  pepMeta: { type: Object, default: null }
 })
 
 defineEmits(['confirm'])
@@ -47,6 +53,15 @@ const pendingWriteLabel = computed(() => {
   if (!Array.isArray(tools) || !tools.length) return ''
   return tools.join('、')
 })
+
+function formatExpire(ms) {
+  if (!ms) return ''
+  try {
+    return new Date(ms).toLocaleString()
+  } catch {
+    return String(ms)
+  }
+}
 </script>
 
 <style scoped>
@@ -79,6 +94,23 @@ const pendingWriteLabel = computed(() => {
   margin: 0 0 10px;
   font-size: 12px;
   color: var(--el-color-warning-dark-2, #b88230);
+}
+
+.plan-pep {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.plan-pep p {
+  margin: 0 0 4px;
+}
+
+.plan-pep p:last-child {
+  margin-bottom: 0;
 }
 
 .plan-actions {

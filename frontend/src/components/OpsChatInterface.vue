@@ -54,6 +54,7 @@
                 :loading="loading && confirmPlanIndex === index"
                 :observe-only="msg.awaitingConfirm && msg.writeToolsMounted === false"
                 :pending-write-tools="msg.pendingWriteTools || []"
+                :pep-meta="msg.pepMeta"
                 @confirm="confirmPlanFromMessage(index)"
               />
               <AssistantEvidenceBar
@@ -471,11 +472,11 @@ function buildDraftMessage(rawInput) {
   return base
 }
 
-function applySseToAssistant (assistantIdx, payload) {
+function applySseToAssistant (assistantMsg, payload) {
+  if (!assistantMsg) return
   handleAssistantSsePayload(payload, {
     onMeta: (meta) => {
-      const msg = messages.value[assistantIdx]
-      if (!msg) return
+      const msg = assistantMsg
       msg.meta = { ...(msg.meta || {}), ...meta }
       if (Array.isArray(meta.ragHits)) msg.ragHits = meta.ragHits
       if (meta.writeConfirmed) msg.writeConfirmed = true
@@ -491,8 +492,8 @@ function applySseToAssistant (assistantIdx, payload) {
       }
     },
     onEvent: (event) => {
-      const msg = messages.value[assistantIdx]
-      if (!msg || !event) return
+      const msg = assistantMsg
+      if (!event) return
       msg.streamEvent = event
       if (event.contextUsage) {
         msg.contextUsage = event.contextUsage
@@ -518,6 +519,13 @@ function applySseToAssistant (assistantIdx, payload) {
         if (Array.isArray(event.observeTools)) msg.observeTools = event.observeTools
         if (event.awaitingConfirm != null) msg.awaitingConfirm = !!event.awaitingConfirm
         if (event.writeToolsMounted != null) msg.writeToolsMounted = !!event.writeToolsMounted
+        if (event.confirmToken || event.dryRunPreviewHash || event.expiresAtMs) {
+          msg.pepMeta = {
+            confirmToken: event.confirmToken || msg.pepMeta?.confirmToken,
+            dryRunPreviewHash: event.dryRunPreviewHash || msg.pepMeta?.dryRunPreviewHash,
+            expiresAtMs: event.expiresAtMs || msg.pepMeta?.expiresAtMs
+          }
+        }
         if (!Array.isArray(msg.thinkSteps)) msg.thinkSteps = []
         const remediationPlan = isRemediationToolPlan(event)
         const planTitle = remediationPlan
@@ -554,10 +562,8 @@ function applySseToAssistant (assistantIdx, payload) {
       }
     },
     onContent: (text) => {
-      if (messages.value[assistantIdx]) {
-        messages.value[assistantIdx].content += text
-        if (!showScrollDown.value) scrollToBottom()
-      }
+      assistantMsg.content = String(assistantMsg.content || '') + text
+      if (!showScrollDown.value) scrollToBottom()
     }
   })
 }
@@ -575,8 +581,8 @@ function formatContextUsage (usage) {
   return `${total.toLocaleString()} / ${window.toLocaleString()} tokens (${percent}%)`
 }
 
-function finalizeAssistantMessage (assistantIdx) {
-  const msg = messages.value[assistantIdx]
+function finalizeAssistantMessage (assistantMsg) {
+  const msg = assistantMsg
   if (!msg) return
   if (msg.content) {
     msg.content = msg.content
@@ -655,12 +661,13 @@ const confirmPlanFromMessage = async (index) => {
 const runNaturalLanguageStream = async (message) => {
   const prior = messages.value.slice(0, -1)
   const history = buildConversationHistory(prior)
-  const assistantIdx =
-    messages.value.push({
-      role: 'assistant',
-      content: '',
-      timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    }) - 1
+  // 持有消息对象引用，避免会话裁剪（MAX_MESSAGES）后下标失效导致读 content 报错
+  const assistantMsg = {
+    role: 'assistant',
+    content: '',
+    timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+  messages.value.push(assistantMsg)
   const token = generationToken
   loading.value = true
   streaming.value = true
@@ -669,7 +676,7 @@ const runNaturalLanguageStream = async (message) => {
   try {
     const response = await assistantChatStream(message, history, {
       useToolAgent: !userDeclinesTools(message),
-      confirmRemediation: userConfirmedRemediation(message),
+      confirmRemediation: true,
       modelProfile: selectedModelProfile.value,
       signal: streamAbortController.signal
     })
@@ -688,7 +695,7 @@ const runNaturalLanguageStream = async (message) => {
         } catch {
           /* ignore */
         }
-        messages.value[assistantIdx].content = `助手暂时不可用: ${hint}`
+        assistantMsg.content = `助手暂时不可用: ${hint}`
         return
       }
       const errText = await response.text().catch(() => '')
@@ -699,12 +706,12 @@ const runNaturalLanguageStream = async (message) => {
       } catch {
         if (errText) errMsg = errText.slice(0, 400)
       }
-      messages.value[assistantIdx].content = '助手暂时不可用: ' + errMsg
+      assistantMsg.content = '助手暂时不可用: ' + errMsg
       return
     }
     const reader = response.body?.getReader()
     if (!reader) {
-      messages.value[assistantIdx].content = '服务端未返回流式数据，请确认 AI 已配置。'
+      assistantMsg.content = '服务端未返回流式数据，请确认 AI 已配置。'
       return
     }
     streamReader = reader
@@ -717,25 +724,25 @@ const runNaturalLanguageStream = async (message) => {
       if (isGenerationCancelled(token)) break
       const chunk = decoder.decode(value, { stream: true })
       sseBuf = appendSsePayloadFromChunk(sseBuf, chunk, (payload) => {
-        applySseToAssistant(assistantIdx, payload)
+        applySseToAssistant(assistantMsg, payload)
       })
     }
     if (!isGenerationCancelled(token)) {
       flushSseBuffer(sseBuf, (payload) => {
-        applySseToAssistant(assistantIdx, payload)
+        applySseToAssistant(assistantMsg, payload)
       })
-      if (!messages.value[assistantIdx].content.trim()) {
-        messages.value[assistantIdx].content = '（未返回内容，请检查模型服务）'
+      if (!String(assistantMsg.content || '').trim()) {
+        assistantMsg.content = '（未返回内容，请检查模型服务）'
       }
-      finalizeAssistantMessage(assistantIdx)
+      finalizeAssistantMessage(assistantMsg)
     }
   } catch (e) {
     if (isGenerationCancelled(token) || e?.name === 'AbortError') return
     console.error('自然语言对话失败', e)
     const errHint =
       '\n\n—\n连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
-    const existing = (messages.value[assistantIdx].content || '').trim()
-    messages.value[assistantIdx].content = existing
+    const existing = String(assistantMsg.content || '').trim()
+    assistantMsg.content = existing
       ? existing + errHint
       : '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
   } finally {

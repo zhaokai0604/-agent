@@ -1,7 +1,9 @@
 package com.award.log.mcp;
 
 import com.award.log.config.OpsDryRunProperties;
+import com.award.log.mcp.sandbox.SandboxExecutor;
 import com.award.log.util.OsRuntime;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -24,6 +26,7 @@ public class MinPrivilegeExecutor extends AbstractCommandExecutor {
     private final String runAsUser;
     private final boolean minPrivilegeEnabled;
     private final OpsDryRunProperties opsDryRunProperties;
+    private SandboxExecutor sandboxExecutor;
 
     public MinPrivilegeExecutor(
             @Value("${agent.run-as-user:" + DEFAULT_RUN_AS_USER + "}") String runAsUser,
@@ -39,6 +42,32 @@ public class MinPrivilegeExecutor extends AbstractCommandExecutor {
                 this.runAsUser, minPrivilegeEnabled, opsDryRunProperties.isGlobalDryRun());
     }
 
+    @Autowired(required = false)
+    public void setSandboxExecutor(SandboxExecutor sandboxExecutor) {
+        this.sandboxExecutor = sandboxExecutor;
+    }
+
+    public long defaultTimeoutMillis() {
+        return commandTimeoutMillis();
+    }
+
+    /**
+     * 供沙箱层调用，避免与 SandboxExecutor 循环委托。
+     */
+    public CommandResult executeWithoutSandbox(List<String> command, long timeoutMillis) {
+        CommandResult dryRun = tryGlobalDryRun(command);
+        if (dryRun != null) {
+            return dryRun;
+        }
+        if (!minPrivilegeEnabled) {
+            return executeWithRetry(command, timeoutMillis);
+        }
+        if (requiresRootPrivilege(command)) {
+            return executeWithPrivilegeCheck(command, timeoutMillis);
+        }
+        return executeAsUser(command, runAsUser, timeoutMillis);
+    }
+
     /** 按最小权限策略执行命令（含全局 dry-run 拦截）。 */
     public CommandResult executeSafely(List<String> command) {
         return executeSafely(command, commandTimeoutMillis());
@@ -48,6 +77,9 @@ public class MinPrivilegeExecutor extends AbstractCommandExecutor {
      * @param timeoutMillis 单轮进程等待超时（毫秒），例如 {@code du} 大目录扫描可适当增大。
      */
     public CommandResult executeSafely(List<String> command, long timeoutMillis) {
+        if (sandboxExecutor != null && sandboxExecutor.sandboxActive()) {
+            return sandboxExecutor.executeSafely(command, timeoutMillis);
+        }
         CommandResult dryRun = tryGlobalDryRun(command);
         if (dryRun != null) {
             return dryRun;

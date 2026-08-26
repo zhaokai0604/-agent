@@ -1,5 +1,6 @@
 package com.award.log.security;
 
+import com.award.log.config.InjectionGuardProperties;
 import com.award.log.rule.dsl.RuleExpressionEvaluator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,11 +26,25 @@ public class PromptInjectionGuard {
     );
 
     private final RuleExpressionEvaluator ruleExpressionEvaluator;
+    private final InjectionGuardSidecarClient injectionGuardSidecarClient;
+    private final InjectionGuardProperties injectionGuardProperties;
     private final Map<String, InjectionRule> ruleCache = new ConcurrentHashMap<>();
 
     @Autowired(required = false)
     public PromptInjectionGuard(RuleExpressionEvaluator ruleExpressionEvaluator) {
+        this(ruleExpressionEvaluator, null, null);
+    }
+
+    @Autowired(required = false)
+    public PromptInjectionGuard(
+            RuleExpressionEvaluator ruleExpressionEvaluator,
+            @Autowired(required = false) InjectionGuardSidecarClient injectionGuardSidecarClient,
+            @Autowired(required = false) InjectionGuardProperties injectionGuardProperties) {
         this.ruleExpressionEvaluator = ruleExpressionEvaluator;
+        this.injectionGuardSidecarClient = injectionGuardSidecarClient;
+        this.injectionGuardProperties = injectionGuardProperties != null
+                ? injectionGuardProperties
+                : new InjectionGuardProperties();
         // 初始化默认规则
         ruleCache.put(InjectionRule.createDefaultRule().getId(), InjectionRule.createDefaultRule());
     }
@@ -45,11 +60,24 @@ public class PromptInjectionGuard {
             return true;
         }
 
+        if (injectionGuardSidecarClient != null && injectionGuardSidecarClient.isMalicious(userInput)) {
+            log.info("边车模型命中提示注入");
+            return true;
+        }
+
         if (ruleExpressionEvaluator != null && evaluateWithRuleEngine(userInput)) {
             log.info("扩展注入规则引擎命中");
             return true;
         }
         return false;
+    }
+
+    /** 工具回传内容间接注入扫描。 */
+    public boolean isInjectionInToolOutput(String toolOutput) {
+        if (!injectionGuardProperties.isScanToolOutput() || toolOutput == null || toolOutput.isBlank()) {
+            return false;
+        }
+        return isInjection(toolOutput);
     }
 
     private boolean evaluateWithRuleEngine(String userInput) {

@@ -11,6 +11,7 @@ import com.award.log.agent.AgentSkillPlan;
 import com.award.log.agent.AgentToolPhase;
 import com.award.log.agent.AssistantAuditRecorder;
 import com.award.log.agent.MultiAgentContextBuilder;
+import com.award.log.agent.OpsAnalysisSkillCatalog;
 import com.award.log.agent.OpsIntentRouter;
 import com.award.log.agent.OpsRuntimeService;
 import com.award.log.agent.OpsReportFormat;
@@ -197,6 +198,12 @@ public class UnifiedAssistantService {
     @Value("${agent.assistant.tool-catalog-prompt-max:28}")
     private int toolCatalogPromptMax;
 
+    @Value("${agent.assistant.open-tool-permissions:true}")
+    private boolean openToolPermissions;
+
+    @Value("${agent.assistant.analysis-skills-prompt-max:10}")
+    private int analysisSkillsPromptMax;
+
     @Value("${spring.ai.openai.chat.options.model:unknown}")
     private String configuredModelName;
 
@@ -355,12 +362,13 @@ public class UnifiedAssistantService {
         history = trimHistory(history);
         AssistantReplyPlanner.ReplyPlan plan = assistantReplyPlanner.plan(
                 safe, history, useToolAgent, confirmRemediation, orchestratorEnabled, opsRuntimeService);
-        boolean allowWrite = confirmRemediation || (opsIntentRouter != null && opsIntentRouter.forceRemediate(safe));
+        boolean allowWrite = resolveAllowWrite(confirmRemediation, safe);
         String conversationContext = AssistantIntentSignals.recentConversationText(safe, history, 8);
         OpsWorkflow awmHit = resolveAwmHit(safe, conversationContext);
-        List<String> plannedTools = AgentSkillPlan.resolveTools(safe, conversationContext, awmHit, allowWrite);
+        List<String> plannedTools = AgentSkillPlan.resolveTools(safe, conversationContext, awmHit, false);
+        List<String> plannedAnalysisSkills = OpsAnalysisSkillCatalog.suggestSkillIds(safe);
         String planPhase = AgentSkillPlan.planPhase(allowWrite, plannedTools);
-        boolean awaitingConfirm = !allowWrite && AgentSkillPlan.hasWriteTools(plannedTools);
+        boolean awaitingConfirm = resolveAwaitingConfirm(allowWrite, plannedTools);
 
         Map<String, Object> preview = new LinkedHashMap<>();
         preview.put("message", safe);
@@ -371,6 +379,8 @@ public class UnifiedAssistantService {
         preview.put("writeConfirmed", allowWrite);
         preview.put("awaitingConfirm", awaitingConfirm);
         preview.put("plannedTools", plannedTools);
+        preview.put("plannedAnalysisSkills", plannedAnalysisSkills);
+        preview.put("openToolPermissions", openToolPermissions);
         preview.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
         preview.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
         preview.put("executionState", AgentExecutionState.build(
@@ -507,11 +517,12 @@ public class UnifiedAssistantService {
             return Flux.just("该请求被判定为高风险意图，对话内自动工具执行已拦截。");
         }
 
-        boolean allowWrite = confirmRemediation || opsIntentRouter.forceRemediate(userMessage);
+        boolean allowWrite = resolveAllowWrite(confirmRemediation, userMessage);
         // writeConfirmed 仅表示用户意图确认；是否落地由结束时 securityOutcome / Tracker 再定
         Map<String, Object> metaExtras = new LinkedHashMap<>();
         metaExtras.put("userIntentConfirmed", allowWrite);
-        metaExtras.put("writeConfirmed", false);
+        metaExtras.put("writeConfirmed", allowWrite);
+        metaExtras.put("openToolPermissions", openToolPermissions);
         metaExtras.putAll(routingMeta(resolveModel(
                 userMessage, AiUsageSupport.estimateTokens(userMessage), true, requestedModelProfile)));
 
@@ -520,19 +531,21 @@ public class UnifiedAssistantService {
         recordAwmPlanningHit(awmHit);
         List<String> plannedTools = AgentSkillPlan.resolveTools(
                 userMessage, conversationContext, awmHit, false);
+        List<String> plannedAnalysisSkills = OpsAnalysisSkillCatalog.suggestSkillIds(userMessage);
         String planPhase = AgentSkillPlan.planPhase(allowWrite, plannedTools);
-        boolean awaitingConfirm = !allowWrite && AgentSkillPlan.hasWriteTools(plannedTools);
+        boolean awaitingConfirm = resolveAwaitingConfirm(allowWrite, plannedTools);
         metaExtras.put("plannedTools", plannedTools);
+        metaExtras.put("plannedAnalysisSkills", plannedAnalysisSkills);
         metaExtras.put("planThenAct", true);
         metaExtras.put("planPhase", planPhase);
         metaExtras.put("awaitingConfirm", awaitingConfirm);
         metaExtras.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
         metaExtras.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
-        metaExtras.put("writeToolsMounted", false);
+        metaExtras.put("writeToolsMounted", allowWrite);
         metaExtras.put("executionState", AgentExecutionState.build(
                 plan.mode().name(),
-                false,
-                false,
+                allowWrite,
+                allowWrite,
                 plannedTools,
                 planPhase,
                 null,
@@ -562,7 +575,7 @@ public class UnifiedAssistantService {
             String orchPhase = AgentSkillPlan.planPhase(allowWrite, orchTools);
             metaExtras.put("plannedTools", orchTools);
             metaExtras.put("planPhase", orchPhase);
-            metaExtras.put("awaitingConfirm", !allowWrite && AgentSkillPlan.hasWriteTools(orchTools));
+            metaExtras.put("awaitingConfirm", resolveAwaitingConfirm(allowWrite, orchTools));
             metaExtras.put("observeTools", AgentSkillPlan.observeTools(orchTools));
             metaExtras.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(orchTools));
             // 编排路径仍走 orchestrator 内置 Dry-Run；写真实落地仍需确认
@@ -597,7 +610,7 @@ public class UnifiedAssistantService {
                             ? "正在按确认计划执行本机观测与处置编排…"
                             : "正在按计划执行本机观测与处置编排，请稍候…"),
                     Mono.fromCallable(() -> {
-                                OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite);
+                                OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions);
                                 try {
                                     return opsRuntimeService.runPlaybook(
                                             playbook, userMessage, surface, intentRisk);
@@ -736,8 +749,9 @@ public class UnifiedAssistantService {
         augmentContextWithSessionSecurity(userMessage, context);
         context.put("assistantToolLoop", Boolean.TRUE);
 
-        boolean allowWrite = confirmRemediation || opsIntentRouter.forceRemediate(userMessage);
+        boolean allowWrite = resolveAllowWrite(confirmRemediation, userMessage);
         context.put("userConfirmedWrite", allowWrite);
+        context.put("openToolPermissions", openToolPermissions);
         String effectivePlanPhase = planPhase == null || planPhase.isBlank()
                 ? AgentSkillPlan.planPhase(allowWrite, plannedTools)
                 : planPhase;
@@ -746,6 +760,10 @@ public class UnifiedAssistantService {
             context.put("plannedTools", plannedTools);
             context.put("observeTools", AgentSkillPlan.observeTools(plannedTools));
             context.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(plannedTools));
+        }
+        List<String> analysisHints = OpsAnalysisSkillCatalog.suggestSkillIds(userMessage);
+        if (!analysisHints.isEmpty()) {
+            context.put("plannedAnalysisSkills", analysisHints);
         }
 
         if (awmHit != null) {
@@ -768,7 +786,7 @@ public class UnifiedAssistantService {
         String traceId = UUID.randomUUID().toString();
         long startedAt = System.currentTimeMillis();
         ChatToolExecutionTracker.clear();
-        OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite);
+        OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions);
         try {
             AiModelRouter.ResolvedModel resolvedModel = resolveModel(
                     userMessage, AiUsageSupport.estimateTokens(contextToJson(context)), true,
@@ -796,7 +814,8 @@ public class UnifiedAssistantService {
                         toolAugmentedSection(context, surface),
                         allowWrite,
                         plannedTools == null ? List.of() : plannedTools,
-                        writeMounted);
+                        writeMounted,
+                        openToolPermissions);
                 String bundledUser = bundleHistoryAndUser(history, userMessage);
                 var promptSpec = client.prompt()
                         .system(systemPrompt)
@@ -868,7 +887,7 @@ public class UnifiedAssistantService {
             List<String> planRef = plannedTools != null && !plannedTools.isEmpty()
                     ? plannedTools
                     : AgentSkillPlan.forToolAgent(userMessage);
-            boolean shouldAppendPlan = !allowWrite && !realWriteOk
+            boolean shouldAppendPlan = !openToolPermissions && !allowWrite && !realWriteOk
                     && (ChatToolExecutionTracker.hasAnyToolInvocation()
                     || AgentSkillPlan.hasWriteTools(planRef));
             if (shouldAppendPlan && !cleaned.contains("## 处置计划")) {
@@ -1261,6 +1280,7 @@ public class UnifiedAssistantService {
             Map<String, Object> sessionSecurity = new LinkedHashMap<>();
             sessionSecurity.put("intentRisk", riskLevel.name());
             sessionSecurity.put("toolSurface", surface.name());
+            sessionSecurity.put("openToolPermissions", openToolPermissions);
             sessionSecurity.put("utteranceRiskScore", Map.of(
                     "total", utterScore.total(),
                     "dimensions", utterScore.dimensions(),
@@ -1270,6 +1290,20 @@ public class UnifiedAssistantService {
         } catch (Exception e) {
             log.debug("assistant session security context skipped: {}", e.getMessage());
         }
+    }
+
+    private boolean resolveAllowWrite(boolean confirmRemediation, String userMessage) {
+        if (openToolPermissions) {
+            return true;
+        }
+        return confirmRemediation || opsIntentRouter.forceRemediate(userMessage);
+    }
+
+    private boolean resolveAwaitingConfirm(boolean allowWrite, List<String> plannedTools) {
+        if (openToolPermissions) {
+            return false;
+        }
+        return !allowWrite && AgentSkillPlan.hasWriteTools(plannedTools);
     }
 
     private String buildSystemPrompt(Map<String, Object> context) {
@@ -1333,14 +1367,20 @@ public class UnifiedAssistantService {
         String catalog = mcpToolCatalog != null
                 ? mcpToolCatalog.summarizeToolsForPrompt(toolCatalogPromptMax)
                 : "";
+        String skillsCatalog = OpsAnalysisSkillCatalog.summarizeForPrompt(analysisSkillsPromptMax);
         return AssistantReplyPrompts.toolAugmentedSection()
                 + AssistantReplyPrompts.availableToolsSection(catalog)
+                + AssistantReplyPrompts.analysisSkillsSection(skillsCatalog)
                 + """
 
                 ## 工具增强本轮
-                - 先通过工具采集事实，再组织中文答复。
-                - 写操作默认预览；用户未明确确认前不得描述为已执行。
-                - 工具失败或未调用时，说明实时数据不可用，不要编造指标。
+                - 先通过工具或 AI 分析 Skill 采集/推理，再组织中文答复。
+                """
+                + (openToolPermissions
+                ? "- 当前为**开放权限模式**：全量 MCP 工具与写操作已挂载，由你自行选择 Skill 或 Tool 组合执行。\n"
+                : "- 写操作默认预览；用户未明确确认前不得描述为已执行。\n")
+                + """
+                - 工具/Skill 失败或未调用时，说明数据不可用，不要编造指标。
                 - 当前工具面：**"""
                 + (surface == null ? "FULL" : surface.name())
                 + "**；可多步连续调用直至任务完成。\n";

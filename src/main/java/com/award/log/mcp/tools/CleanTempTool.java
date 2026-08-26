@@ -1,6 +1,7 @@
 package com.award.log.mcp.tools;
 
 import com.award.log.config.OpsRemediationProperties;
+import com.award.log.service.SafeDeleteSupport;
 import com.award.log.mcp.AbstractCommandExecutor;
 import com.award.log.mcp.McpToolResponses;
 import com.award.log.mcp.MinPrivilegeExecutor;
@@ -45,6 +46,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
     private final MinPrivilegeExecutor minPrivilegeExecutor;
     private final OpsPathPolicy opsPathPolicy;
     private final OpsRemediationProperties remediationProperties;
+    private final SafeDeleteSupport safeDeleteSupport;
 
     @Autowired
     public CleanTempTool(
@@ -52,7 +54,8 @@ public class CleanTempTool extends AbstractCommandExecutor {
             ObjectMapper objectMapper,
             MinPrivilegeExecutor minPrivilegeExecutor,
             OpsPathPolicy opsPathPolicy,
-            OpsRemediationProperties remediationProperties) {
+            OpsRemediationProperties remediationProperties,
+            @Autowired(required = false) SafeDeleteSupport safeDeleteSupport) {
         super(mcpToolExecutor != null ? mcpToolExecutor : Executors.newCachedThreadPool());
         this.objectMapper = objectMapper;
         this.minPrivilegeExecutor = minPrivilegeExecutor;
@@ -60,6 +63,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
         this.remediationProperties = remediationProperties != null
                 ? remediationProperties
                 : new OpsRemediationProperties();
+        this.safeDeleteSupport = safeDeleteSupport;
     }
 
     @Tool(name = "cleanTempFiles", description = "清理临时文件：默认仅预览；真实删除需 dryRun=false 且 confirmDelete=true。支持 removeDirectory 删除指定子目录（须在白名单 Temp 子路径下）。")
@@ -318,10 +322,22 @@ public class CleanTempTool extends AbstractCommandExecutor {
                             bytesLocked += fileBytes;
                             continue;
                         }
-                        AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
-                        if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
-                            filesDeleted++;
-                            bytesFreed += fileBytes;
+                        boolean recycled = false;
+                        if (safeDeleteSupport != null) {
+                            SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
+                                    Path.of(file), null, true);
+                            if (outcome.success()) {
+                                filesDeleted++;
+                                bytesFreed += fileBytes;
+                                recycled = true;
+                            }
+                        }
+                        if (!recycled) {
+                            AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
+                            if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
+                                filesDeleted++;
+                                bytesFreed += fileBytes;
+                            }
                         }
                     } catch (Exception e) {
                         log.debug("删除文件失败: {}", file);

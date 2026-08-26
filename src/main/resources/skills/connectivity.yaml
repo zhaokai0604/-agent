@@ -1,0 +1,14 @@
+id: connectivity
+playbook: connectivity
+description: 网络连通性与端口健康
+tools:
+  - NetworkTool
+  - PortHealthTool
+  - ProcessTool
+decision_rules:
+  confidence_gate:
+    min_independent_signals: 2
+stop_conditions:
+  - evidence_insufficient
+red_lines:
+  - no_write_without_pep

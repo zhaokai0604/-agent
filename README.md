@@ -8,6 +8,9 @@ ThreshCore 是一个面向企业运维的日志分析与可控 Agent 平台，�
 
 | 项目 | 说明 |
 |---|---|
+| **产品阶段** | **V1 产品化封口**（单机 Agent）；多机联邦 / 网安扫描包列入 v2，暂不改架构 |
+| 封口清单 | [`docs/product/V1-产品化封口清单.md`](docs/product/V1-产品化封口清单.md) |
+| **封口验证（2026-08-26）** | `mvn verify` **通过**（782 用例，JaCoCo **60.4%**）；前端 `build` 通过；本机 Golden Path 冒烟 **通过** |
 | 后端 | Java 17、Spring Boot、MyBatis、Spring AI |
 | 前端 | Vue 3、Vite、Element Plus、ECharts |
 | 数据库 | MySQL 8 默认；MariaDB 可通过配置切换 |
@@ -164,29 +167,52 @@ npm run dev
 - 执行结果必须进入审计链路，并尽可能进行前后状态验证。
 - 不要把真实密钥、生产配置、用户数据或运行时目录提交到 Git。
 
+## V1 封口验证与冒烟
+
+最近一次工程验证：**2026-08-26**（Windows 开发机，`ThreshCore代码` 根目录）。
+
+| 检查项 | 命令 | 结果 |
+|--------|------|------|
+| 后端测试 + 覆盖率 | `mvn verify` | **782** 用例，**0** 失败，**1** 跳过；JaCoCo **60.4%** |
+| 前端产物 | `cd frontend && npm run build` | **通过**（`frontend/dist/`） |
+| Golden Path 冒烟 | `.\scripts\deploy\smoke_v1_golden_path.ps1` | **通过**（health / 登录 / MCP / 巡检 / 审计 / Skills） |
+| 麒麟验收冒烟 | `bash scripts/deploy/smoke_kylin_acceptance.sh` | 麒麟目标机服务启动后执行 |
+
+本机 Golden Path 结果（2026-08-26）：actuator、platform/acceptance、登录、session 下 self-check、DiskTool 只读、CleanTemp 预览、patrol/history、audit/feed、ops/skills/yaml 均为 PASS。未登录访问 self-check 返回 401（符合预期）。
+
+封口期小修复（非架构变更）：
+
+- `OpsRecycleBinService`：Windows 路径 JSON 反转义，回收站 restore 可用
+- `SandboxExecutor`：`@Lazy` 注入打破与 `MinPrivilegeExecutor` 循环依赖，本地 `spring-boot:run` 可启动
+
+服务启动后执行（默认 `BASE=http://127.0.0.1:8088/award-log`）：
+
+```bash
+export BASE=http://127.0.0.1:8088/award-log
+bash scripts/deploy/smoke_kylin_acceptance.sh
+bash scripts/deploy/smoke_v1_golden_path.sh
+```
+
+```powershell
+$env:BASE = "http://127.0.0.1:8088/award-log"
+.\scripts\deploy\smoke_v1_golden_path.ps1
+```
+
+Golden Path 脚本覆盖：健康检查 → 平台验收 → 安全自检 → 登录 → MCP 目录 → DiskTool 只读 → CleanTemp 预览 → 巡检历史 → 审计 feed → YAML Skills。**写操作二次确认请在 UI 或 `confirmExecute` 完成。**
+
+完整封口勾选表见 [`docs/product/V1-产品化封口清单.md`](docs/product/V1-产品化封口清单.md)。
+
 ## 构建与测试
 
 后端：
 
 ```powershell
-mvn test
-mvn verify
-```
-
-前端：
-
-```powershell
+mvn verify        # 封口必过（含 JaCoCo 60% 门禁）
 cd frontend
 npm run build
 ```
 
-推荐提交前执行：
-
-```powershell
-mvn verify
-cd frontend
-npm run build
-```
+JaCoCo 报告：`target/site/jacoco/index.html`。
 
 测试使用 H2 和测试配置，不要求本地启动完整中间件。生产环境仍需按实际部署方式配置数据库、模型和可选组件。
 
@@ -201,6 +227,7 @@ npm run build
 
 ## 项目文档
 
+- [V1 产品化封口清单](docs/product/V1-产品化封口清单.md)
 - [功能说明](docs/功能说明.md)
 - [部署文档](docs/deployment/部署文档.md)
 - [部署指南](部署指南.md)

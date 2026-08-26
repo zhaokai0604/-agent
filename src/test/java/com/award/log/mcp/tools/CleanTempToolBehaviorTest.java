@@ -79,6 +79,6 @@ class CleanTempToolBehaviorTest {
         }
         ReflectionTestUtils.setField(policy, "policyVersion", "test-clean-root");
         return new CleanTempTool(executor, McpToolsTestFixtures.objectMapper(),
-                McpToolsTestFixtures.minPrivilegeExecutor(executor), policy, new com.award.log.config.OpsRemediationProperties());
+                McpToolsTestFixtures.minPrivilegeExecutor(executor), policy, new com.award.log.config.OpsRemediationProperties(), null);
     }
 }

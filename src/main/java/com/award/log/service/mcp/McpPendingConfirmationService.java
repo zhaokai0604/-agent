@@ -43,6 +43,21 @@ public class McpPendingConfirmationService {
             ToolEffect effect,
             String effectFingerprint,
             WriteCapabilityToken capabilityToken) {
+        return register(confirmationId, toolName, parameters, userMessage, userInstruction, requester,
+                effect, effectFingerprint, capabilityToken, "");
+    }
+
+    public PendingConfirmation register(
+            String confirmationId,
+            String toolName,
+            Map<String, Object> parameters,
+            String userMessage,
+            String userInstruction,
+            String requester,
+            ToolEffect effect,
+            String effectFingerprint,
+            WriteCapabilityToken capabilityToken,
+            String dryRunPreviewJson) {
         purgeExpired();
         long now = System.currentTimeMillis();
         long ttl = Math.max(MIN_TTL_MS, confirmationTtlMs);
@@ -64,7 +79,8 @@ public class McpPendingConfirmationService {
                 now + ttl,
                 effect,
                 effectFingerprint == null ? "" : effectFingerprint,
-                token);
+                token,
+                dryRunPreviewJson == null ? "" : dryRunPreviewJson);
         pending.put(confirmationId, value);
         return value;
     }
@@ -159,7 +175,8 @@ public class McpPendingConfirmationService {
             long expiresAtMs,
             ToolEffect effect,
             String effectFingerprint,
-            WriteCapabilityToken capabilityToken) {
+            WriteCapabilityToken capabilityToken,
+            String dryRunPreviewJson) {
 
         boolean isExpired(long nowMs) {
             return nowMs > expiresAtMs;

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -41,5 +43,17 @@ class AiAnalysisServiceImplTest {
     void generateReportShouldReportNotReadyWithoutApiKey() {
         String result = service.generateReport("24h");
         assertTrue(result.contains("未就绪"));
+    }
+
+    @Test
+    void invokeSkillUnknownIdReturnsMessage() {
+        String result = service.invokeSkill("unknown_skill", Map.of("content", "x"));
+        assertTrue(result.contains("未找到 Skill"));
+    }
+
+    @Test
+    void listAnalysisSkillsShouldExposeCatalog() {
+        assertFalse(service.listAnalysisSkills().isEmpty());
+        assertTrue(service.listAnalysisSkills().stream().anyMatch(m -> "log_analysis".equals(m.get("id"))));
     }
 }

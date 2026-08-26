@@ -26,4 +26,11 @@ curl -sf "$BASE/api/mcp/tools" | grep -q AutonomousOpsTool && echo "[PASS] Auton
 echo "== 4. 自主运维只读 =="
 curl -sf -X POST "$BASE/api/ops/autonomous/run?readOnly=true" | head -c 800
 echo ""
+
+echo "== 5. Security self-check（公开只读） =="
+curl -sf "$BASE/api/security/self-check" | head -c 600
+echo ""
+curl -sf "$BASE/api/security/self-check" | grep -q effectEngine && echo "[PASS] self-check effectEngine" || echo "[WARN] self-check 字段需核对"
+
+echo "== 6. Golden Path 完整链路（需登录）见 smoke_v1_golden_path.sh =="
 echo "== 完成 =="

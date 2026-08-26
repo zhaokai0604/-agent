@@ -1,0 +1,14 @@
+id: disk-cleanup
+playbook: disk-cleanup
+description: 磁盘空间不足与受控清理
+tools:
+  - DiskTool
+  - CleanTempTool
+  - LogCleanupTool
+decision_rules:
+  confidence_gate:
+    min_independent_signals: 2
+stop_conditions:
+  - evidence_insufficient
+red_lines:
+  - no_write_without_pep

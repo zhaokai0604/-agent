@@ -1,0 +1,14 @@
+id: service-restart
+playbook: service-restart
+description: 受控服务重启与验证
+tools:
+  - ServiceRestartTool
+  - SystemdTool
+  - PortHealthTool
+decision_rules:
+  confidence_gate:
+    min_independent_signals: 2
+stop_conditions:
+  - safety_block
+red_lines:
+  - no_write_without_pep

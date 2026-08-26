@@ -2,6 +2,8 @@ package com.award.log.agent;
 
 import com.award.log.agent.awm.OpsWorkflow;
 import com.award.log.agent.awm.OpsWorkflowStep;
+import com.award.log.agent.skill.SkillCatalogLoader;
+import com.award.log.agent.skill.SkillRoutingAdvisor;
 import com.award.log.agent.awm.WorkflowExecutionService;
 import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowRetriever;
@@ -92,7 +94,9 @@ class AssistantOrchestratorTest {
                 workflowInductionService,
                 new TestRuntimePlatform(false),
                 new TestTimeSource(1_000L),
-                new TestTraceIdGenerator("trace-assistant-1"));
+                new TestTraceIdGenerator("trace-assistant-1"),
+                new DiagnosisConfidenceGate(),
+                new SkillRoutingAdvisor(new SkillCatalogLoader()));
         ReflectionTestUtils.setField(orchestrator, "logCleanDays", 30);
         ReflectionTestUtils.setField(orchestrator, "tempCleanDays", 7);
         ReflectionTestUtils.setField(orchestrator, "diskPressurePercent", 80.0);
@@ -281,7 +285,9 @@ class AssistantOrchestratorTest {
         when(opsIntentRouter.forceRemediate("restart nginx because cpu high")).thenReturn(true);
         when(workflowRetriever.bestMatch("cpu", List.of("CPU_HIGH"), "restart nginx because cpu high")).thenReturn(null);
         when(systemLoadTool.checkSystemLoad()).thenReturn("{\"success\":true,\"data\":{\"cpuUsagePercent\":95.0}}");
-        when(processTool.listProcesses(5.0, 5.0)).thenReturn("{\"success\":true,\"data\":[]}");
+        when(processTool.listProcesses(5.0, 5.0)).thenReturn("""
+                {"success":true,"data":"[{\\\"user\\\":\\\"root\\\",\\\"pid\\\":\\\"99\\\",\\\"cpu\\\":\\\"92.0\\\",\\\"mem\\\":\\\"8.0\\\",\\\"command\\\":\\\"nginx: worker process\\\",\\\"state\\\":\\\"running\\\"}]"}
+                """);
         when(serviceRestartCandidateResolver.pickFromUserMessage("restart nginx because cpu high")).thenReturn("nginx");
         when(opsRemediationGate.decideServiceRestart(eq("nginx"), anyBoolean(), anyString()))
                 .thenReturn(new OpsRemediationGate.RemediationDecision(

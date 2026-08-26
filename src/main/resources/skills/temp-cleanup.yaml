@@ -1,0 +1,13 @@
+id: temp-cleanup
+playbook: temp-cleanup
+description: 临时文件受控清理
+tools:
+  - DiskTool
+  - CleanTempTool
+decision_rules:
+  confidence_gate:
+    min_independent_signals: 2
+stop_conditions:
+  - evidence_insufficient
+red_lines:
+  - no_write_without_pep

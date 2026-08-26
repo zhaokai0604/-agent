@@ -184,7 +184,9 @@ class AutonomousOpsOrchestratorTest {
     void buildPerceptionViewBuildsSnapshotAndFindingsWhenCacheMisses() throws Exception {
         when(opsPerceptionCache.getIfFresh()).thenReturn(null);
         when(systemLoadTool.checkSystemLoad()).thenReturn("{\"success\":true,\"data\":{\"cpuUsagePercent\":91.0,\"memUsagePercent\":89.0}}");
-        when(diskTool.checkDiskUsage()).thenReturn("{\"success\":true,\"data\":[{\"usePercent\":\"95%\"}]}");
+        lenient().when(diskTool.checkDiskUsage()).thenReturn("{\"success\":true,\"data\":[{\"usePercent\":\"95%\"}]}");
+        lenient().when(diskAnalyzeTool.analyzeDiskPressure(anyString(), anyBoolean(), anyInt()))
+                .thenReturn("{\"success\":true,\"data\":{}}");
         when(networkTool.diagnoseNetwork(anyString(), eq("ping"), eq(3)))
                 .thenReturn("{\"success\":true,\"data\":{\"packetLossPercent\":60}}");
         when(portHealthTool.checkPortConnectivity(any(), anyInt(), anyInt()))

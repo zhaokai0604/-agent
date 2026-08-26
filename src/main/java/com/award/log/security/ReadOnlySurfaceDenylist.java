@@ -23,7 +23,8 @@ public class ReadOnlySurfaceDenylist {
             "LogOpsTool",
             "ServiceOpsTool",
             "ContainerOpsTool",
-            "ProcessOpsTool"
+            "ProcessOpsTool",
+            "RecycleBinTool"
     );
 
     private final Set<String> denied;

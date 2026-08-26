@@ -29,7 +29,7 @@ public final class EffectFingerprint {
         return sha256Hex(sb.toString());
     }
 
-    static String canonicalParams(Map<String, Object> parameters) {
+    public static String canonicalParams(Map<String, Object> parameters) {
         if (parameters == null || parameters.isEmpty()) {
             return "{}";
         }

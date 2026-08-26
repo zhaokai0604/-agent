@@ -33,11 +33,18 @@ public class ToolSurfaceResolver {
     @Value("${agent.security.read-only-utterance-applies-to-low-intent-only:true}")
     private boolean readOnlyUtteranceAppliesToLowIntentOnly;
 
+    /** true：对话 Agent 始终 FULL 工具面（仍保留 HIGH 意图/stream 层拦截） */
+    @Value("${agent.assistant.open-tool-permissions:true}")
+    private boolean openToolPermissions;
+
     public ToolSurfaceResolver(AgenticRiskScoreEngine agenticRiskScoreEngine) {
         this.agenticRiskScoreEngine = agenticRiskScoreEngine;
     }
 
     public McpToolSurface resolve(String userMessage, RiskLevel intentRisk) {
+        if (openToolPermissions) {
+            return McpToolSurface.FULL;
+        }
         if (intentRisk == RiskLevel.HIGH) {
             return McpToolSurface.READ_ONLY;
         }

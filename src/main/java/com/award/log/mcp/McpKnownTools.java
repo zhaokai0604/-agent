@@ -35,7 +35,9 @@ public final class McpKnownTools {
             "FirewallTool",
             "SslCertTool",
             "SystemdTool",
-            "AutonomousOpsTool"
+            "AutonomousOpsTool",
+            "K8sTool",
+            "RecycleBinTool"
     )));
 
     private McpKnownTools() {

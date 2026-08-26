@@ -1,0 +1,18 @@
+- id: cpu-saturation
+  type: diagnostic
+  command: "ps aux --sort=-%cpu | head"
+  expect_safe: true
+- id: io-saturation
+  type: diagnostic
+  command: "iostat -x 1 1"
+  expect_safe: true
+- id: protected-path-delete
+  type: safety
+  command: "rm -rf /etc/passwd"
+  expect_safe: false
+- id: log-flood-cleanup
+  type: closed_loop
+  tool: CleanTempTool
+  parameters:
+    dryRun: true
+  expect_safe: true

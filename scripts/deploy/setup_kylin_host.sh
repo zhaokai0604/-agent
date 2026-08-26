@@ -125,6 +125,48 @@ else
   echo "[sudoers] /etc/sudoers.d/award-agent 已存在，跳过"
 fi
 
+echo ""
+echo "[沙箱] bubblewrap + Root Helper..."
+if command -v bwrap >/dev/null 2>&1; then
+  echo "[bwrap] 已安装 -> $(command -v bwrap)"
+else
+  if command -v yum >/dev/null 2>&1; then
+    yum install -y bubblewrap 2>/dev/null || echo "[bwrap] yum 安装失败，请手动安装 bubblewrap" >&2
+  elif command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y bubblewrap 2>/dev/null || echo "[bwrap] apt 安装失败，请手动安装 bubblewrap" >&2
+  else
+    echo "[bwrap] 未找到包管理器，请手动安装 bubblewrap" >&2
+  fi
+fi
+
+ROOT_HELPER_ROOT="/opt/award-agent"
+mkdir -p "${ROOT_HELPER_ROOT}/scripts/deploy" /etc/award-agent
+cp -f "${ROOT}/scripts/deploy/root_helper.py" "${ROOT_HELPER_ROOT}/scripts/deploy/"
+cp -f "${ROOT}/scripts/deploy/root_helper_client.py" "${ROOT_HELPER_ROOT}/scripts/deploy/"
+chmod 755 "${ROOT_HELPER_ROOT}/scripts/deploy/root_helper.py" "${ROOT_HELPER_ROOT}/scripts/deploy/root_helper_client.py"
+
+if [[ ! -f /etc/award-agent/root-helper-policy.json ]]; then
+  cat > /etc/award-agent/root-helper-policy.json <<'POLICY'
+{
+  "allowed_patterns": [
+    "systemctl restart nginx",
+    "systemctl reload nginx",
+    "resolvectl flush-caches"
+  ]
+}
+POLICY
+  echo "[root-helper] 已生成默认策略 /etc/award-agent/root-helper-policy.json"
+fi
+
+cp -f "${ROOT}/scripts/deploy/root-helper.service" /etc/systemd/system/root-helper.service
+systemctl daemon-reload
+if systemctl enable root-helper 2>/dev/null; then
+  systemctl restart root-helper 2>/dev/null || echo "[root-helper] 启动失败，请检查 python3 与 journalctl -u root-helper" >&2
+  echo "[root-helper] systemd 服务已配置"
+else
+  echo "[root-helper] systemd 启用失败（非 systemd 环境可忽略）" >&2
+fi
+
 ENV_FILE="/etc/threshcore/threshcore.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   mkdir -p /etc/threshcore
@@ -143,6 +185,7 @@ cat <<EOF
 
 ======== 下一步 ========
 1. 编辑密钥:  sudo vi /etc/threshcore/threshcore.env
+   （建议启用 OPS_PEP_ENABLED、OPS_CONFIRM_HMAC_KEY、AGENT_SANDBOX_ENABLED）
 2. 构建产物:  bash scripts/deploy/deploy_kylin_loongarch.sh
 3. 安装服务:
      sudo cp deploy/release-kylin/award-log.jar ${INSTALL_ROOT}/
@@ -150,5 +193,6 @@ cat <<EOF
      sudo cp scripts/deploy/award-log.service /etc/systemd/system/
      sudo systemctl daemon-reload && sudo systemctl enable --now award-log
 4. 验收:       BASE=http://127.0.0.1:8088/award-log bash scripts/deploy/smoke_kylin_acceptance.sh
+5. 沙箱:       systemctl status root-helper; bwrap --version
 
 EOF

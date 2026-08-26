@@ -1,0 +1,14 @@
+id: alert-triage
+playbook: alert-triage
+description: 告警分诊与证据聚合
+tools:
+  - LogAnalysisTool
+  - SystemLoadTool
+  - PortHealthTool
+decision_rules:
+  confidence_gate:
+    min_independent_signals: 2
+stop_conditions:
+  - evidence_insufficient
+red_lines:
+  - no_write_without_pep

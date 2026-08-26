@@ -20,7 +20,7 @@ class OpsDeferredTaskServiceTest {
         try {
             OpsDeferredTaskService service = new OpsDeferredTaskService(
                     scheduler,
-                    new McpExecuteController(null, null, null, null, null, null, null, null, null));
+                    new McpExecuteController(null, null, null, null, null, null, null, null, null, null, null));
             service.schedule(10, "DiskTool", Map.of(), "u1");
             service.schedule(10, "DiskTool", Map.of(), "u2");
 
@@ -42,7 +42,7 @@ class OpsDeferredTaskServiceTest {
         try {
             OpsDeferredTaskService service = new OpsDeferredTaskService(
                     scheduler,
-                    new McpExecuteController(null, null, null, null, null, null, null, null, null));
+                    new McpExecuteController(null, null, null, null, null, null, null, null, null, null, null));
             String taskId = String.valueOf(service.schedule(10, "DiskTool", Map.of(), "u1").get("taskId"));
             assertFalse(service.cancel(taskId, "u2", false));
             assertTrue(service.cancel(taskId, "u1", false));

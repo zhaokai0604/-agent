@@ -32,6 +32,10 @@ public final class AgentSkillPlan {
             "PrivilegeTool"
     );
 
+    public static Set<String> WRITE_TOOLS_VIEW() {
+        return WRITE_TOOLS;
+    }
+
     private AgentSkillPlan() {
     }
 
@@ -130,7 +134,12 @@ public final class AgentSkillPlan {
                                             boolean orchestrate) {
         String seed = planningSeed(userMessage, conversationContext);
         List<String> base = orchestrate ? forOrchestrate(seed) : forToolAgent(seed);
-        return preferAwm(base, awm);
+        List<String> merged = new ArrayList<>(preferAwm(base, awm));
+        if (!OpsAnalysisSkillCatalog.suggestSkillIds(seed).isEmpty()) {
+            merged.remove("OpsAnalysisSkillTool");
+            merged.add(0, "OpsAnalysisSkillTool");
+        }
+        return merged;
     }
 
     /** 短确认话术改用对话上下文作规划种子，避免丢掉磁盘/CPU 场景。 */

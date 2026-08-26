@@ -457,7 +457,8 @@ export const confirmMcpExecute = (
   confirmCode = '确认执行',
   userMessage = '',
   confirmationId = '',
-  capabilityToken = ''
+  capabilityToken = '',
+  confirmToken = ''
 ) => {
   const body = { toolName, parameters, confirmCode }
   const um = typeof userMessage === 'string' ? userMessage.trim() : ''
@@ -466,10 +467,22 @@ export const confirmMcpExecute = (
   if (cid) body.confirmationId = cid
   const token = typeof capabilityToken === 'string' ? capabilityToken.trim() : ''
   if (token) body.capabilityToken = token
+  const hmac = typeof confirmToken === 'string' ? confirmToken.trim() : ''
+  if (hmac) body.confirmToken = hmac
   return managementRequest.post('/api/mcp/confirmExecute', body)
 }
 
 export const getMcpTools = () => managementRequest.get('/api/mcp/tools')
+
+/** 列出可主动调用的 AI 分析 Skill（提示词目录，非 MCP 工具） */
+export const getAnalysisSkills = () => managementRequest.get('/api/ops/analysis-skills')
+
+/** YAML 结构化运维 Skill（SOP 目录，只读） */
+export const getYamlSkills = () => managementRequest.get('/api/ops/skills/yaml')
+
+/** 主动调用 AI 分析 Skill */
+export const invokeAnalysisSkill = (skillId, params = {}) =>
+  managementRequest.post(`/api/ops/analysis-skills/${encodeURIComponent(skillId)}/invoke`, params)
 
 /** 一键安全自检（探针走真实安全门，不执行系统命令） */
 export const getSecuritySelfCheck = () => managementRequest.get('/api/security/self-check')

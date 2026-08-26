@@ -29,6 +29,7 @@ public class AiAuditFilter extends OncePerRequestFilter {
             "/api/profile/",
             "/api/ops/effect/",
             "/api/ops/patrol/",
+            "/api/ops/analysis-skills/",
             "/api/security/",
             "/api/platform/",
             "/api/system-config/"

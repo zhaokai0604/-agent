@@ -1,6 +1,8 @@
 package com.award.log.controller;
 
 import com.award.log.agent.awm.FailureInsightService;
+import com.award.log.config.OpsPepProperties;
+import com.award.log.governance.OpsExecutionPipeline;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.security.HttpAuditSubject;
 import com.award.log.security.McpInvocationSecurityGate.GateDecision;
@@ -56,6 +58,8 @@ class McpExecuteControllerTest {
     void setUp() {
         pendingConfirmationService = new McpPendingConfirmationService();
         ReflectionTestUtils.setField(pendingConfirmationService, "confirmationTtlMs", 600_000L);
+        OpsPepProperties pepProperties = new OpsPepProperties();
+        pepProperties.setEnabled(false);
         controller = new McpExecuteController(
                 mcpToolCatalog,
                 mcpSecurityService,
@@ -65,7 +69,9 @@ class McpExecuteControllerTest {
                 pendingConfirmationService,
                 httpAuditSubject,
                 new ToolEffectResolver(),
-                new SessionRiskBudgetService(3_600_000L, 20, 60));
+                new SessionRiskBudgetService(3_600_000L, 20, 60),
+                null,
+                pepProperties);
         when(mcpToolCatalog.isRegistered(anyString())).thenReturn(true);
         when(mcpToolCatalog.describePlatformSupport(anyString()))
                 .thenReturn(new HashMap<>(Map.of("available", true, "reason", "")));

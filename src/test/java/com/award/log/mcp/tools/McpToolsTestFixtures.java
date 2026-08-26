@@ -75,7 +75,7 @@ final class McpToolsTestFixtures {
 
     static CleanTempTool cleanTempTool(ExecutorService executor) {
         return new CleanTempTool(executor, objectMapper(), minPrivilegeExecutor(executor), opsPathPolicy(),
-                new OpsRemediationProperties());
+                new OpsRemediationProperties(), null);
     }
 
     static DiskAnalyzeTool diskAnalyzeTool(ExecutorService executor) {
@@ -109,7 +109,7 @@ final class McpToolsTestFixtures {
     static LogCleanupTool logCleanupTool(ExecutorService executor) {
         OpsPathPolicy policy = opsPathPolicy();
         return new LogCleanupTool(executor, objectMapper(), minPrivilegeExecutor(executor),
-                policy, logSafetyClassifier(policy, agentOpsProperties()), new OpsRemediationProperties());
+                policy, logSafetyClassifier(policy, agentOpsProperties()), new OpsRemediationProperties(), null);
     }
 
     static LogAnalysisTool logAnalysisTool(ExecutorService executor, AiDiagnosisService aiDiagnosisService) {

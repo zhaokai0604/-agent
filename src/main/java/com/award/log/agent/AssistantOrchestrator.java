@@ -4,6 +4,7 @@ import com.award.log.agent.awm.OpsWorkflow;
 import com.award.log.agent.awm.WorkflowExecutionService;
 import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowRetriever;
+import com.award.log.agent.skill.SkillRoutingAdvisor;
 import com.award.log.governance.OpsRemediationGate;
 import com.award.log.mcp.McpToolPayloadParser;
 import com.award.log.mcp.WriteToolResultSupport;
@@ -70,6 +71,8 @@ public class AssistantOrchestrator {
     private final RuntimePlatform runtimePlatform;
     private final TimeSource timeSource;
     private final TraceIdGenerator traceIdGenerator;
+    private final DiagnosisConfidenceGate diagnosisConfidenceGate;
+    private final SkillRoutingAdvisor skillRoutingAdvisor;
 
     @Autowired(required = false)
     private OpsAutoRemediationService opsAutoRemediationService;
@@ -96,7 +99,9 @@ public class AssistantOrchestrator {
             WorkflowInductionService workflowInductionService,
             RuntimePlatform runtimePlatform,
             TimeSource timeSource,
-            TraceIdGenerator traceIdGenerator) {
+            TraceIdGenerator traceIdGenerator,
+            DiagnosisConfidenceGate diagnosisConfidenceGate,
+            SkillRoutingAdvisor skillRoutingAdvisor) {
         this.opsIntentRouter = opsIntentRouter;
         this.diskTool = diskTool;
         this.diskAnalyzeTool = diskAnalyzeTool;
@@ -116,6 +121,8 @@ public class AssistantOrchestrator {
         this.runtimePlatform = runtimePlatform;
         this.timeSource = timeSource;
         this.traceIdGenerator = traceIdGenerator;
+        this.diagnosisConfidenceGate = diagnosisConfidenceGate;
+        this.skillRoutingAdvisor = skillRoutingAdvisor;
     }
 
     @Value("${agent.assistant.orchestrator.log-clean-days:30}")
@@ -768,6 +775,16 @@ public class AssistantOrchestrator {
         StringBuilder md = new StringBuilder();
         md.append("## CPU / 负载闭环\n\n");
 
+        SkillRoutingAdvisor.YamlSkillPlan yamlPlan =
+                skillRoutingAdvisor.planForPlaybook(OpsIntentRouter.Playbook.CPU_PRESSURE);
+        if (yamlPlan.present()) {
+            md.append("### Skill SOP（").append(yamlPlan.id()).append("）\n\n");
+            md.append(yamlPlan.description()).append("\n\n");
+            if (!yamlPlan.tools().isEmpty()) {
+                md.append("推荐工具序：").append(String.join(" → ", yamlPlan.tools())).append("\n\n");
+            }
+        }
+
         OpsWorkflow workflowHit = workflowRetriever.bestMatch(
                 "cpu", List.of("CPU_HIGH"), userMessage);
 
@@ -804,13 +821,33 @@ public class AssistantOrchestrator {
             }
             md.append(summarizeProcessPressure(processJson)).append("\n\n");
 
+            int minSignals = yamlPlan.present() ? yamlPlan.minIndependentSignals() : 2;
+            DiagnosisConfidenceGate.DiagnosisVerdict verdict = diagnosisConfidenceGate.evaluate(
+                    List.of(
+                            DiagnosisConfidenceGate.cpuSignal(summarizeSystemLoad(loadJson), loadSignalsHigh(loadJson)),
+                            DiagnosisConfidenceGate.processSignal(summarizeProcessPressure(processJson), processSignalsHigh(processJson))),
+                    minSignals);
+            md.append("### 置信门控\n\n");
+            md.append("- ").append(verdict.toMap().get("confidenceLabel")).append("\n");
+            if (verdict.likelyRootCause() != null && !verdict.likelyRootCause().isBlank()) {
+                md.append("- 归因：").append(verdict.likelyRootCause()).append("\n");
+            }
+            if (!verdict.confirmed()) {
+                md.append("- 缺失证据：").append(String.join("、", verdict.missingEvidence())).append("\n");
+                md.append("- **证据不足时不挂载写工具**（Action Guardrails + Confidence Gate）\n\n");
+            } else {
+                md.append("\n");
+            }
+
             if (workflowHit != null && workflowRun != null) {
                 md.append(buildWorkflowResultSummary(workflowRun)).append("\n\n");
             }
 
             boolean wantRestart = userMessage.contains("重启") || userMessage.contains("restart");
             boolean anyExecuted = workflowRun != null && workflowRun.anyExecuted();
-            if (wantRestart) {
+            if (wantRestart && !verdict.confirmed()) {
+                md.append("### 服务重启\n\n证据不足，已阻断写操作（须 ≥").append(minSignals).append(" 类独立信号一致）。\n\n");
+            } else if (wantRestart) {
                 String svc = resolveRestartService(userMessage);
                 if (svc == null) {
                     md.append("### 服务重启\n\n未配置可重启服务白名单或治理禁止。\n\n");
@@ -1139,6 +1176,34 @@ public class AssistantOrchestrator {
         } catch (Exception ignored) {
         }
         return "- 已完成磁盘采集，但未提取到可展示的盘符和使用率。";
+    }
+
+    private boolean loadSignalsHigh(String loadJson) {
+        JsonNode data = parseToolData(loadJson);
+        if (data == null) {
+            return false;
+        }
+        double cpu = firstDouble(data, -1, "cpuUsagePercent", "cpuPercent", "cpu", "systemCpuLoad");
+        double load1 = firstDouble(data, -1, "loadAverage1m", "load1", "systemLoadAverage");
+        return cpu >= 75 || load1 >= 4.0;
+    }
+
+    private boolean processSignalsHigh(String processJson) {
+        if (!McpToolPayloadParser.isSuccessful(objectMapper, processJson)) {
+            return false;
+        }
+        JsonNode data = parseToolData(processJson);
+        JsonNode rows = data != null && data.isArray() ? data : (data == null ? null : data.path("processes"));
+        if (rows == null || !rows.isArray() || rows.isEmpty()) {
+            return false;
+        }
+        for (JsonNode row : rows) {
+            double cpu = firstDouble(row, 0, "cpuPercent", "cpu", "cpuUsage");
+            if (cpu >= 30) {
+                return true;
+            }
+        }
+        return rows.size() > 0;
     }
 
     private String summarizeSystemLoad(String loadJson) {

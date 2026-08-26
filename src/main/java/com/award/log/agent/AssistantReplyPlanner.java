@@ -160,8 +160,12 @@ public class AssistantReplyPlanner {
                     AssistantReplyPrompts.toolAgentStatusHint());
         }
 
-        // P11 弱运维
+        // P11 弱运维：默认走 Tool Agent，让模型自行选择 MCP 工具或 AI 分析 Skill
         if (AssistantIntentSignals.OPS_KEYWORDS.matcher(msg).find()) {
+            if (useToolAgentRequested) {
+                return plan(AssistantReplyMode.TOOL_AGENT, AssistantIntentCategory.OPS_DIAGNOSIS, true,
+                        AssistantReplyPrompts.toolAgentStatusHint());
+            }
             return plan(AssistantReplyMode.OPS_ANALYSIS, AssistantIntentCategory.OPS_DIAGNOSIS, false, "");
         }
 

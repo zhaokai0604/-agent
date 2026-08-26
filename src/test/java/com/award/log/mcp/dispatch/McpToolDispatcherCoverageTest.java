@@ -50,6 +50,8 @@ class McpToolDispatcherCoverageTest {
     @Mock ServiceOpsTool serviceOpsTool;
     @Mock ContainerOpsTool containerOpsTool;
     @Mock ProcessOpsTool processOpsTool;
+    @Mock K8sTool k8sTool;
+    @Mock RecycleBinTool recycleBinTool;
 
     private McpToolDispatcher dispatcher;
 
@@ -61,7 +63,8 @@ class McpToolDispatcherCoverageTest {
                 configCheckTool, configDriftTool, networkTool, privilegeTool, osInsightTool,
                 logCleanupTool, serviceRestartTool, diskAnalyzeTool, portHealthTool,
                 dockerTool, cronJobTool, firewallTool, sslCertTool, systemdTool,
-                autonomousOpsTool, diskOpsTool, logOpsTool, serviceOpsTool, containerOpsTool, processOpsTool);
+                autonomousOpsTool, diskOpsTool, logOpsTool, serviceOpsTool, containerOpsTool, processOpsTool,
+                k8sTool, recycleBinTool);
 
         when(diskTool.checkDiskUsage()).thenReturn("{\"disk\":true}");
         when(diskTool.rankDiskUsageUnderPath(any(), any(), any())).thenReturn("{\"rank\":true}");
@@ -95,6 +98,8 @@ class McpToolDispatcherCoverageTest {
                 .thenReturn("{\"procOps\":true}");
         when(processTool.executeGateway(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn("{\"proc\":true}");
+        when(k8sTool.k8sDiagnose(any(), any())).thenReturn("{\"k8s\":true}");
+        when(recycleBinTool.recycleBinOps(any(), any())).thenReturn("{\"recycle\":true}");
     }
 
     @Test
@@ -119,7 +124,8 @@ class McpToolDispatcherCoverageTest {
                 "CleanTempTool", "LogCleanupTool", "ServiceRestartTool", "ConfigCheckTool", "ConfigDriftTool",
                 "NetworkTool", "PrivilegeTool", "OsInsightTool", "PortHealthTool", "DockerTool", "DiskOpsTool",
                 "LogOpsTool", "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool", "ProcessTool",
-                "CronJobTool", "FirewallTool", "SslCertTool", "SystemdTool", "AutonomousOpsTool"
+                "CronJobTool", "FirewallTool", "SslCertTool", "SystemdTool", "AutonomousOpsTool",
+                "K8sTool", "RecycleBinTool"
         }) {
             McpToolDispatchResult result = dispatcher.dispatch(tool, params);
             assertTrue(result.success(), "expected success for " + tool + " but got: " + result.errorMessage());

@@ -35,8 +35,15 @@ public class ToolEffectResolver {
                     EffectAction.MUTATE_CONFIG, "CONFIG", path.isBlank() ? service : path,
                     5, true, "MUTATE_CONFIG");
             case "DiskTool", "DiskAnalyzeTool", "SystemLoadTool", "PortHealthTool",
-                 "LogAnalysisTool", "SslCertTool", "PrivilegeTool" ->
+                 "LogAnalysisTool", "SslCertTool", "PrivilegeTool", "K8sTool" ->
                     ToolEffect.observe(path.isBlank() ? "HOST" : "PATH", path.isBlank() ? "local" : path);
+            case "RecycleBinTool" -> {
+                String op = firstString(parameters, "operation", "op").toLowerCase(Locale.ROOT);
+                if ("restore".equals(op)) {
+                    yield writePath(EffectAction.DELETE, firstString(parameters, "handle", "path"), "DELETE_PATH");
+                }
+                yield ToolEffect.observe("RECYCLE", op.isBlank() ? "list" : op);
+            }
             default -> inferDefault(tool, path, service, pid);
         };
     }

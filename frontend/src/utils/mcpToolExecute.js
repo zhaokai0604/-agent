@@ -34,7 +34,8 @@ export async function runMcpToolExecute(toolName, parameters, options = {}) {
       '确认执行',
       userMessage || '确认执行',
       result.confirmationId || result.traceId || '',
-      result.capabilityToken || ''
+      result.capabilityToken || '',
+      result.confirmToken || ''
     )
   }
 

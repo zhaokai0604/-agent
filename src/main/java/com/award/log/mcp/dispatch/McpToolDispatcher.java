@@ -52,6 +52,8 @@ public class McpToolDispatcher {
     private final ServiceOpsTool serviceOpsTool;
     private final ContainerOpsTool containerOpsTool;
     private final ProcessOpsTool processOpsTool;
+    private final K8sTool k8sTool;
+    private final RecycleBinTool recycleBinTool;
 
     /**
      * 按 toolName 路由到具体工具；未知名返回失败。
@@ -168,6 +170,12 @@ public class McpToolDispatcher {
                 case "AutonomousOpsTool" -> McpToolDispatchResult.ok(autonomousOpsTool.executeGateway(
                         getString(parameters, "userIntent"),
                         getBoolean(parameters, "forceRemediate")));
+                case "K8sTool" -> McpToolDispatchResult.ok(k8sTool.k8sDiagnose(
+                        getString(parameters, "operation"),
+                        getString(parameters, "namespace")));
+                case "RecycleBinTool" -> McpToolDispatchResult.ok(recycleBinTool.recycleBinOps(
+                        getString(parameters, "operation"),
+                        getString(parameters, "handle")));
                 default -> {
                     log.warn("未知的 MCP 工具: {}", toolName);
                     yield McpToolDispatchResult.fail("未知的工具: " + toolName);

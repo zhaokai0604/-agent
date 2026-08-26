@@ -122,20 +122,29 @@ public final class AssistantReplyPrompts {
                                                boolean allowWrite,
                                                List<String> plannedTools,
                                                boolean writeToolsMounted) {
+        return toolAgentSystemPrompt(contextJson, toolSection, allowWrite, plannedTools, writeToolsMounted, false);
+    }
+
+    public static String toolAgentSystemPrompt(String contextJson,
+                                               String toolSection,
+                                               boolean allowWrite,
+                                               List<String> plannedTools,
+                                               boolean writeToolsMounted,
+                                               boolean openToolPermissions) {
         return """
                 你是 ThreshCore **运维管家**，通过运维工具**直接操作本机**后回答，**简体中文**。
 
                 ## 行为要求（必须遵守）
                 - **先行动、后解释**：用户描述磁盘/文件/照片/系统问题时，**立即调用** DiskTool、DiskAnalyzeTool、ProcessTool 等，禁止空口追问
+                - 用户粘贴日志/告警/事故描述时，优先调用 **invokeOpsAnalysisSkill**（或先 listOpsAnalysisSkills）；需要本机实时数据时再调用 MCP 观测/写工具
                 - 缺参数时用**合理默认**（Windows：`C:\\` 与用户目录；Linux：`/` 或 `/var/log`），并在结果中说明假设
-                - 多步任务：先采集信息 → 给出结构化结论 → 可执行建议；写操作默认预览
-                - `awmPreferredSequence` / `plannedTools` 只是路由层给出的候选提示，不是事实也不是强制序列；必须根据本轮工具返回动态选择、增删步骤，不适用的工具不得为了凑计划而调用
+                - 多步任务：先采集信息 → 给出结构化结论 → 可执行建议
+                - `awmPreferredSequence` / `plannedTools` / `plannedAnalysisSkills` 只是路由层候选提示，不是强制序列；必须根据本轮返回动态选择
                 - 文件/照片整理：先用 DiskAnalyzeTool 扫热点与大文件，再给出保留/迁移/清理方案
-                - **证据约束**：禁止编造指标；结论中的数字/路径/状态必须来自本轮工具返回；工具失败如实说明，不得改写成“已成功”
-                - **执行声明约束**：未看到工具真实写证据（mode=DELETE/EXECUTED 等）时，禁止声称“已删除/已重启/已清理完成”
-                - 进程列表：`mem` 为占**整机物理内存**百分比；CPU 高但内存低的进程也会入选。制表时须写清「入选原因」，并尽量带 memMb；勿暗示两行进程内存之和等于系统总内存占用
-                - 遇到 `s_daemon` 等匿名或归属不明进程时，先调用 `inspectProcessOwnership`，结合 PPID、/proc cgroup、systemd status 与 lsof 再判断服务归属
-                """ + toolAgentPhaseRules(allowWrite, plannedTools, writeToolsMounted) + toolSection + """
+                - **证据约束**：禁止编造指标；结论中的数字/路径/状态必须来自本轮工具/Skill 返回
+                - **执行声明约束**：未看到工具真实写证据（mode=DELETE/EXECUTED 等）时，禁止声称「已删除/已重启/已清理完成」
+                - 进程列表：`mem` 为占**整机物理内存**百分比；CPU 高但内存低的进程也会入选
+                """ + toolAgentPhaseRules(allowWrite, plannedTools, writeToolsMounted, openToolPermissions) + toolSection + """
                 """ + OpsReportFormat.markdownOutputSpecForPromptZh() + universalReplyStructure() + """
 
                 ## 实时上下文
@@ -150,11 +159,27 @@ public final class AssistantReplyPrompts {
     public static String toolAgentPhaseRules(boolean allowWrite,
                                              List<String> plannedTools,
                                              boolean writeToolsMounted) {
+        return toolAgentPhaseRules(allowWrite, plannedTools, writeToolsMounted, false);
+    }
+
+    public static String toolAgentPhaseRules(boolean allowWrite,
+                                             List<String> plannedTools,
+                                             boolean writeToolsMounted,
+                                             boolean openToolPermissions) {
         String seq = plannedTools == null || plannedTools.isEmpty()
                 ? ""
                 : String.join(" → ", plannedTools);
         List<String> pendingWrite = AgentSkillPlan.pendingWriteTools(plannedTools);
         String pending = pendingWrite.isEmpty() ? "" : String.join("、", pendingWrite);
+        if (openToolPermissions && writeToolsMounted) {
+            return """
+
+                ## 本轮阶段：自主运维（全量工具 + AI 分析 Skill 已挂载）
+                - 你可**自行选择** MCP 工具（观测/写）或 **invokeOpsAnalysisSkill**（纯 LLM 分析），按场景组合多步调用
+                - 写操作可直接执行（dryRun=false / 对应 confirm* = true）；仍受路径白名单、注入检测与治理 FORBIDDEN 约束
+                - 不要向用户索要「确认执行」；先行动、后解释
+                """;
+        }
         if (allowWrite && writeToolsMounted) {
             return """
 
@@ -212,6 +237,17 @@ public final class AssistantReplyPrompts {
 
                 ## 可用运维工具（按需调用，可多步组合）
                 """ + toolCatalogMarkdown;
+    }
+
+    public static String analysisSkillsSection(String skillsCatalogMarkdown) {
+        if (skillsCatalogMarkdown == null || skillsCatalogMarkdown.isBlank()) {
+            return "";
+        }
+        return """
+
+                ## 可用 AI 分析 Skill（invokeOpsAnalysisSkill / listOpsAnalysisSkills）
+                - 适用于日志/告警/事故/报告/SLO 等纯分析场景，不执行主机命令
+                """ + skillsCatalogMarkdown;
     }
 
     public static String safetyFooter() {

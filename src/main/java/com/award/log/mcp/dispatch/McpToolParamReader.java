@@ -91,6 +91,18 @@ public final class McpToolParamReader {
         return Boolean.parseBoolean(value.toString());
     }
 
+    /** 预览阶段强制 dryRun 与清除确认标志。 */
+    public static void applyDryRunDefaults(String toolName, Map<String, Object> parameters) {
+        if (parameters == null) {
+            return;
+        }
+        parameters.put("dryRun", true);
+        parameters.remove("confirmDelete");
+        parameters.remove("confirmRestart");
+        parameters.remove("confirmKill");
+        parameters.remove("confirmStop");
+    }
+
     /** 用户已在界面点击「确认执行」后强制开启写参数（不依赖 userMessage 关键词）。 */
     public static void forceConfirmedWriteToolParams(String toolName, Map<String, Object> parameters) {
         if (toolName == null || parameters == null) {

@@ -12,7 +12,15 @@ import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.security.effect.PlanEffectGate;
 import com.award.log.security.effect.PolicyReplayService;
+import com.award.log.config.InjectionGuardProperties;
+import com.award.log.config.OpsPepProperties;
+import com.award.log.mcp.sandbox.BwrapCommandBuilder;
+import com.award.log.mcp.sandbox.RootHelperClient;
+import com.award.log.mcp.sandbox.SandboxExecutor;
+import com.award.log.security.OpsShieldService;
+import com.award.log.agent.skill.SkillCatalogLoader;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -36,6 +44,27 @@ public class SecuritySelfCheckService {
     private final MinPrivilegeExecutor minPrivilegeExecutor;
     private final PlanEffectGate planEffectGate;
     private final PolicyReplayService policyReplayService;
+
+    @Autowired(required = false)
+    private OpsPepProperties opsPepProperties;
+
+    @Autowired(required = false)
+    private SandboxExecutor sandboxExecutor;
+
+    @Autowired(required = false)
+    private BwrapCommandBuilder bwrapCommandBuilder;
+
+    @Autowired(required = false)
+    private RootHelperClient rootHelperClient;
+
+    @Autowired(required = false)
+    private OpsShieldService opsShieldService;
+
+    @Autowired(required = false)
+    private SkillCatalogLoader skillCatalogLoader;
+
+    @Autowired(required = false)
+    private InjectionGuardProperties injectionGuardProperties;
 
     public Map<String, Object> run() {
         List<Map<String, Object>> probes = new ArrayList<>();
@@ -153,14 +182,24 @@ public class SecuritySelfCheckService {
         body.put("judgeCategories", judgeCategories());
         body.put("config", buildConfigSnapshot());
         body.put("policySnapshot", policyReplayService.currentPolicySnapshot());
-        body.put("effectEngine", Map.of(
-                "toolEffect", true,
-                "capabilityToken", true,
-                "evidenceContract", true,
-                "sessionRiskBudget", true,
-                "planEffectGate", true,
-                "policyReplay", true,
-                "governanceHardCover", true));
+        Map<String, Object> effectEngine = new LinkedHashMap<>();
+        effectEngine.put("toolEffect", true);
+        effectEngine.put("capabilityToken", true);
+        effectEngine.put("hmacConfirmToken", opsPepProperties != null && opsPepProperties.isEnabled());
+        effectEngine.put("pepPipeline", opsPepProperties != null && opsPepProperties.isEnabled());
+        effectEngine.put("evidenceContract", true);
+        effectEngine.put("sessionRiskBudget", true);
+        effectEngine.put("planEffectGate", true);
+        effectEngine.put("policyReplay", true);
+        effectEngine.put("governanceHardCover", true);
+        effectEngine.put("opsShield", opsShieldService != null);
+        effectEngine.put("sandbox", sandboxExecutor != null && sandboxExecutor.sandboxActive());
+        effectEngine.put("bwrap", bwrapCommandBuilder != null && bwrapCommandBuilder.isAvailable());
+        effectEngine.put("rootHelper", rootHelperClient != null && rootHelperClient.isConfigured());
+        effectEngine.put("yamlSkills", skillCatalogLoader != null && !skillCatalogLoader.all().isEmpty());
+        effectEngine.put("injectionSidecar",
+                injectionGuardProperties != null && injectionGuardProperties.isSidecarEnabled());
+        body.put("effectEngine", effectEngine);
         body.put("layers", buildLayers(probes));
         body.put("probes", probes);
         body.put("adversarialSuite", adversarialSuiteHints());
@@ -223,6 +262,16 @@ public class SecuritySelfCheckService {
         cfg.put("runAsUser", minPrivilegeExecutor.getRunAsUser());
         cfg.put("mutatingCommandDetectSample",
                 opsDryRunProperties.looksLikeMutatingCommand(List.of("systemctl", "restart", "nginx")));
+        if (opsPepProperties != null) {
+            cfg.put("pepEnabled", opsPepProperties.isEnabled());
+            cfg.put("recycleTtlDays", opsPepProperties.getRecycleTtlDays());
+        }
+        if (sandboxExecutor != null) {
+            cfg.put("sandboxActive", sandboxExecutor.sandboxActive());
+        }
+        if (skillCatalogLoader != null) {
+            cfg.put("yamlSkillCount", skillCatalogLoader.all().size());
+        }
         return cfg;
     }
 
@@ -240,6 +289,10 @@ public class SecuritySelfCheckService {
                 "多步工具调用按效果闭包裁决，防止单步放行、组合危险。"));
         layers.add(layer("exec", "命令执行护栏",
                 "最小权限用户执行；全局演练模式开启时写操作仅返回模拟结果。"));
+        layers.add(layer("pep", "PEP 执行管线",
+                "策略→预览→HMAC 确认→唯一写入口；对标 NimbusOps confirm_token。"));
+        layers.add(layer("sandbox", "bwrap 沙箱",
+                "OpsShield + bwrap 隔离 + Root Helper 受限提权。"));
         for (Map<String, Object> layer : layers) {
             String id = (String) layer.get("id");
             int lp = 0;

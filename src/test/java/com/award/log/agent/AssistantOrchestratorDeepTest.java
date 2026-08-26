@@ -1,5 +1,7 @@
 package com.award.log.agent;
 
+import com.award.log.agent.skill.SkillCatalogLoader;
+import com.award.log.agent.skill.SkillRoutingAdvisor;
 import com.award.log.agent.awm.WorkflowExecutionService;
 import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowRetriever;
@@ -90,7 +92,9 @@ class AssistantOrchestratorDeepTest {
                 workflowInductionService,
                 new TestRuntimePlatform(false),
                 new TestTimeSource(1_500L),
-                new TestTraceIdGenerator("trace-assistant-deep"));
+                new TestTraceIdGenerator("trace-assistant-deep"),
+                new DiagnosisConfidenceGate(),
+                new SkillRoutingAdvisor(new SkillCatalogLoader()));
         ReflectionTestUtils.setField(orchestrator, "logCleanDays", 30);
         ReflectionTestUtils.setField(orchestrator, "tempCleanDays", 7);
         ReflectionTestUtils.setField(orchestrator, "diskPressurePercent", 80.0);
