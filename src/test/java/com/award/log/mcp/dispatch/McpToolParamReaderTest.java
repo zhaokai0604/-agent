@@ -43,8 +43,8 @@ class McpToolParamReaderTest {
         McpToolParamReader.forceConfirmedWriteToolParams("CleanTempTool", params);
         assertEquals(false, params.get("dryRun"));
         assertEquals(true, params.get("confirmDelete"));
-        assertEquals(true, params.get("removeDirectory"));
-        assertEquals(0, params.get("days"));
+        assertNull(params.get("removeDirectory"));
+        assertNull(params.get("days"));
     }
 
     @Test

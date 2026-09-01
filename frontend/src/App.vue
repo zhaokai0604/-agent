@@ -384,17 +384,17 @@ const contextDrawerOpen = ref(false)
 
 const tabConfig = {
 
-  'ops-chat': { label: '运维对话', component: OpsChatInterface, icon: ChatLineSquare },
+  'ops-chat': { label: '运维助手', component: OpsChatInterface, icon: ChatLineSquare },
 
-  'agent-skills': { label: '工具与技能', component: AgentSkillsPage, icon: Grid },
+  'agent-skills': { label: '运维工具与诊断', component: AgentSkillsPage, icon: Grid },
 
-  'mcp-tools': { label: 'MCP 工具台', component: ToolConsole, icon: Connection },
+  'mcp-tools': { label: '运维工具台', component: ToolConsole, icon: Connection },
 
   audit: { label: '统一审计中心', component: AuditCenter, icon: List },
 
   'ops-audit-trace': { label: '统一审计中心', component: AuditCenter, icon: List },
 
-  'ops-trace': { label: 'AWM 记忆与链路', component: OpsTraceCenter, icon: Collection },
+  'ops-trace': { label: '任务链路与历史复盘', component: OpsTraceCenter, icon: Collection },
 
 
   'security-cockpit': { label: '安全驾驶舱', component: SecurityCockpit, icon: Lock },
@@ -682,6 +682,8 @@ function handleOpsNavigateAgent(event) {
 
 function handleSelect(key) {
 
+  window.dispatchEvent(new CustomEvent('ops-route-changing'))
+
   activeTab.value = key
 
   if (isMobile.value) {
@@ -695,7 +697,7 @@ function handleSelect(key) {
 
 
 function handleAgentNewChat() {
-
+  window.dispatchEvent(new CustomEvent('ops-agent-session-changing'))
   createSession()
 
   activeTab.value = 'ops-chat'
@@ -705,7 +707,7 @@ function handleAgentNewChat() {
 
 
 function handleSelectSession(id) {
-
+  window.dispatchEvent(new CustomEvent('ops-agent-session-changing'))
   switchSession(id)
 
   activeTab.value = 'ops-chat'
@@ -715,7 +717,7 @@ function handleSelectSession(id) {
 
 
 function handleDeleteSession(id) {
-
+  window.dispatchEvent(new CustomEvent('ops-agent-session-changing'))
   deleteSession(id)
 
 }

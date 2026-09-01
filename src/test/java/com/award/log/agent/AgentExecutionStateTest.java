@@ -24,10 +24,13 @@ class AgentExecutionStateTest {
                 workflow()
         );
 
-        assertEquals("plan", state.get("phase"));
+        assertEquals("approval", state.get("phase"));
         assertEquals(Boolean.TRUE, state.get("awaitingConfirm"));
+        assertEquals(Boolean.TRUE, state.get("awaitingApproval"));
+        assertTrue(String.valueOf(state.get("loopContract")).contains("recover"));
         assertTrue(((List<?>) state.get("pendingWriteTools")).contains("LogCleanupTool"));
         assertNotNull(state.get("phaseTrail"));
+        assertEquals(7, ((List<?>) state.get("remediationChain")).size());
     }
 
     @Test

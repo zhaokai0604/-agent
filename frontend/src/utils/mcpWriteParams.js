@@ -33,10 +33,7 @@ export function applyMcpWriteConfirmParams(toolName, parameters, userMessage) {
   if (toolName === 'CleanTempTool' || toolName === 'LogCleanupTool') {
     p.dryRun = false
     p.confirmDelete = true
-    if (toolName === 'CleanTempTool' && isTempSubpath(p.path)) {
-      p.removeDirectory = true
-      p.days = 0
-    }
+    // 不在确认阶段擅自把 Temp 子路径升级为 removeDirectory；仅保留预览已显式传入的值
   } else if (toolName === 'DiskOpsTool' && ['clean-temp', 'clean', 'cleanup'].includes(op)) {
     p.dryRun = false
     p.confirmDelete = true
@@ -73,19 +70,21 @@ export function extractCleanTempParamsFromMessage(message) {
   const pathMatch = message.match(/\/[\w\/.-]+/)
   if (pathMatch) {
     params.path = pathMatch[0]
-    params.removeDirectory = DELETE_UTTERANCE_RE.test(message)
   }
+  // 仅显式「整目录」意图才开 removeDirectory，禁止因「清理」误升级
+  const wholeDir = /整个目录|整目录|递归删除|删除该目录|删掉该目录|remove\s*directory/i.test(message || '')
+  params.removeDirectory = wholeDir && isTempSubpath(params.path)
   const daysMatch = message.match(/(\d+)\s*天/)
   if (daysMatch) {
     params.days = parseInt(daysMatch[1], 10)
   } else {
     params.days = params.removeDirectory ? 0 : 7
   }
-  const wantRealDelete = REAL_WRITE_RE.test(message) || DELETE_UTTERANCE_RE.test(message)
+  const wantRealDelete = REAL_WRITE_RE.test(message)
   const wantPreview = lowerMsg.includes('预览') || lowerMsg.includes('dry-run')
   params.dryRun = wantPreview || !wantRealDelete
   params.confirmDelete = wantRealDelete && !wantPreview
-  if (params.removeDirectory && isTempSubpath(params.path)) {
+  if (params.removeDirectory) {
     params.days = 0
   }
   return params

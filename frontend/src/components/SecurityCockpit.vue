@@ -2,7 +2,7 @@
   <div class="sec-cockpit">
     <OpsPageHeader
       title="安全驾驶舱"
-      subtitle="效果语义 · 能力凭证 · 治理硬覆盖 · 计划效果图 · 策略回放（不执行系统命令）"
+      subtitle="安全策略检查、处置计划预览与安全测试；所有模拟均不执行系统命令。"
     >
       <template #actions>
         <el-button type="primary" :loading="loadingSelfCheck" @click="runSelfCheck">运行安全自检</el-button>
@@ -87,7 +87,7 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="策略回放" name="replay">
+        <el-tab-pane label="策略模拟" name="replay">
           <el-form :inline="true" class="replay-form" @submit.prevent>
             <el-form-item label="工具">
               <el-input v-model="replayForm.toolName" placeholder="如 ServiceRestartTool" style="width: 200px" />
@@ -146,12 +146,15 @@
               </template>
             </el-table-column>
           </el-table>
-          <pre v-if="replayResult" class="json-box">{{ pretty(replayResult) }}</pre>
+          <el-empty
+            v-if="replayResult && !replayEffect"
+            description="本次模拟未产生可展示的处置对象，请检查工具与目标参数。"
+          />
         </el-tab-pane>
 
-        <el-tab-pane label="计划效果图" name="plan">
-          <p class="muted plan-hint">演示：先观测 /etc，再清理 /tmp（组合风险应 NEED_CONFIRM）</p>
-          <el-button type="primary" :loading="loadingPlan" @click="runPlanDemo">运行组合样例</el-button>
+        <el-tab-pane label="处置计划预览" name="plan">
+          <p class="muted plan-hint">模拟多步骤处置的风险与确认要求，不会执行系统命令。</p>
+          <el-button type="primary" :loading="loadingPlan" @click="runPlanDemo">生成计划预览</el-button>
           <el-alert
             v-if="planResult?.planDecision"
             class="mb-12"
@@ -201,10 +204,14 @@
               </el-tag>
             </div>
           </div>
-          <pre v-if="planResult" class="json-box">{{ pretty(planResult) }}</pre>
+          <el-empty v-if="!planResult" description="生成计划预览后显示每一步的风险和策略结论" />
         </el-tab-pane>
 
-        <el-tab-pane label="对抗样例" name="adversarial">
+        <el-tab-pane label="安全测试样例" name="adversarial">
+          <div class="replay-form">
+            <el-button type="primary" :loading="loadingAdversarial" @click="runAllAdversarial">运行可执行样例</el-button>
+            <span class="muted">样例仅验证策略与风险判断，不执行系统命令。</span>
+          </div>
           <el-table :data="adversarialRows" size="small" stripe>
             <el-table-column prop="title" label="场景" width="140" />
             <el-table-column prop="id" label="ID" width="80" />
@@ -247,7 +254,7 @@
 
 <script setup>
 /**
- * 安全驾驶舱：策略快照、一键自检、单工具/计划效果图回放与治理对比。
+ * 安全驾驶舱：策略快照、一键自检、单工具模拟与处置计划预览。
  * 探针走真实安全门，不执行系统命令。
  */
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -255,6 +262,7 @@ import { ElMessage } from 'element-plus'
 import OpsPageHeader from './OpsPageHeader.vue'
 import {
   compareSecurityPolicy,
+  getPlatformInfo,
   getSecurityPolicySnapshot,
   getSecuritySelfCheck,
   replaySecurityPlan,
@@ -266,10 +274,12 @@ const loadingSelfCheck = ref(false)
 const loadingReplay = ref(false)
 const loadingCompare = ref(false)
 const loadingPlan = ref(false)
+const loadingAdversarial = ref(false)
 const snapshot = ref(null)
 const selfCheck = ref(null)
 const replayResult = ref(null)
 const planResult = ref(null)
+const platformInfo = ref(null)
 const adversarialResults = reactive({})
 const activePane = ref('probes')
 
@@ -286,8 +296,8 @@ const capabilityItems = computed(() => {
     ['capabilityToken', '能力凭证 Token'],
     ['evidenceContract', '证据契约'],
     ['sessionRiskBudget', '会话风险预算'],
-    ['planEffectGate', '计划效果图'],
-    ['policyReplay', '策略回放'],
+    ['planEffectGate', '处置计划预览'],
+    ['policyReplay', '策略模拟'],
     ['governanceHardCover', '治理硬覆盖']
   ]
   return defs.map(([key, label]) => ({ key, label, on: eng[key] !== false }))
@@ -396,6 +406,16 @@ function buildParams() {
   return { path: target || '/tmp', dryRun: true }
 }
 
+function isWindowsPlatform() {
+  const platform = platformInfo.value?.platform || platformInfo.value || {}
+  const value = `${platform.osName || platform.os || platform.family || ''}`.toLowerCase()
+  return value.includes('win')
+}
+
+async function loadPlatform() {
+  platformInfo.value = await getPlatformInfo().catch(() => null)
+}
+
 async function loadSnapshot() {
   loadingSnapshot.value = true
   try {
@@ -460,9 +480,10 @@ async function runCompare() {
 async function runPlanDemo() {
   loadingPlan.value = true
   try {
+    const windows = isWindowsPlatform()
     planResult.value = await replaySecurityPlan([
-      { toolName: 'DiskTool', parameters: { path: '/etc' } },
-      { toolName: 'CleanTempTool', parameters: { path: '/tmp/cache', dryRun: false, confirmDelete: true } }
+      { toolName: 'DiskTool', parameters: { path: windows ? 'C:/Windows/Logs' : '/var/log' } },
+      { toolName: 'CleanTempTool', parameters: { path: windows ? 'C:/Temp' : '/tmp/cache', dryRun: false, confirmDelete: true } }
     ])
   } catch (e) {
     ElMessage.error(e?.message || '计划裁决失败')
@@ -501,9 +522,21 @@ async function quickAdversarial(row) {
   }
 }
 
+async function runAllAdversarial() {
+  loadingAdversarial.value = true
+  try {
+    const runnable = adversarialRows.value.filter(row => ['sshd', 'inj', 'plan'].includes(row.id))
+    for (const row of runnable) await quickAdversarial(row)
+    ElMessage.success(`已完成 ${runnable.length} 个可执行安全样例`)
+  } catch (e) {
+    ElMessage.error(e?.message || '安全样例运行失败')
+  } finally {
+    loadingAdversarial.value = false
+  }
+}
+
 onMounted(async () => {
-  await loadSnapshot()
-  await runSelfCheck()
+  await Promise.all([loadSnapshot(), runSelfCheck(), loadPlatform()])
 })
 </script>
 

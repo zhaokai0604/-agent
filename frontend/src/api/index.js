@@ -78,6 +78,7 @@ function buildApiError(message, data) {
   const wrapped = new Error(message || '请求失败')
   wrapped.securityCode = data?.securityCode
   wrapped.raw = data
+  wrapped.status = data?.status ?? data?.statusCode
   return wrapped
 }
 
@@ -167,6 +168,7 @@ export const downloadReport = (taskId, type) =>
 
 // 用户管理相关接口
 export const login = (user) => managementRequest.post('/admin/user/login', user)
+export const loginWithApiKey = (apiKey) => managementRequest.post('/admin/user/key-login', { apiKey })
 export const logout = () => managementRequest.post('/admin/user/logout')
 export const register = (user) => request.post('/admin/user/register', user)
 // DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
@@ -201,8 +203,8 @@ export const getPatrolCorrelationLatest = (config = {}) =>
 export const getPatrolRemediationPending = (config = {}) =>
   managementRequest.get('/api/ops/patrol/remediation/pending', config)
 
-export const confirmPatrolRemediation = (proposalId, confirmCode = '确认执行') =>
-  managementRequest.post('/api/ops/patrol/remediation/confirm', { proposalId, confirmCode })
+export const confirmPatrolRemediation = (proposalId, confirmCode = '确认执行', config = {}) =>
+  managementRequest.post('/api/ops/patrol/remediation/confirm', { proposalId, confirmCode }, config)
 
 export const getPatrolRemediationCoverage = (config = {}) =>
   managementRequest.get('/api/ops/patrol/remediation/coverage', config)
@@ -419,6 +421,8 @@ export const getAuditDetail = ({ entryId = '', traceId = '' } = {}) =>
       ...(traceId ? { traceId } : {})
     }
   })
+export const getAccessAuditSummary = (hours = 24, granularity = 'hour') =>
+  managementRequest.get('/api/audit/access/summary', { params: { hours, granularity } })
 
 export const getOpsTraceRecent = (limit = 100, config = {}) =>
   managementRequest.get('/api/ops-trace/recent', { ...config, params: { ...(config.params || {}), limit } })

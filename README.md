@@ -1,15 +1,23 @@
 # ThreshCore / award-log
 
-ThreshCore 是一个面向企业运维的日志分析与可控 Agent 平台，整合日志诊断、主机巡检、MCP 工具调用、风险门控、自动处置、审计追踪和知识记忆。
+ThreshCore 是 **受控处置运行时（Controlled Remediation Runtime）**：在工具白名单、参数校验、风险门控、人工确认、结果验证与可恢复边界内，完成运维写操作闭环。
 
-项目重点不是让模型获得一个无限制终端，而是让 Agent 在明确的工具白名单、参数校验、风险分级、人工确认和结果验证边界内完成运维任务。
+```text
+Plan → Preview → Approval → Execute → Verify → Recover → Audit
+```
+
+聊天、巡检、日志分析、知识库、安全信号是**入口或证据来源**，不与运行时平级。设计取舍只问一句：是否直接提高「**敢执行、能证明、能恢复**」？
+
+当前主线不是继续加能力面，而是把少数高频场景封成可证明样板。对照表见 [`docs/product/五场景受控处置闭环对照表.md`](docs/product/五场景受控处置闭环对照表.md)。
 
 ## 当前状态
 
 | 项目 | 说明 |
 |---|---|
-| **产品阶段** | **V1 产品化封口**（单机 Agent）；多机联邦 / 网安扫描包列入 v2，暂不改架构 |
+| **产品定位** | 受控处置运行时 + 运维入口；非「功能平铺的 Agent 平台」 |
+| **产品阶段** | **V1 产品化封口**（单机）；主线 = 五场景闭环封核；多机联邦 / 扫描包不进当前架构 |
 | 封口清单 | [`docs/product/V1-产品化封口清单.md`](docs/product/V1-产品化封口清单.md) |
+| 闭环对照 | [`docs/product/五场景受控处置闭环对照表.md`](docs/product/五场景受控处置闭环对照表.md) |
 | **封口验证（2026-08-26）** | `mvn verify` **通过**（782 用例，JaCoCo **60.4%**）；前端 `build` 通过；本机 Golden Path 冒烟 **通过** |
 | 后端 | Java 17、Spring Boot、MyBatis、Spring AI |
 | 前端 | Vue 3、Vite、Element Plus、ECharts |
@@ -20,38 +28,31 @@ ThreshCore 是一个面向企业运维的日志分析与可控 Agent 平台，�
 | 可选依赖 | Qdrant、Elasticsearch、Kafka、Redis |
 | 主要入口 | `http://localhost:3000` 或 `http://localhost:8088/award-log/` |
 
-## 功能说明
+## 能力分层
 
-| 功能 | 使用入口 | 核心实现 | 备注 |
+| 层级 | 内容 | 核心实现 | 备注 |
 |---|---|---|---|
-| 日志分析 | 前端“日志分析” | `LogAnalysisController`、`LogAnalysisService` | 支持上传、解析、异常识别、报告和导出 |
-| Agent 对话 | 前端“Agent 对话” | `AssistantOrchestrator`、`OpsRuntimeService` | 先识别意图，再选择 Playbook、Skill 和工具 |
-| 主机巡检 | 前端“巡检” | `OpsPatrolController`、`OpsPatrolService` | 汇总磁盘、CPU、内存、进程、服务和网络状态 |
-| 自动处置 | 巡检结果或 Agent 对话 | `OpsAutoRemediationService` | 生成方案后按风险决定自动执行、确认或阻断 |
-| MCP 工具 | 前端“MCP 工具控制台” | `McpToolCatalog`、`McpToolDispatcher` | 工具注册、参数解析、统一调用和结果标准化 |
-| 安全门控 | 所有写操作 | `McpInvocationSecurityGate`、`OpsGovernanceService` | 默认只读；高风险操作需要确认或直接阻断 |
-| 审计追踪 | “审计”“运维链路” | `AuditController`、`OpsTraceController` | 保存用户、Agent、工具、参数摘要、风险和执行结果 |
-| AWM 记忆 | “工作流记忆” | `WorkflowMemoryService`、`WorkflowInductionService` | 只沉淀验证成功的处置流程，供后续任务复用 |
-| Reflexion | “安全教训” | `FailureInsightService` | 保存拦截、失败、证据不足和后续改进建议 |
-| 知识库 RAG | “知识库” | `KnowledgeController`、`KnowledgeBaseService` | 文档切分、向量检索和历史案例辅助诊断 |
-| 安全信号 | 安全态势相关页面 | `SecuritySignalService` | 接收、归一化和汇总网络、主机及进程类信号 |
-| 系统配置 | “系统配置” | `SystemConfigController`、配置类 | 集中管理路径、风险、巡检和自动处置策略 |
-| 效果评估 | “运维效果” | `OpsEffectDashboardService` | 对处置前后指标、执行质量和恢复结果进行对比 |
+| **运行时（主链）** | 预览 → 确认 → 执行 → 验证 → 恢复 → 审计 | `OpsExecutionPipeline`、门控、回收站、效果评估 | 写操作唯一真相源；验证是卖点不是可选项 |
+| 编排入口 | Agent 对话、巡检续办 | `AssistantOrchestrator`、`AutonomousOpsOrchestrator` | 只挂到运行时，不另起验证语义 |
+| 证据 / 入口 | 日志分析、主机巡检、本机指标 | `LogAnalysisService`、`OpsPatrolService`、Disk/Load 等工具 | 服务诊断与提案，不单独扩张为数据平台 |
+| 运行时配套 | 窄 AWM、Reflexion | `WorkflowMemoryService`、`FailureInsightService` | 仅验证成功 / 失败教训；冻结知识中台式扩张 |
+| 暂降级扩张 | RAG、安全信号大盘 | `KnowledgeBaseService`、`SecuritySignalService` | 保留可用，当前主线不扩 |
 
-更完整的功能备注见 [`docs/功能说明.md`](docs/功能说明.md)。
+样板场景（封核对象）：磁盘空间处置、临时文件清理、日志清理、服务重启、巡检续办。详见闭环对照表。
+
+更完整的模块备注见 [`docs/功能说明.md`](docs/功能说明.md)。
 
 ## 系统架构
 
 ```text
-用户 / 告警 / 日志
+入口（对话 / 巡检 / 日志 / 告警）
         ↓
-前端控制台与 API
+编排（意图 → Playbook / Skill）
         ↓
-意图识别 → Agent 编排 → Skill / Playbook
+受控处置运行时
+  Plan → Preview → Approval → Execute → Verify → Recover → Audit
         ↓
-MCP 工具目录 → 参数校验 → 风险门控 → 执行
-        ↓
-结果验证 → 审计追踪 → AWM / Reflexion / RAG
+配套（窄 AWM / Reflexion；RAG 与信号不进主扩）
 ```
 
 后端主要目录：
@@ -162,9 +163,10 @@ npm run dev
 
 - 工具必须注册后才能被调用。
 - 参数、路径、权限和风险等级会在执行前检查。
-- 只读查询优先自动执行，写操作默认先预览。
-- 中风险操作需要用户确认，高风险或不可回滚操作直接阻断。
-- 执行结果必须进入审计链路，并尽可能进行前后状态验证。
+- 只读查询优先自动执行，写操作默认先预览再确认。
+- 中风险操作需要确认，高风险或不可恢复操作须明确标注或直接阻断。
+- 写操作必须进入审计链路；**执行后验证是核心约束**（预期变化对照、失败为明确状态），不是「尽可能」的增强项。
+- 可逆删除走回收站恢复；编排层写路径不得绕过 `OpsExecutionPipeline`。
 - 不要把真实密钥、生产配置、用户数据或运行时目录提交到 Git。
 
 ## V1 封口验证与冒烟
@@ -227,6 +229,7 @@ JaCoCo 报告：`target/site/jacoco/index.html`。
 
 ## 项目文档
 
+- [五场景受控处置闭环对照表](docs/product/五场景受控处置闭环对照表.md)（当前主线）
 - [V1 产品化封口清单](docs/product/V1-产品化封口清单.md)
 - [功能说明](docs/功能说明.md)
 - [部署文档](docs/deployment/部署文档.md)
@@ -236,7 +239,8 @@ JaCoCo 报告：`target/site/jacoco/index.html`。
 
 ## 维护规则
 
-- 源码变更同步更新对应功能备注。
+- 新增能力先过「敢执行、能证明、能恢复」过滤器；通不过则不进主线。
+- 源码变更同步更新对应功能备注与闭环对照表（若触及五场景）。
 - 新增 API、工具或前端页面时，补充 `docs/功能说明.md`。
 - 修改端口、环境变量、启动步骤时，同步更新 README。
 - 生成物、缓存、日志、测试结果和本地运行目录不进入仓库。

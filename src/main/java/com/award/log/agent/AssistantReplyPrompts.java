@@ -193,9 +193,9 @@ public final class AssistantReplyPrompts {
         if (AgentSkillPlan.hasWriteTools(plannedTools)) {
             return """
 
-                ## 本轮阶段：诊断 + 计划（写工具未挂载）
-                - **本轮系统仅挂载观测类工具**，无法调用清理/重启等写工具
-                - 用 DiskTool / DiskAnalyzeTool / ProcessTool / SystemLoadTool 等采集事实
+                ## 本轮阶段：诊断 + 计划（写工具仅预览）
+                - **本轮系统禁止真实写入，写工具未挂载为真实执行权限**；如需具体处置预览，可调用清理/重启等写工具，它们会被安全适配器强制为 dry-run 并登记待确认票据
+                - 用 DiskTool / DiskAnalyzeTool / ProcessTool / SystemLoadTool 等采集事实，再按需调用写工具生成预览
                 - 待确认的写步骤：""" + (pending.isBlank() ? "见处置计划" : pending) + """
 
                 - 答复须含处置计划，并明确提示用户回复「确认执行」后系统才会挂载写工具并落地

@@ -100,6 +100,11 @@ public final class WriteToolResultSupport {
         if (root == null) {
             return false;
         }
+        // A bare success envelope is only an acknowledgement; it contains no
+        // evidence that a write actually reached the target system.
+        if (bareSuccessfulEnvelope(root)) {
+            return false;
+        }
         JsonNode data = parseDataNode(root);
         if (data == null || data.isNull()) {
             // 无业务 data 时：不再把空信封 {"success":true} 当成写落地
@@ -184,6 +189,7 @@ public final class WriteToolResultSupport {
         return root != null
                 && root.isObject()
                 && root.path("success").asBoolean(false)
+                && !root.has("data")
                 && root.path("error").asText("").isBlank();
     }
 
@@ -253,20 +259,50 @@ public final class WriteToolResultSupport {
     }
 
     private static JsonNode parseDataNode(JsonNode root) {
-        if (root == null) {
-            return null;
-        }
-        JsonNode data = root.get("data");
-        if (data == null) {
-            return root.isObject() && root.has("success") ? null : root;
-        }
-        if (data.isTextual()) {
-            try {
-                return MAPPER.readTree(data.asText());
-            } catch (Exception e) {
-                return data;
+        return unwrapBusinessData(root);
+    }
+
+    /**
+     * 解开 ToolResult 双层信封：{@code {success,data:"{mode:...}"}} → 业务 data 对象。
+     * 管线里常见把整段 ToolResult JSON 字符串塞进 exec.data，验证器必须二次展开。
+     */
+    public static JsonNode unwrapBusinessData(JsonNode node) {
+        JsonNode cur = node;
+        for (int depth = 0; depth < 5 && cur != null; depth++) {
+            if (cur.isTextual()) {
+                String raw = cur.asText();
+                if (raw == null || raw.isBlank()) {
+                    return cur;
+                }
+                try {
+                    cur = MAPPER.readTree(raw.trim());
+                    continue;
+                } catch (Exception e) {
+                    return cur;
+                }
             }
+            if (!cur.isObject()) {
+                return cur;
+            }
+            boolean looksLikeToolEnvelope = cur.has("success")
+                    && cur.has("data")
+                    && !cur.has("mode")
+                    && !cur.has("filesDeleted")
+                    && !cur.has("filesFound")
+                    && !cur.has("service")
+                    && !cur.has("unit");
+            if (looksLikeToolEnvelope) {
+                cur = cur.get("data");
+                continue;
+            }
+            return cur;
         }
-        return data;
+        return cur;
+    }
+
+    /** 从任意工具回执（字符串或已解析节点）取出业务 data 对象。 */
+    public static JsonNode businessDataFromToolPayload(String toolPayload) {
+        JsonNode root = parseRoot(toolPayload);
+        return unwrapBusinessData(root);
     }
 }

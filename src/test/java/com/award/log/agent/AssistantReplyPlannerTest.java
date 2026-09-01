@@ -65,9 +65,17 @@ class AssistantReplyPlannerTest {
 
     @Test
     void confirmRemediationFlagShouldRouteToToolAgent() {
-        var plan = planner.plan("好的", null, true, true, true, null);
+        var plan = planner.plan("确认执行清理临时文件", null, true, true, true, null);
         assertEquals(AssistantIntentCategory.CONFIRM_WRITE, plan.category());
         assertTrue(plan.useToolAgentPath());
+    }
+
+    @Test
+    void confirmRemediationFlagMustNotOverrideGreeting() {
+        var plan = planner.plan("你好", null, true, true, true, null);
+        assertEquals(AssistantReplyMode.CHITCHAT, plan.mode());
+        assertEquals(AssistantIntentCategory.GREETING, plan.category());
+        assertFalse(plan.useToolAgentPath());
     }
 
     @Test

@@ -36,7 +36,7 @@
 | DELETE | `/log/delete/{taskId}` | 删除任务 |
 | POST/GET | `/log/diagnose/chat`、`/log/diagnose/stream/{taskId}` | 诊断 SSE（AiDiagnosis） |
 
-### 1.3 统一助手 / MCP 工具台
+### 1.3 运维助手 / 运维工具台
 
 | 方法 | 路径 | 用途 |
 |------|------|------|

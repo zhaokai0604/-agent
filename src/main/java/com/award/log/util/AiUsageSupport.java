@@ -49,10 +49,16 @@ public final class AiUsageSupport {
         out.put("profile", profile == null ? "default" : profile);
         out.put("model", model == null ? "" : model);
         out.put("promptTokens", inputTokens);
+        // Context-window utilization is about the input that must fit before generation.
+        // Keep totalTokens for billing/diagnostics, but do not use it as the context size.
+        out.put("contextTokens", inputTokens);
         out.put("completionTokens", outputTokens);
         out.put("totalTokens", totalTokens);
         out.put("contextWindow", window);
+        out.put("contextUtilizationPct", Math.round(inputTokens * 10000.0 / window) / 100.0);
+        // Preserve the legacy total-usage metric for consumers that use it for accounting.
         out.put("utilizationPct", Math.round(totalTokens * 10000.0 / window) / 100.0);
+        out.put("overLimitTokens", Math.max(0, inputTokens - window));
         out.put("source", prompt != null || completion != null || total != null ? "provider" : "estimated");
         return out;
     }

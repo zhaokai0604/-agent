@@ -61,6 +61,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = normalizedPath(request);
         return path.startsWith("/admin/user/login")
+                || path.startsWith("/admin/user/key-login")
                 || path.startsWith("/admin/user/register")
                 || path.startsWith("/admin/user/check-user");
     }

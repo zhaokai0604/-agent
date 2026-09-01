@@ -5,6 +5,7 @@ import com.award.log.mcp.WriteToolResultSupport;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * 记录对话 ChatClient 本轮实际调用的 MCP 工具结果，用于拦截「未执行却声称已落地」的幻觉回复。
@@ -18,6 +19,7 @@ public final class ChatToolExecutionTracker {
     }
 
     private static final ThreadLocal<List<ToolInvocation>> INVOCATIONS = ThreadLocal.withInitial(ArrayList::new);
+    private static final ThreadLocal<Map<String, Object>> PENDING_CONFIRMATION = new ThreadLocal<>();
 
     private ChatToolExecutionTracker() {
     }
@@ -45,6 +47,22 @@ public final class ChatToolExecutionTracker {
 
     public static void clear() {
         INVOCATIONS.remove();
+        PENDING_CONFIRMATION.remove();
+    }
+
+    public static void recordPendingConfirmation(Map<String, Object> body) {
+        if (body == null || body.isEmpty()) return;
+        Map<String, Object> safe = new java.util.LinkedHashMap<>();
+        for (String key : List.of("confirmationId", "capabilityToken", "confirmToken",
+                "dryRunPreviewHash", "expiresAtMs", "toolName", "expectedEffect", "recover")) {
+            if (body.containsKey(key)) safe.put(key, body.get(key));
+        }
+        if (!safe.isEmpty()) PENDING_CONFIRMATION.set(Map.copyOf(safe));
+    }
+
+    public static Map<String, Object> pendingConfirmation() {
+        Map<String, Object> value = PENDING_CONFIRMATION.get();
+        return value == null ? Map.of() : Map.copyOf(value);
     }
 
     /** @deprecated 使用 {@link #hasSuccessfulRealWrite()} */

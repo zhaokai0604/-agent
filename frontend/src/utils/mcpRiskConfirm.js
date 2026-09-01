@@ -24,6 +24,21 @@ export function buildMcpRiskConfirmMessage(result) {
     const target = [te.targetType, te.targetId].filter(Boolean).join(':')
     parts.push(`效果对象：${action}${target ? ' → ' + target : ''}（不可逆 ${te.irreversibility ?? '?'}）`)
   }
+  const expected = result.expectedEffect || result.remediationContract?.expectedEffect
+  if (expected && typeof expected === 'object' && expected.description) {
+    parts.push(`预期变化：${expected.description}`)
+  }
+  const recover = result.recover || result.remediationContract?.recover
+  if (recover && typeof recover === 'object') {
+    if (recover.reversible === false && recover.irreversibilityNote) {
+      parts.push(`不可逆说明：${recover.irreversibilityNote}`)
+    } else if (recover.reversible === true && recover.recoverHint) {
+      parts.push(`恢复入口：${recover.recoverHint}`)
+    }
+  }
+  if (result.irreversibleWarning) {
+    parts.push(String(result.irreversibleWarning))
+  }
   if (parts.length === 0) {
     return '该操作存在风险，需在界面二次确认后执行（等同口令「确认执行」）。'
   }

@@ -162,6 +162,7 @@ import { useComposerRouteHint } from '../composables/useComposerRouteHint'
 import { useAgentSession } from '../composables/useAgentSession'
 import {
   assistantChatStream,
+  confirmMcpExecute,
   captureOpsFailureInsight,
   getPatrolRemediationPending,
   getAssistantModels
@@ -307,6 +308,7 @@ onMounted(() => {
   refreshPatrolPending()
   patrolPollTimer = setInterval(refreshPatrolPending, 120000)
   window.addEventListener('ops-patrol-pending-change', handlePatrolPendingEvent)
+  window.addEventListener('ops-agent-session-changing', stopGeneration)
 })
 
 async function loadModelProfiles () {
@@ -519,11 +521,15 @@ function applySseToAssistant (assistantMsg, payload) {
         if (Array.isArray(event.observeTools)) msg.observeTools = event.observeTools
         if (event.awaitingConfirm != null) msg.awaitingConfirm = !!event.awaitingConfirm
         if (event.writeToolsMounted != null) msg.writeToolsMounted = !!event.writeToolsMounted
-        if (event.confirmToken || event.dryRunPreviewHash || event.expiresAtMs) {
+        if (event.confirmToken || event.dryRunPreviewHash || event.expiresAtMs
+            || event.expectedEffect || event.irreversibleWarning || event.recover) {
           msg.pepMeta = {
             confirmToken: event.confirmToken || msg.pepMeta?.confirmToken,
             dryRunPreviewHash: event.dryRunPreviewHash || msg.pepMeta?.dryRunPreviewHash,
-            expiresAtMs: event.expiresAtMs || msg.pepMeta?.expiresAtMs
+            expiresAtMs: event.expiresAtMs || msg.pepMeta?.expiresAtMs,
+            expectedEffect: event.expectedEffect || msg.pepMeta?.expectedEffect,
+            recover: event.recover || msg.pepMeta?.recover,
+            irreversibleWarning: event.irreversibleWarning || msg.pepMeta?.irreversibleWarning
           }
         }
         if (!Array.isArray(msg.thinkSteps)) msg.thinkSteps = []
@@ -541,6 +547,14 @@ function applySseToAssistant (assistantMsg, payload) {
             previewOnly: !event.writeConfirmed
           }
         }
+      }
+      const pending = event.pendingConfirmation || event.executionState?.pendingConfirmation
+      if (pending && typeof pending === 'object' && pending.confirmationId) {
+        msg.pepMeta = {
+          ...(msg.pepMeta || {}),
+          ...pending
+        }
+        msg.pendingConfirmation = { ...pending }
       }
       if (event.traceId) msg.traceId = event.traceId
       if (Array.isArray(event.toolsUsed) && event.toolsUsed.length) {
@@ -573,12 +587,18 @@ function contextUsage (msg) {
 }
 
 function formatContextUsage (usage) {
-  const total = Number(usage?.totalTokens)
+  const contextTokens = Number(usage?.contextTokens ?? usage?.promptTokens ?? usage?.totalTokens)
   const window = Number(usage?.contextWindow)
-  const pct = Number(usage?.utilizationPct)
-  if (!Number.isFinite(total) || !Number.isFinite(window)) return '暂无用量'
-  const percent = Number.isFinite(pct) ? pct.toFixed(1) : ((total * 100) / window).toFixed(1)
-  return `${total.toLocaleString()} / ${window.toLocaleString()} tokens (${percent}%)`
+  const pct = Number(usage?.contextUtilizationPct ?? usage?.utilizationPct)
+  if (!Number.isFinite(contextTokens) || !Number.isFinite(window) || window <= 0) return '暂无用量'
+  const estimated = usage?.source === 'estimated'
+  const prefix = estimated ? '预计 ' : ''
+  const overflow = Math.max(0, contextTokens - window)
+  if (overflow > 0) {
+    return `${prefix}${contextTokens.toLocaleString()} / ${window.toLocaleString()} tokens（超出 ${overflow.toLocaleString()}）`
+  }
+  const percent = Number.isFinite(pct) ? pct.toFixed(1) : ((contextTokens * 100) / window).toFixed(1)
+  return `${prefix}${contextTokens.toLocaleString()} / ${window.toLocaleString()} tokens (${percent}%)`
 }
 
 function finalizeAssistantMessage (assistantMsg) {
@@ -644,12 +664,53 @@ const confirmPlanFromMessage = async (index) => {
       prior.awaitingConfirm = false
       prior.meta = { ...(prior.meta || {}), writeConfirmed: true, awaitingConfirm: false }
     }
-    skipRemediationConfirm.value = true
-    const tools = Array.isArray(prior?.plannedTools) ? prior.plannedTools.filter(Boolean) : []
-    inputMessage.value = tools.length
-      ? `确认执行\n请按上一轮计划落地：${tools.join('、')}`
-      : '确认执行'
-    await handleSend()
+    const pep = prior?.pendingConfirmation || prior?.pepMeta
+    if (pep?.confirmationId && pep?.capabilityToken && pep?.confirmToken) {
+      try {
+        const result = await confirmMcpExecute(
+          pep.toolName || prior?.plannedTools?.[0] || '',
+          {},
+          '确认执行',
+          '按上一轮 Agent 预览确认执行',
+          pep.confirmationId,
+          pep.capabilityToken,
+          pep.confirmToken
+        )
+        const toolName = result?.toolName || pep.toolName || prior?.plannedTools?.[0] || '运维工具'
+        const body = result?.body || result
+        const success = body?.success === true
+        messages.value.push({
+          role: 'assistant',
+          content: generateHumanReadableResponse(toolName, body)
+            || (success ? `${toolName} 已完成执行并返回结果。` : `${toolName} 执行失败：${body?.error || '未知错误'}`),
+          timestamp: nowTime(),
+          meta: {
+            replyMode: 'TOOL_AGENT',
+            securityOutcome: success ? 'EXECUTED' : 'FAILED',
+            writeConfirmed: true,
+            verifyOutcome: body?.verifyOutcome,
+            executionState: {
+              remediationClosed: body?.remediationClosed,
+              verified: body?.verified,
+              verifyOutcome: body?.verifyOutcome,
+              recover: body?.recover
+            }
+          }
+        })
+        scrollToBottom()
+        return
+      } catch (error) {
+        messages.value.push({
+          role: 'assistant',
+          content: `确认执行失败：${error?.message || String(error)}`,
+          timestamp: nowTime()
+        })
+        scrollToBottom()
+        return
+      }
+    }
+    ElMessage.warning('本轮还没有可确认的安全预览，请先重新发起一次清理/重启预览。')
+    return
   } catch {
     // cancelled
   } finally {
@@ -676,7 +737,8 @@ const runNaturalLanguageStream = async (message) => {
   try {
     const response = await assistantChatStream(message, history, {
       useToolAgent: !userDeclinesTools(message),
-      confirmRemediation: true,
+      // 仅真实「确认执行」才开写；勿对每句对话硬编码 true（否则「你好」也会进处置 Tool Agent）
+      confirmRemediation: userConfirmedRemediation(message),
       modelProfile: selectedModelProfile.value,
       signal: streamAbortController.signal
     })
@@ -728,6 +790,13 @@ const runNaturalLanguageStream = async (message) => {
       })
     }
     if (!isGenerationCancelled(token)) {
+      // Flush a possible partial UTF-8 code point held by TextDecoder.
+      const decoderTail = decoder.decode()
+      if (decoderTail) {
+        sseBuf = appendSsePayloadFromChunk(sseBuf, decoderTail, (payload) => {
+          applySseToAssistant(assistantMsg, payload)
+        })
+      }
       flushSseBuffer(sseBuf, (payload) => {
         applySseToAssistant(assistantMsg, payload)
       })
@@ -839,6 +908,7 @@ function applyPrefill(text) {
     clearInterval(patrolPollTimer)
   }
   window.removeEventListener('ops-patrol-pending-change', handlePatrolPendingEvent)
+  window.removeEventListener('ops-agent-session-changing', stopGeneration)
   if (speechRecognition) {
     try {
       speechRecognition.stop()

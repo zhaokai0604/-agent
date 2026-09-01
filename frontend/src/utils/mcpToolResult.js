@@ -51,6 +51,13 @@ export function normalizeMcpToolResponse(raw) {
     }
   }
   const riskScore = raw.riskScore != null ? Number(raw.riskScore) : undefined
+  const verifyOutcome = raw.verifyOutcome || raw.verify?.verifyOutcome || ''
+  const verified = raw.verified === true || raw.verify?.verified === true
+  const verifyBlocked = raw.verifyBlocked === true
+  const remediationClosed = raw.remediationClosed === true
+  if (verifyBlocked) {
+    success = false
+  }
   return {
     ...raw,
     success,
@@ -67,8 +74,8 @@ export function normalizeMcpToolResponse(raw) {
     expiresAtMs: raw.expiresAtMs ?? null,
     writeMismatch: raw.writeMismatch === true,
     writeMismatchMessage: raw.writeMismatchMessage,
-    evidenceIncomplete: raw.evidenceIncomplete === true,
-    evidenceMessage: raw.evidenceMessage,
+    evidenceIncomplete: raw.evidenceIncomplete === true || verifyOutcome === 'EVIDENCE_INCOMPLETE',
+    evidenceMessage: raw.evidenceMessage || (verifyOutcome === 'EVIDENCE_INCOMPLETE' ? raw.message || raw.error : undefined),
     evidenceContractId: raw.evidenceContractId,
     evidenceMissingFields: Array.isArray(raw.evidenceMissingFields) ? raw.evidenceMissingFields : [],
     riskScore: Number.isFinite(riskScore) ? riskScore : raw.riskScore,
@@ -78,6 +85,15 @@ export function normalizeMcpToolResponse(raw) {
     warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
     platformSupport: raw.platformSupport && typeof raw.platformSupport === 'object'
       ? raw.platformSupport
-      : null
+      : null,
+    verifyOutcome,
+    verified,
+    verifyBlocked,
+    remediationClosed,
+    expectedEffect: raw.expectedEffect || raw.verify?.expectedEffect || raw.remediationContract?.expectedEffect || null,
+    recover: raw.recover || raw.verify?.recover || raw.remediationContract?.recover || null,
+    approval: raw.approval || raw.remediationContract?.approval || null,
+    irreversibleWarning: raw.irreversibleWarning || '',
+    verifyMessage: raw.verify?.message || (verifyBlocked ? raw.error : '') || ''
   }
 }

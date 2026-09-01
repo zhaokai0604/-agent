@@ -273,6 +273,11 @@ public class LogAnalysisTool extends AbstractCommandExecutor {
                     }
                 }
             } else {
+                // Windows 下无 tail；不可读路径不再尝试 POSIX 命令
+                if (OsRuntime.isWindows()) {
+                    log.debug("Windows 跳过 tail 回退，路径不可按普通文件读取: {}", path);
+                    return lines;
+                }
                 AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(
                         List.of("tail", "-n", String.valueOf(maxLines), path)
                 );

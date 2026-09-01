@@ -27,6 +27,10 @@ public class UnifiedAuditService {
         this.opsAuditTraceService = opsAuditTraceService;
     }
 
+    public Map<String, Object> accessSummary(int hours, String granularity) {
+        return aiAuditLogService.summarizeAccess(hours, granularity);
+    }
+
     public List<Map<String, Object>> feed(int limit, String kind) {
         int capped = Math.max(1, Math.min(limit, 300));
         String normalizedKind = normalizeKind(kind);

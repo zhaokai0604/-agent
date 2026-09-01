@@ -1,8 +1,8 @@
 <template>
   <div class="agent-skills-page">
     <div class="skills-header agent-chat-column">
-      <h1>运维技能</h1>
-      <p>系统工具可在本机执行；AI 分析技能通过大模型做诊断与报告，需配置 AI_API_KEY。</p>
+      <h1>运维工具与诊断</h1>
+      <p>系统工具在本机受控执行；诊断分析会调用模型服务生成报告，需配置模型服务。</p>
     </div>
 
     <el-tabs v-model="activeTab" class="skills-tabs agent-chat-column">
@@ -36,7 +36,7 @@
           <el-input
             v-model="searchQuery"
             clearable
-            placeholder="搜索技能名称或描述…"
+            placeholder="搜索工具名称或说明…"
             :prefix-icon="Search"
             class="skills-search"
           />
@@ -79,29 +79,29 @@
                 :disabled="tool.status !== 'online'"
                 @click="useInChat(tool)"
               >
-                在对话中使用
+                交给助手处理
               </el-button>
             </div>
           </article>
-          <el-empty v-if="!loading && filteredTools.length === 0" description="没有匹配的技能" class="skills-empty" />
+          <el-empty v-if="!loading && filteredTools.length === 0" description="没有匹配的工具" class="skills-empty" />
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="AI 分析技能" name="analysis">
+      <el-tab-pane label="诊断分析" name="analysis">
         <el-alert
           type="info"
           :closable="false"
           show-icon
           class="conn-alert"
-          title="提示词 Skill"
-          description="此处仅调用大模型分析，不执行主机命令。结果依赖 AI_API_KEY 与输入内容质量。"
+          title="模型分析模板"
+          description="此处会调用模型服务生成诊断报告，不执行主机命令；结果取决于输入内容与模型服务状态。"
         />
 
         <div class="skills-toolbar">
           <el-input
             v-model="analysisSearch"
             clearable
-            placeholder="搜索分析技能…"
+            placeholder="搜索诊断分析…"
             :prefix-icon="Search"
             class="skills-search"
           />
@@ -121,7 +121,7 @@
           >
             <div class="analysis-card__head">
               <span class="analysis-category">{{ skill.category }}</span>
-              <span class="analysis-kind">AI</span>
+              <span class="analysis-kind">模型分析</span>
             </div>
             <h3>{{ skill.name }}</h3>
             <p class="skill-desc">{{ skill.description }}</p>
@@ -181,7 +181,7 @@
                 立即分析
               </el-button>
               <el-button size="small" plain @click="useAnalysisInChat(skill)">
-                在对话中使用
+                交给助手处理
               </el-button>
             </div>
           </article>
@@ -199,15 +199,15 @@
           :closable="false"
           show-icon
           class="conn-alert"
-          title="结构化 Skill"
-          description="来自 skills/*.yaml 的运维 SOP：工具链、红线与最小独立信号要求。仅只读展示，执行仍走对话或工具控制台。"
+          title="标准运维流程"
+          description="来自 YAML 文件的运维流程：包含工具链、操作红线与最小验证信号。仅供查看，执行仍走助手或工具控制台。"
         />
 
         <div class="skills-toolbar">
           <el-input
             v-model="yamlSearch"
             clearable
-            placeholder="搜索 YAML Skill…"
+            placeholder="搜索标准运维流程…"
             :prefix-icon="Search"
             class="skills-search"
           />
@@ -231,12 +231,12 @@
               <li v-for="line in skill.redLines" :key="line">{{ line }}</li>
             </ul>
             <div class="skill-actions">
-              <el-button size="small" plain @click="useYamlInChat(skill)">在对话中使用</el-button>
+              <el-button size="small" plain @click="useYamlInChat(skill)">交给助手处理</el-button>
             </div>
           </article>
           <el-empty
             v-if="!yamlLoading && filteredYamlSkills.length === 0"
-            description="没有匹配的 YAML Skill"
+            description="没有匹配的标准运维流程"
             class="skills-empty"
           />
         </div>
@@ -271,7 +271,7 @@
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getAnalysisSkills, getMcpTools, getPlatformInfo, getYamlSkills, invokeAnalysisSkill } from '../../api'
+import { formatApiError, getAnalysisSkills, getMcpTools, getPlatformInfo, getYamlSkills, invokeAnalysisSkill } from '../../api'
 import { mergeToolRegistry, mcpToolDisplayName, mcpToolBadge, getMcpToolCommandHint, defaultParamsForTool, coerceToolParams } from '../../utils/mcpToolsMeta'
 import { runMcpToolExecute } from '../../utils/mcpToolExecute'
 import { renderAssistantMarkdown, bindProseCopyButtons } from '../../utils/assistantMarkdown'
@@ -441,6 +441,11 @@ async function executeNow(tool) {
       mode: typeof data?.data?.mode === 'string' ? data.data.mode : data.mode,
       raw: data
     })
+  } catch (error) {
+    // The global interceptor preserves the backend security/error payload;
+    // surface it here instead of reducing every execution failure to a
+    // generic toast.
+    ElMessage.error(formatApiError(error))
   } finally {
     executing.value = null
   }

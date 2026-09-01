@@ -18,11 +18,29 @@ public class ToolEffectResolver {
         String pid = firstString(parameters, "pid", "processId");
 
         return switch (tool) {
-            case "CleanTempTool", "DiskOpsTool" -> writePath(EffectAction.DELETE, path, "DELETE_PATH");
-            case "LogCleanupTool", "LogOpsTool" -> writePath(
+            case "CleanTempTool" -> writePath(EffectAction.DELETE, path, "DELETE_PATH");
+            case "DiskOpsTool" -> {
+                String op = firstString(parameters, "operation", "op", "action").toLowerCase(Locale.ROOT);
+                if (op.isBlank() || op.equals("df") || op.equals("hotspots") || op.equals("analyze")
+                        || op.equals("usage") || op.equals("inspect") || op.equals("read")) {
+                    yield ToolEffect.observe(path.isBlank() ? "PATH" : "PATH", path.isBlank() ? "local" : path);
+                }
+                yield writePath(EffectAction.DELETE, path, "DELETE_PATH");
+            }
+            case "LogCleanupTool" -> writePath(
                     looksLikeTruncate(parameters) ? EffectAction.TRUNCATE : EffectAction.DELETE,
                     path,
                     "DELETE_PATH");
+            case "LogOpsTool" -> {
+                String op = firstString(parameters, "operation", "op", "action").toLowerCase(Locale.ROOT);
+                if (op.isBlank() || op.equals("analyze") || op.equals("read") || op.equals("scan")) {
+                    yield ToolEffect.observe(path.isBlank() ? "PATH" : "PATH", path.isBlank() ? "local" : path);
+                }
+                yield writePath(
+                        looksLikeTruncate(parameters) ? EffectAction.TRUNCATE : EffectAction.DELETE,
+                        path,
+                        "DELETE_PATH");
+            }
             case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" -> new ToolEffect(
                     EffectAction.RESTART, "SERVICE", service, 7, true, "RESTART_SERVICE");
             case "ProcessTool" -> new ToolEffect(

@@ -431,8 +431,15 @@ public class AssistantOrchestrator {
         JsonNode execData = parseToolData(exec);
         int deleted = execData != null && execData.has("filesDeleted") ? execData.get("filesDeleted").asInt(0) : 0;
         auditRecorder.addStep(steps, "execute", "LogCleanup deleted=" + deleted);
-        md.append("- **已执行删除：** ").append(deleted).append(" 个文件（已排除受保护项）。\n\n");
-        return deleted > 0;
+        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                "LogCleanupTool",
+                exec,
+                RemediationClosureSupport.writeParams("LogCleanupTool", path, false),
+                "assistant");
+        RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
+        md.append("- **已执行删除：** ").append(deleted).append(" 个文件（已排除受保护项）。\n");
+        md.append("- **验证：** ").append(RemediationClosureSupport.summarizeVerify(verifyReport)).append("\n\n");
+        return deleted > 0 && RemediationClosureSupport.verifiedOk(verifyReport);
     }
 
     private boolean appendTempCleanupSection(StringBuilder md, List<Map<String, Object>> steps, boolean forceExecute,
@@ -515,12 +522,19 @@ public class AssistantOrchestrator {
             md.append("- **未删除到文件**（路径下无匹配或无写权限），请勿视为已完成清理。\n\n");
             return false;
         }
+        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                "CleanTempTool",
+                exec,
+                RemediationClosureSupport.writeParams("CleanTempTool", path, false),
+                "assistant");
+        RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
         md.append("- **已执行删除：** ").append(deleted).append(" 项");
         if (bytesFreed > 0) {
             md.append("，约 **").append(String.format(Locale.ROOT, "%.1f", bytesFreed / (1024.0 * 1024.0))).append(" MiB**");
         }
-        md.append("\n\n");
-        return true;
+        md.append("\n");
+        md.append("- **验证：** ").append(RemediationClosureSupport.summarizeVerify(verifyReport)).append("\n\n");
+        return RemediationClosureSupport.verifiedOk(verifyReport);
     }
 
     /** 未指定路径时：扫描全部盘符 Temp 白名单目录，列出垃圾并可选批量清理。 */
@@ -608,10 +622,18 @@ public class AssistantOrchestrator {
             JsonNode execData = parseToolData(exec);
             int deleted = execData != null && execData.has("filesDeleted") ? execData.get("filesDeleted").asInt(0) : 0;
             auditRecorder.addStep(steps, "execute", "CleanTemp multi-drive deleted=" + deleted + " path=" + path);
-            anyExecuted |= deleted > 0;
+            Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                    "CleanTempTool",
+                    exec,
+                    RemediationClosureSupport.writeParams("CleanTempTool", path, false),
+                    "assistant");
+            RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
+            boolean ok = deleted > 0 && RemediationClosureSupport.verifiedOk(verifyReport);
+            anyExecuted |= ok;
             totalDeleted += deleted;
             md.append("| ").append(drive).append(" | `").append(path).append("` | ").append(found)
-                    .append(" | 是 | **已删 ").append(deleted).append("** |\n");
+                    .append(" | 是 | **已删 ").append(deleted).append("** / ")
+                    .append(verifyReport.get("verifyOutcome")).append(" |\n");
         }
         md.append("\n");
         if (forceExecute && anyExecuted) {
@@ -687,18 +709,53 @@ public class AssistantOrchestrator {
         boolean ok = Boolean.TRUE.equals(exec.get("success"));
         String resultSummary = String.valueOf(exec.getOrDefault("resultSummary", summarizeExecutionActions(exec.get("actions"))));
         auditRecorder.addStep(steps, "execute", resultSummary);
-        auditRecorder.addCot(steps, 4, "验证", ok ? "巡检方案已执行" : "执行失败");
+        Object actionsObj = exec.get("actions");
+        if (actionsObj instanceof List<?> actionList) {
+            for (Object item : actionList) {
+                if (item instanceof Map<?, ?> action) {
+                    Object verifyOutcome = action.get("verifyOutcome");
+                    if (verifyOutcome != null) {
+                        auditRecorder.addStep(steps, "verify",
+                                String.valueOf(action.get("tool")) + " verifyOutcome=" + verifyOutcome
+                                        + " closed=" + action.get("remediationClosed"));
+                    }
+                    Object recover = action.get("recover");
+                    if (recover instanceof Map<?, ?> recoverMap) {
+                        boolean reversible = Boolean.TRUE.equals(recoverMap.get("reversible"));
+                        auditRecorder.addStep(steps, "recover",
+                                reversible
+                                        ? "reversible tool=" + recoverMap.get("recoverTool")
+                                        : "irreversible " + recoverMap.get("irreversibilityNote"));
+                    }
+                }
+            }
+        }
+        auditRecorder.addCot(steps, 4, "验证", ok
+                ? "巡检方案已闭环（全部步骤 verified）"
+                : "处置未闭环：存在执行失败或验证未通过");
 
         StringBuilder md = new StringBuilder();
         md.append("## 巡检执行结果\n\n");
-        md.append(ok ? "执行完成。" : "执行失败。").append(resultSummary).append("\n\n");
+        md.append(ok ? "执行完成且验证通过。" : "未完全闭环（执行失败或验证未通过）。")
+                .append(resultSummary).append("\n\n");
         md.append("- 方案 ID：`").append(proposalId).append("`\n");
         Object summary = pending.get("summary");
         if (summary != null && !String.valueOf(summary).isBlank()) {
             md.append("- 原方案：").append(summary).append("\n");
         }
+        if (actionsObj instanceof List<?> actionList) {
+            md.append("\n### 步骤验证\n\n");
+            for (Object item : actionList) {
+                if (item instanceof Map<?, ?> action) {
+                    md.append("- `").append(action.get("tool")).append("` → ")
+                            .append(action.get("verifyOutcome") == null ? (Boolean.TRUE.equals(action.get("success")) ? "OK" : "FAIL") : action.get("verifyOutcome"))
+                            .append("\n");
+                }
+            }
+            md.append("\n");
+        }
         if (!ok) {
-            md.append("\n错误：").append(exec.getOrDefault("error", "未知")).append("\n");
+            md.append("\n错误：").append(exec.getOrDefault("error", "存在未闭环步骤")).append("\n");
         } else {
             appendEffectSection(md, metricsBefore, 1);
         }
@@ -915,12 +972,28 @@ public class AssistantOrchestrator {
         String exec = serviceRestartTool.restartService(serviceName, false, true);
         auditRecorder.addStep(steps, "execute", truncate(exec, 800));
         boolean restarted = parseToolSuccess(exec);
-        if (restarted) {
-            md.append("- **已执行重启**（请自行验证业务恢复）。\n\n");
-        } else {
-            md.append("- **重启未成功：** ").append(WriteToolResultSupport.errorMessage(exec)).append("\n\n");
+        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                "ServiceRestartTool",
+                exec,
+                RemediationClosureSupport.writeParams("ServiceRestartTool", serviceName, true),
+                "assistant");
+        RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
+        if (restarted && RemediationClosureSupport.verifiedOk(verifyReport)) {
+            md.append("- **已执行重启**；").append(RemediationClosureSupport.summarizeVerify(verifyReport)).append("\n");
+            Object recover = verifyReport.get("recover");
+            if (recover instanceof Map<?, ?> r && r.get("irreversibilityNote") != null) {
+                md.append("- **不可逆说明：** ").append(r.get("irreversibilityNote")).append("\n\n");
+            } else {
+                md.append("\n");
+            }
+            return true;
         }
-        return restarted;
+        md.append("- **重启未成功或验证失败：** ")
+                .append(WriteToolResultSupport.errorMessage(exec))
+                .append(" / ")
+                .append(RemediationClosureSupport.summarizeVerify(verifyReport))
+                .append("\n\n");
+        return false;
     }
 
     private boolean parseToolSuccess(String toolJson) {

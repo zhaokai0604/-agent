@@ -3,6 +3,7 @@ package com.award.log.controller;
 import com.award.log.common.Result;
 import com.award.log.service.AiModelRouter;
 import com.award.log.service.impl.UnifiedAssistantService;
+import com.award.log.security.HttpAuditSubject;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +45,9 @@ public class UnifiedAssistantController {
     private AiModelRouter aiModelRouter;
 
     @Autowired
+    private HttpAuditSubject httpAuditSubject;
+
+    @Autowired
     @Qualifier("sseTaskExecutor")
     private ThreadPoolTaskExecutor sseExecutor;
 
@@ -83,7 +87,9 @@ public class UnifiedAssistantController {
             }
             return emitter;
         }
-        final String message = rawMessage.length() > 4000 ? rawMessage.substring(0, 4000) : rawMessage;
+        // Keep this aligned with the service limit; otherwise long questions and
+        // text attachments are silently truncated at the HTTP boundary.
+        final String message = rawMessage.length() > 32000 ? rawMessage.substring(0, 32000) : rawMessage;
         List<UnifiedAssistantService.ChatTurn> history = parseHistory(payload.get("history"));
         boolean useToolAgent = parseUseToolAgent(payload.get("useToolAgent"));
         boolean confirmRemediation = parseConfirmRemediation(payload.get("confirmRemediation"));
@@ -110,8 +116,18 @@ public class UnifiedAssistantController {
                 }
                 try {
                     Flux<String> stream = modelProfile == null
-                            ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation)
-                            : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile);
+                            ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, null, currentRequester())
+                            : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile, currentRequester());
+                    // Keep the controller tolerant of older test doubles/custom
+                    // service proxies that only stub the legacy overload.
+                    if (stream == null) {
+                        stream = modelProfile == null
+                                ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation)
+                                : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile);
+                    }
+                    if (stream == null) {
+                        stream = Flux.empty();
+                    }
                     Disposable d = stream
                             .doOnNext(chunk -> {
                                 try {
@@ -143,6 +159,11 @@ public class UnifiedAssistantController {
             }
         }
         return emitter;
+    }
+
+    private String currentRequester() {
+        String requester = httpAuditSubject == null ? null : httpAuditSubject.currentOperatorId();
+        return requester == null || requester.isBlank() ? "anonymous" : requester;
     }
 
     /**

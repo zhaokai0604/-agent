@@ -40,4 +40,10 @@ public class AuditController {
         }
         return Result.success(detail);
     }
+
+    @GetMapping("/access/summary")
+    public Result<Map<String, Object>> accessSummary(@RequestParam(defaultValue = "24") int hours,
+                                                      @RequestParam(defaultValue = "hour") String granularity) {
+        return Result.success(unifiedAuditService.accessSummary(hours, granularity));
+    }
 }

@@ -309,6 +309,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
             long bytesFreed = 0L;
             long bytesLocked = 0L;
             List<String> previewFiles = new ArrayList<>();
+            List<String> recycleHandles = new ArrayList<>();
 
             for (String file : fileList) {
                 bytesSelected += sizeOfFile(file);
@@ -330,6 +331,9 @@ public class CleanTempTool extends AbstractCommandExecutor {
                                 filesDeleted++;
                                 bytesFreed += fileBytes;
                                 recycled = true;
+                                if (outcome.handle() != null && !outcome.handle().isBlank()) {
+                                    recycleHandles.add(outcome.handle());
+                                }
                             }
                         }
                         if (!recycled) {
@@ -358,9 +362,10 @@ public class CleanTempTool extends AbstractCommandExecutor {
                 );
             } else {
                 data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"bytesSelected\":%d,\"bytesFreed\":%d,\"bytesLocked\":%d,\"businessEffect\":\"%s\"}",
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"bytesSelected\":%d,\"bytesFreed\":%d,\"bytesLocked\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"businessEffect\":\"%s\"}",
                     jsonEscapePath(targetPath), targetDays, fileList.size(), filesDeleted, lockedSkipped, maxDepth, agePolicy.strategy(),
-                    bytesSelected, bytesFreed, bytesLocked, filesDeleted > 0 && bytesFreed > 0 ? "EFFECTIVE" : "NO_EFFECT"
+                    bytesSelected, bytesFreed, bytesLocked, recycleHandles.size(), toJsonArray(recycleHandles),
+                    filesDeleted > 0 && bytesFreed > 0 ? "EFFECTIVE" : "NO_EFFECT"
                 );
                 if (filesDeleted == 0 && !fileList.isEmpty() && lockedSkipped < fileList.size()) {
                     return buildErrorResponse(
@@ -426,7 +431,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
             }
             long duration = System.currentTimeMillis() - startTime;
             String data = String.format(
-                    "{\"mode\":\"DELETE\",\"removeDirectory\":true,\"path\":\"%s\",\"filesDeleted\":1,\"bytesFreed\":%d,\"platform\":\"windows\"}",
+                    "{\"mode\":\"DELETE\",\"removeDirectory\":true,\"path\":\"%s\",\"filesDeleted\":1,\"bytesFreed\":%d,\"removed\":true,\"platform\":\"windows\"}",
                     jsonEscapePath(targetPath), bytes);
             return buildSuccessResponse(data, duration, false);
         }
@@ -451,7 +456,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
         }
         long duration = System.currentTimeMillis() - startTime;
         String data = String.format(
-                "{\"mode\":\"DELETE\",\"removeDirectory\":true,\"path\":\"%s\",\"filesDeleted\":1}",
+                "{\"mode\":\"DELETE\",\"removeDirectory\":true,\"path\":\"%s\",\"filesDeleted\":1,\"bytesFreed\":0,\"removed\":true}",
                 jsonEscapePath(targetPath));
         return buildSuccessResponse(data, duration, false);
     }
@@ -527,6 +532,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
         long bytesFreed = 0L;
         long bytesLocked = 0L;
         List<String> previewFiles = new ArrayList<>();
+        List<String> recycleHandles = new ArrayList<>();
         for (String file : fileList) {
             bytesSelected += sizeOfFile(file);
         }
@@ -538,13 +544,28 @@ public class CleanTempTool extends AbstractCommandExecutor {
                     bytesLocked += fileBytes;
                     continue;
                 }
-                String f = file.replace("'", "''");
-                AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
-                        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                        "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
-                if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
-                    filesDeleted++;
-                    bytesFreed += fileBytes;
+                boolean recycled = false;
+                if (safeDeleteSupport != null) {
+                    SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
+                            Path.of(file), null, true);
+                    if (outcome.success()) {
+                        filesDeleted++;
+                        bytesFreed += fileBytes;
+                        recycled = true;
+                        if (outcome.handle() != null && !outcome.handle().isBlank()) {
+                            recycleHandles.add(outcome.handle());
+                        }
+                    }
+                }
+                if (!recycled) {
+                    String f = file.replace("'", "''");
+                    AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
+                            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                            "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
+                    if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
+                        filesDeleted++;
+                        bytesFreed += fileBytes;
+                    }
                 }
             }
         }
@@ -559,9 +580,10 @@ public class CleanTempTool extends AbstractCommandExecutor {
                     jsonEscapePath(targetPath), targetDays, fileList.size(), previewCount, toJsonArray(previewFiles), maxDepth, strategy, dirBytes, bytesSelected);
         } else {
             data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"dirBytes\":%d,\"bytesSelected\":%d,\"bytesFreed\":%d,\"bytesLocked\":%d,\"platform\":\"windows\",\"businessEffect\":\"%s\"}",
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"dirBytes\":%d,\"bytesSelected\":%d,\"bytesFreed\":%d,\"bytesLocked\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"platform\":\"windows\",\"businessEffect\":\"%s\"}",
                     jsonEscapePath(targetPath), targetDays, fileList.size(), filesDeleted, lockedSkipped, maxDepth, strategy,
-                    dirBytes, bytesSelected, bytesFreed, bytesLocked, filesDeleted > 0 && bytesFreed > 0 ? "EFFECTIVE" : "NO_EFFECT");
+                    dirBytes, bytesSelected, bytesFreed, bytesLocked, recycleHandles.size(), toJsonArray(recycleHandles),
+                    filesDeleted > 0 && bytesFreed > 0 ? "EFFECTIVE" : "NO_EFFECT");
             if (filesDeleted == 0 && !fileList.isEmpty() && lockedSkipped < fileList.size()) {
                 return buildErrorResponse(
                         "未删除任何文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);

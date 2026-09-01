@@ -1,5 +1,6 @@
 package com.award.log.service;
 
+import com.award.log.agent.RemediationClosureSupport;
 import com.award.log.governance.GovernanceAdmissionVerdict;
 import com.award.log.governance.OpsGovernanceService;
 import com.award.log.handler.PerformanceWebSocketHandler;
@@ -829,21 +830,18 @@ public class OpsAutoRemediationService {
                         String path = String.valueOf(step.get("path"));
                         int days = asInt(step.get("days"), tempCleanDays);
                         String out = cleanTempTool.cleanTempFiles(path, days, false, true);
-                        boolean ok = parseToolJsonSuccess(out);
-                        actions.add(actionRow("CleanTempTool", path, ok, truncate(out, 1200)));
+                        actions.add(verifiedActionRow("CleanTempTool", path, out, false));
                     }
                     case "CLEAN_LOG" -> {
                         String path = String.valueOf(step.get("path"));
                         int days = asInt(step.get("days"), logCleanDays);
                         String out = logCleanupTool.cleanupOldLogs(path, days, false, true);
-                        boolean ok = parseToolJsonSuccess(out);
-                        actions.add(actionRow("LogCleanupTool", path, ok, truncate(out, 1200)));
+                        actions.add(verifiedActionRow("LogCleanupTool", path, out, false));
                     }
                     case "RESTART_SERVICE" -> {
                         String svc = String.valueOf(step.get("serviceName"));
                         String out = serviceRestartTool.restartService(svc, false, true);
-                        boolean ok = parseToolJsonSuccess(out);
-                        actions.add(actionRow("ServiceRestartTool", svc, ok, truncate(out, 1200)));
+                        actions.add(verifiedActionRow("ServiceRestartTool", svc, out, true));
                     }
                     default -> actions.add(actionRow(kind, String.valueOf(step), false, "未知步骤类型"));
                 }
@@ -1285,6 +1283,36 @@ public class OpsAutoRemediationService {
         m.put("success", ok);
         m.put("detail", detail);
         return m;
+    }
+
+    /** 工具执行后强制业务验证；验证未通过则 success=false（处置未闭环）。 */
+    private Map<String, Object> verifiedActionRow(String tool, String target, String toolJson, boolean restart) {
+        boolean executionOk = parseToolJsonSuccess(toolJson);
+        Map<String, Object> row = actionRow(tool, target, executionOk, truncate(toolJson, 1200));
+        row.put("executionSuccess", executionOk);
+        if (!executionOk) {
+            row.put("verified", false);
+            row.put("verifyOutcome", "VERIFY_FAILED");
+            row.put("remediationClosed", false);
+            return row;
+        }
+        Map<String, Object> params = RemediationClosureSupport.writeParams(tool, target, restart);
+        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                tool, toolJson, params, currentRequester());
+        row.put("verify", verifyReport);
+        row.put("verifyOutcome", verifyReport.get("verifyOutcome"));
+        row.put("verified", verifyReport.get("verified"));
+        row.put("recover", verifyReport.get("recover"));
+        row.put("expectedEffect", verifyReport.get("expectedEffect"));
+        boolean closed = RemediationClosureSupport.verifiedOk(verifyReport);
+        row.put("remediationClosed", closed);
+        row.put("success", closed);
+        if (!closed) {
+            row.put("detail", "处置未闭环（" + verifyReport.get("verifyOutcome") + "）："
+                    + verifyReport.getOrDefault("message", "")
+                    + " | " + truncate(toolJson, 800));
+        }
+        return row;
     }
 
     private String currentRequester() {

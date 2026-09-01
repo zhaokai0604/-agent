@@ -2,7 +2,7 @@
   <div class="ops-page profile-page" v-loading="loading">
     <OpsPageHeader
       :title="profileForm.username || '个人中心'"
-      subtitle="管理资料、密码与 API Key，查看访问足迹与个人统计"
+      subtitle="管理账号安全和接口访问密钥，查看登录与访问统计"
     >
       <template #actions>
         <el-tag size="large" :type="profileForm.role === 1 ? 'warning' : 'info'">{{ roleText }}</el-tag>
@@ -17,14 +17,14 @@
         <small>个人接口与关键操作访问量</small>
       </article>
       <article class="stat-card">
-        <span>活跃 API Key</span>
+        <span>活跃接口访问密钥</span>
         <strong>{{ stats.activeApiKeyCount ?? 0 }}</strong>
-        <small>{{ stats.hasApiKey ? '已存在可用 Key' : '尚未创建 API Key' }}</small>
+        <small>{{ stats.hasApiKey ? '可用于接口访问或密钥登录' : '尚未创建访问密钥' }}</small>
       </article>
       <article class="stat-card">
         <span>当前鉴权方式</span>
         <strong>{{ stats.authMode || '--' }}</strong>
-        <small>会话态与 API Key 态都会在足迹里留下记录</small>
+        <small>账号密码与接口访问密钥登录都会建立会话并留下审计记录</small>
       </article>
       <article class="stat-card">
         <span>最近活动</span>
@@ -37,33 +37,16 @@
       <section class="panel-card">
         <div class="panel-head">
           <div>
-            <h2>基础资料</h2>
-            <p>只允许编辑自己的邮箱和企业微信用户标识。</p>
+            <h2>当前账号</h2>
+            <p>身份资料改为只读展示；账号安全与接口访问密钥在本页管理。</p>
           </div>
-          <el-tag type="success" v-if="profileDirty">已修改</el-tag>
         </div>
-        <el-form label-position="top">
-          <div class="two-col">
-            <el-form-item label="用户名">
-              <el-input v-model="profileForm.username" disabled />
-            </el-form-item>
-            <el-form-item label="角色">
-              <el-input :model-value="roleText" disabled />
-            </el-form-item>
-          </div>
-          <div class="two-col">
-            <el-form-item label="邮箱">
-              <el-input v-model="profileForm.email" />
-            </el-form-item>
-            <el-form-item label="企业微信用户 ID">
-              <el-input v-model="profileForm.wechat_userid" />
-            </el-form-item>
-          </div>
-          <div class="form-actions">
-            <el-button @click="resetProfileForm" :disabled="!profileDirty || savingProfile">还原</el-button>
-            <el-button type="primary" :loading="savingProfile" :disabled="!profileDirty" @click="saveProfile">保存资料</el-button>
-          </div>
-        </el-form>
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="用户名">{{ profileForm.username || '--' }}</el-descriptions-item>
+          <el-descriptions-item label="角色">{{ roleText }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ formatDateTime(profileForm.createTime) }}</el-descriptions-item>
+          <el-descriptions-item label="当前鉴权方式">{{ stats.authMode || 'SESSION' }}</el-descriptions-item>
+        </el-descriptions>
       </section>
 
       <section class="panel-card">
@@ -95,10 +78,10 @@
       <section class="panel-card">
         <div class="panel-head">
           <div>
-            <h2>API Key 管理</h2>
-            <p>创建或轮换时只展示一次完整明文；列表只保留名称、前缀和状态。</p>
+            <h2>接口访问密钥</h2>
+            <p>可用于接口访问或登录；完整密钥仅在创建、轮换时展示一次。</p>
           </div>
-          <el-button type="primary" @click="apiKeyDialogVisible = true">新建 API Key</el-button>
+          <el-button type="primary" @click="apiKeyDialogVisible = true">新建访问密钥</el-button>
         </div>
 
         <el-table :data="apiKeys" stripe>
@@ -157,7 +140,7 @@
       </div>
     </section>
 
-    <el-dialog v-model="apiKeyDialogVisible" title="创建 API Key" width="460px">
+    <el-dialog v-model="apiKeyDialogVisible" title="创建接口访问密钥" width="460px">
       <el-form label-position="top">
         <el-form-item label="名称">
           <el-input v-model="newApiKeyName" placeholder="例如：Ops Readonly Key" />
@@ -169,7 +152,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="apiKeyRevealVisible" title="请立即保存这个 API Key" width="560px">
+    <el-dialog v-model="apiKeyRevealVisible" title="请立即保存这个接口访问密钥" width="560px">
       <el-alert
         type="warning"
         :closable="false"

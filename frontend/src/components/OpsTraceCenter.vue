@@ -3,7 +3,7 @@
     <OpsPageHeader
       v-if="!embedded"
       title="AWM 记忆 · 执行链路"
-      subtitle="Agent 处置套路 / 安全教训，以及工具调用全链路：预览、确认、执行结果与审计步骤"
+      subtitle="任务处置历史、安全教训与工具调用链路：预览、确认、执行结果与审计步骤"
     >
       <template #actions>
         <el-input-number v-model="limit" :min="10" :max="500" :step="10" size="small" />

@@ -112,11 +112,7 @@ public final class McpToolParamReader {
             case "CleanTempTool" -> {
                 parameters.put("dryRun", false);
                 parameters.put("confirmDelete", true);
-                String path = getString(parameters, "path");
-                if (path != null && !path.isBlank() && isTempSubDirectoryPath(path)) {
-                    parameters.put("removeDirectory", true);
-                    parameters.put("days", 0);
-                }
+                // 禁止在确认阶段擅自升级为整目录删除；仅保留预览阶段已显式传入的 removeDirectory
             }
             case "LogCleanupTool" -> {
                 parameters.put("dryRun", false);

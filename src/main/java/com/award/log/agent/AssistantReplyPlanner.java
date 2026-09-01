@@ -62,8 +62,11 @@ public class AssistantReplyPlanner {
             return plan(AssistantReplyMode.CHITCHAT, AssistantIntentCategory.EMPTY, false, "");
         }
 
-        // P1
-        if (confirmRemediation || AssistantIntentSignals.CONFIRM_WRITE.matcher(msg).find()) {
+        // P1：显式确认话术；或上游 confirmRemediation=true 且本句不是纯寒暄/社交
+        // （防止前端误传 confirmRemediation 时把「你好」打成写处置）
+        boolean confirmUtterance = AssistantIntentSignals.CONFIRM_WRITE.matcher(msg).find();
+        if (confirmUtterance
+                || (confirmRemediation && AssistantIntentSignals.classifySocial(msg) == null)) {
             return plan(AssistantReplyMode.TOOL_AGENT, AssistantIntentCategory.CONFIRM_WRITE, true,
                     "正在按您的确认执行处置，请稍候…");
         }

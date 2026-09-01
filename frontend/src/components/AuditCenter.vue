@@ -27,6 +27,39 @@
       </article>
     </div>
 
+    <el-card v-if="activePane === 'access'" shadow="never" class="access-summary-card" v-loading="loading">
+      <template #header>
+        <div class="access-summary-head">
+          <div><strong>访问统计</strong><span>按访问类型与时间段汇总，可继续查看下方明细。</span></div>
+          <el-radio-group v-model="accessGranularity" size="small" @change="loadAccess">
+            <el-radio-button value="hour">近 24 小时</el-radio-button>
+            <el-radio-button value="day">近 30 天</el-radio-button>
+            <el-radio-button value="week">近 90 天</el-radio-button>
+          </el-radio-group>
+        </div>
+      </template>
+      <div class="access-overview">
+        <span>总请求 <strong>{{ accessSummary.summary?.requestCount || 0 }}</strong></span>
+        <span>成功率 <strong>{{ accessSummary.summary?.successRate ?? 0 }}%</strong></span>
+        <span>慢请求（≥1 秒） <strong>{{ accessSummary.slowRequestCount || 0 }}</strong></span>
+        <span>独立访问者 <strong>{{ accessSummary.uniqueUserCount || 0 }}</strong></span>
+        <span v-for="(count, status) in accessSummary.statusCounts || {}" :key="status">HTTP {{ status }} <strong>{{ count }}</strong></span>
+      </div>
+      <el-row :gutter="12">
+        <el-col v-for="group in accessSummary.groups || []" :key="group.type" :xs="12" :md="6">
+          <div class="access-group">
+            <span>{{ group.label }}</span>
+            <strong>{{ group.requestCount }}</strong>
+            <small>成功 {{ group.successCount }} · 失败 {{ group.failureCount }} · 平均 {{ group.avgDurationMs }} ms</small>
+          </div>
+        </el-col>
+      </el-row>
+      <el-table v-if="accessSummary.topEndpoints?.length" :data="accessSummary.topEndpoints" size="small" stripe class="access-top-table">
+        <el-table-column prop="path" label="高频接口" min-width="300" show-overflow-tooltip />
+        <el-table-column prop="requestCount" label="请求数" width="110" />
+      </el-table>
+    </el-card>
+
     <div v-if="activePane === 'security'" class="security-panel" v-loading="selfCheckLoading">
       <div class="security-panel__head">
         <div>
@@ -237,6 +270,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   getAuditDetail,
+  getAccessAuditSummary,
   getAuditFeed,
   getAiAuditRecent,
   getOpsTraceDetail,
@@ -267,6 +301,8 @@ const detailLoading = ref(false)
 const selfCheckLoading = ref(false)
 const feedRows = ref([])
 const accessRows = ref([])
+const accessSummary = ref({ groups: [], topEndpoints: [], summary: {} })
+const accessGranularity = ref('hour')
 const selected = ref(null)
 const selfCheck = ref(null)
 const pendingTraceId = ref('')
@@ -316,11 +352,11 @@ const activeRows = computed(() => {
 
 const summaryCards = computed(() => {
   if (activePane.value === 'access') {
-    const err = accessRows.value.filter((r) => Number(r.httpStatus) >= 400).length
+    const summary = accessSummary.value?.summary || {}
     return [
-      { key: 'total', label: '访问记录', count: accessRows.value.length },
-      { key: 'error', label: '异常访问', count: err },
-      { key: 'ok', label: '正常访问', count: accessRows.value.length - err }
+      { key: 'total', label: '访问请求', count: summary.requestCount ?? accessRows.value.length },
+      { key: 'error', label: '异常访问', count: summary.failureCount ?? 0 },
+      { key: 'ok', label: '平均耗时', count: `${summary.avgDurationMs ?? 0} ms` }
     ]
   }
   const counters = activeRows.value.reduce((acc, row) => {
@@ -456,7 +492,12 @@ async function loadFeed() {
 async function loadAccess() {
   loading.value = true
   try {
-    const raw = await getAiAuditRecent(limit.value)
+    const hours = accessGranularity.value === 'hour' ? 24 : accessGranularity.value === 'day' ? 24 * 30 : 24 * 90
+    const [raw, summary] = await Promise.all([
+      getAiAuditRecent(limit.value),
+      getAccessAuditSummary(hours, accessGranularity.value)
+    ])
+    accessSummary.value = summary || { groups: [], topEndpoints: [], summary: {} }
     const list = Array.isArray(raw) ? raw : []
     accessRows.value = list.map((row) => ({
       entryId: `api:${row.id}`,
@@ -475,6 +516,7 @@ async function loadAccess() {
   } catch (error) {
     ElMessage.error(error.message || '访问审计加载失败')
     accessRows.value = []
+    accessSummary.value = { groups: [], topEndpoints: [], summary: {} }
   } finally {
     loading.value = false
   }
@@ -712,6 +754,17 @@ defineExpose({ openTrace, refreshActive })
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
 }
+
+.access-summary-card { margin-bottom: 16px; }
+.access-summary-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.access-summary-head span { display: block; margin-top: 4px; color: var(--ops-text-subtle, #6b7280); font-size: 12px; }
+.access-overview { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+.access-overview span { padding: 6px 10px; border-radius: 6px; background: var(--ops-surface-subtle, #f5f7fa); color: var(--ops-text-subtle, #6b7280); font-size: 12px; }
+.access-overview strong { color: var(--ops-text, #172033); margin-left: 3px; }
+.access-group { min-height: 88px; padding: 12px; border: 1px solid var(--ops-border-soft, #e5e7eb); border-radius: 8px; display: flex; flex-direction: column; gap: 4px; }
+.access-group span, .access-group small { color: var(--ops-text-subtle, #6b7280); }
+.access-group strong { font-size: 24px; }
+.access-top-table { margin-top: 14px; }
 
 .audit-summary-card {
   padding: 14px 16px;

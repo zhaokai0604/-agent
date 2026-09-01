@@ -8,6 +8,7 @@ import com.award.log.model.SysUserViews;
 import com.award.log.security.AuthInterceptor;
 import com.award.log.security.RequestUserResolver;
 import com.award.log.service.SysUserService;
+import com.award.log.service.UserApiKeyService;
 import com.award.log.service.impl.AiAuditLogService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -35,6 +36,9 @@ public class SysUserController {
     @Autowired
     private RequestUserResolver requestUserResolver;
 
+    @Autowired
+    private UserApiKeyService userApiKeyService;
+
     @Autowired(required = false)
     private AiAuditLogService aiAuditLogService;
 
@@ -60,6 +64,31 @@ public class SysUserController {
                     200,
                     0,
                     0);
+        }
+        return Result.success(SysUserViews.toView(user));
+    }
+
+    @Operation(summary = "接口访问密钥登录并建立会话")
+    @PostMapping("/key-login")
+    public Result<SysUserView> keyLogin(@RequestBody(required = false) Map<String, String> body,
+                                         HttpSession session,
+                                         HttpServletRequest request) {
+        String apiKey = body == null ? "" : String.valueOf(body.getOrDefault("apiKey", "")).trim();
+        Map<String, Object> auth = userApiKeyService.authenticate(apiKey);
+        if (!Boolean.TRUE.equals(auth.get("success"))) {
+            return Result.error(401, String.valueOf(auth.getOrDefault("message", "接口访问密钥无效")));
+        }
+        Object userIdRaw = auth.get("userId");
+        Integer userId = userIdRaw instanceof Number n ? n.intValue() : null;
+        SysUser user = userId == null ? null : sysUserService.getUserById(userId);
+        if (user == null) {
+            return Result.error(401, "接口访问密钥所属账号不存在");
+        }
+        session.setAttribute(AuthInterceptor.SESSION_USER_ID, user.getUserId());
+        session.setAttribute(AuthInterceptor.SESSION_USER_ROLE, user.getRole());
+        if (aiAuditLogService != null) {
+            aiAuditLogService.save(user.getUserId(), user.getRole(), request.getRemoteAddr(),
+                    "KEY_LOGIN", request.getRequestURI(), 200, 0, 0);
         }
         return Result.success(SysUserViews.toView(user));
     }

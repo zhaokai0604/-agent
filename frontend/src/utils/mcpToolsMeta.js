@@ -201,14 +201,14 @@ function buildToolDefinitions(platformInfo) {
       param('logPath', '日志路径', p.logPath, '可选'),
       param('lines', '分析行数', '100', '可选')
     ] },
-    { name: 'CleanTempTool', description: '临时目录清理（写操作需确认）', params: [
+    { name: 'CleanTempTool', description: '临时目录清理预览', params: [
       param('path', '路径', p.tempPath, '白名单目录'),
       param('days', '早于天数', '0', '0=含今日；子目录删除建议0'),
       param('dryRun', '演练模式', 'true', 'false 时需 confirmDelete=true'),
       param('confirmDelete', '确认删除', 'false', '真实删除时使用'),
       param('removeDirectory', '删除整个子目录', 'false', 'Temp 白名单子路径时可 true')
     ] },
-    { name: 'LogCleanupTool', description: '日志目录旧文件清理（写操作需确认）', params: [
+    { name: 'LogCleanupTool', description: '日志目录清理预览', params: [
       param('path', '日志路径', p.logPath, '白名单目录'),
       param('days', '早于天数', '30', '正整数'),
       param('dryRun', '演练模式', 'true', 'false 时需 confirmDelete=true'),

@@ -6,7 +6,7 @@
       </div>
       <div v-if="!collapsed" class="brand-copy">
         <strong>ThreshCore</strong>
-        <span>运维 Agent</span>
+        <span>运维助手</span>
       </div>
     </div>
 
@@ -25,7 +25,7 @@
         @click="$emit('select', 'ops-chat')"
       >
         <el-icon><ChatLineSquare /></el-icon>
-        <span v-if="!collapsed">运维对话</span>
+        <span v-if="!collapsed">运维助手</span>
       </button>
       <button
         type="button"
@@ -34,7 +34,7 @@
         @click="$emit('select', 'agent-skills')"
       >
         <el-icon><Grid /></el-icon>
-        <span v-if="!collapsed">工具与技能</span>
+        <span v-if="!collapsed">工具与诊断</span>
       </button>
     </nav>
 

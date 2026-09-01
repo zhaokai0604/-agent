@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class UnifiedAssistantServiceTest {
@@ -124,7 +125,7 @@ class UnifiedAssistantServiceTest {
 
     @Test
     void previewAgentStateShouldExposeExecutionContract() {
-        when(opsIntentRouter.forceRemediate(anyString())).thenReturn(false);
+        lenient().when(opsIntentRouter.forceRemediate(anyString())).thenReturn(false);
 
         Map<String, Object> preview = service.previewAgentState("check disk", List.of(), true, false);
 
@@ -140,7 +141,7 @@ class UnifiedAssistantServiceTest {
         when(promptInjectionGuard.isInjection(anyString())).thenReturn(false);
         when(highRiskCommandDetector.isHighRiskCommand(anyString())).thenReturn(false);
         when(intentRiskFilter.evaluate(anyString())).thenReturn(RiskLevel.LOW);
-        when(opsIntentRouter.forceRemediate(anyString())).thenReturn(false);
+        lenient().when(opsIntentRouter.forceRemediate(anyString())).thenReturn(false);
         when(opsRuntimeService.shouldOrchestrate(anyString())).thenReturn(true);
         when(opsIntentRouter.resolveFromContext(anyString(), anyList()))
                 .thenReturn(OpsIntentRouter.Playbook.PATROL_AUTOMATION);

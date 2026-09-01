@@ -2,7 +2,7 @@
   <div class="ops-memory-panel">
     <div class="memory-panel-head">
       <div class="memory-panel-title">
-        <span>Agent 记忆层</span>
+        <span>任务历史复盘</span>
         <el-tag v-if="awmEnabled" size="small" type="success" effect="plain">AWM 开</el-tag>
         <el-tag v-else size="small" type="info" effect="plain">AWM 关</el-tag>
         <el-tag v-if="totalRuns" size="small" type="primary" effect="plain">回放 {{ totalRuns }}</el-tag>

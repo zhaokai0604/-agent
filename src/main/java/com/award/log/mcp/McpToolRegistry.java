@@ -1,6 +1,8 @@
 package com.award.log.mcp;
 
 import com.award.log.mcp.tools.*;
+import com.award.log.governance.OpsExecutionPipeline;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.award.log.security.McpToolSurface;
 import com.award.log.security.ReadOnlySurfaceDenylist;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +12,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Set;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -21,7 +25,14 @@ import java.util.stream.Collectors;
 @Component
 public class McpToolRegistry {
 
+    private static final Set<String> CHAT_PEP_WRITE_BEANS = Set.of(
+            "CleanTempTool", "LogCleanupTool", "ServiceRestartTool", "DiskOpsTool",
+            "LogOpsTool", "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool",
+            "AutonomousOpsTool", "RecycleBinTool");
+
     private final List<Object> toolBeans;
+    private final OpsExecutionPipeline opsExecutionPipeline;
+    private final ObjectMapper objectMapper;
 
     public McpToolRegistry(
             LogAnalysisTool logAnalysisTool,
@@ -52,8 +63,12 @@ public class McpToolRegistry {
             K8sTool k8sTool,
             RecycleBinTool recycleBinTool,
             OpsAnalysisSkillTool opsAnalysisSkillTool,
-            FirstMcpTools firstMcpTools
+            FirstMcpTools firstMcpTools,
+            OpsExecutionPipeline opsExecutionPipeline,
+            ObjectMapper objectMapper
     ) {
+        this.opsExecutionPipeline = opsExecutionPipeline;
+        this.objectMapper = objectMapper;
         this.toolBeans = new ArrayList<>();
 
         log.info("开始注册 MCP Tools（DiskInsightTool 由 DiskTool.rankDiskUsageUnderPath 提供，执行入口见 McpExecuteController）");
@@ -126,7 +141,40 @@ public class McpToolRegistry {
                         || !com.award.log.agent.AgentToolPhase.denyBeanInDiagnosePhase(
                         ClassUtils.getUserClass(bean).getSimpleName()))
                 .collect(Collectors.toCollection(ArrayList::new));
-        return buildToolCallbacks(beans);
+        if (!allowWrite) {
+            // Mount write beans only through the PEP adapter so the model can
+            // produce a preview, but cannot execute an untracked mutation.
+            for (Object bean : toolBeans) {
+                String name = ClassUtils.getUserClass(bean).getSimpleName();
+                if (CHAT_PEP_WRITE_BEANS.contains(name) && !beans.contains(bean)) {
+                    beans.add(bean);
+                }
+            }
+        }
+        return Arrays.stream(buildToolCallbacks(beans))
+                .map(callback -> wrapChatPepCallback(callback, allowWrite))
+                .toArray(ToolCallback[]::new);
+    }
+
+    private ToolCallback wrapChatPepCallback(ToolCallback callback, boolean allowWrite) {
+        if (allowWrite) {
+            return callback;
+        }
+        String beanName = switch (callback.getToolDefinition().name()) {
+            case "cleanTempFiles" -> "CleanTempTool";
+            case "cleanupOldLogs" -> "LogCleanupTool";
+            case "restartService" -> "ServiceRestartTool";
+            case "diskOpsGateway" -> "DiskOpsTool";
+            case "logOpsGateway" -> "LogOpsTool";
+            case "serviceOpsGateway" -> "ServiceOpsTool";
+            case "containerOpsGateway" -> "ContainerOpsTool";
+            case "processOpsGateway" -> "ProcessOpsTool";
+            case "runAutonomousOps" -> "AutonomousOpsTool";
+            case "recycleBinOps" -> "RecycleBinTool";
+            default -> null;
+        };
+        return beanName == null ? callback
+                : new PepChatToolCallback(callback, beanName, opsExecutionPipeline, objectMapper);
     }
 
     private static ToolCallback[] buildToolCallbacks(List<Object> beans) {

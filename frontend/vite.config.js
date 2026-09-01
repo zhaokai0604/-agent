@@ -11,10 +11,37 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, rootDir, '')
   // 单端口：业务 + 登录 + MCP + Agent 全部代理到 8088
   const proxyTarget = env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:8088'
+  const apiProxy = {
+    '/award-log': {
+      target: proxyTarget,
+      changeOrigin: true,
+      ws: true
+    },
+    '/api': {
+      target: proxyTarget,
+      changeOrigin: true,
+      ws: true,
+      rewrite: (path) => path.replace(/^\/api/, '/award-log/api')
+    },
+    '/mcp': {
+      target: proxyTarget,
+      changeOrigin: true,
+      ws: true,
+      rewrite: (path) => path.replace(/^\/mcp/, '/award-log/api/mcp')
+    }
+  }
 
   return {
     root: rootDir,
     plugins: [vue()],
+    // The optimized markdown-it bundle otherwise points Chrome at TypeScript
+    // sources that are not published by Vite, producing noisy 404s in the
+    // Network panel although the application request succeeds.
+    optimizeDeps: {
+      esbuildOptions: {
+        sourcemap: false
+      }
+    },
     build: {
       sourcemap: false,
       chunkSizeWarningLimit: 720,
@@ -43,25 +70,12 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       strictPort: false,
-      proxy: {
-        '/award-log': {
-          target: proxyTarget,
-          changeOrigin: true,
-          ws: true
-        },
-        '/api': {
-          target: proxyTarget,
-          changeOrigin: true,
-          ws: true,
-          rewrite: (path) => path.replace(/^\/api/, '/award-log/api')
-        },
-        '/mcp': {
-          target: proxyTarget,
-          changeOrigin: true,
-          ws: true,
-          rewrite: (path) => path.replace(/^\/mcp/, '/award-log/api/mcp')
-        }
-      }
+      proxy: apiProxy
+    },
+    // `vite preview` also needs the same proxy when the built UI is tested
+    // locally on 4173; otherwise `/award-log/api/*` hits the static server.
+    preview: {
+      proxy: apiProxy
     }
   }
 })

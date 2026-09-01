@@ -7,10 +7,13 @@ import com.award.log.mcp.dispatch.McpToolParamReader;
 import com.award.log.security.McpInvocationSecurityGate.GateDecision;
 import com.award.log.security.effect.ConfirmTokenHmac;
 import com.award.log.security.effect.EffectFingerprint;
+import com.award.log.security.effect.RemediationContractFactory;
+import com.award.log.security.effect.RemediationVerifyEvaluator;
 import com.award.log.security.effect.SessionRiskBudgetService;
 import com.award.log.security.effect.ToolEffect;
 import com.award.log.security.effect.ToolEffectResolver;
 import com.award.log.security.effect.WriteCapabilityToken;
+import com.award.log.security.effect.WriteRemediationContract;
 import com.award.log.service.mcp.McpAuditService;
 import com.award.log.service.mcp.McpExecutionService;
 import com.award.log.service.mcp.McpPendingConfirmationService;
@@ -25,8 +28,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * PEP 执行管线：策略 → 预览 → 提议 → 确认 → 执行 → 验证。
- * 所有 DESTRUCTIVE/WRITE 工具的唯一写入口。
+ * PEP 执行管线：Plan/Preview → Approval → Execute → Verify → Recover 句柄。
+ * 所有 DESTRUCTIVE/WRITE 工具的唯一写入口；验证产出 {@code verifyOutcome} 强状态。
  */
 @Slf4j
 @Service
@@ -63,6 +66,7 @@ public class OpsExecutionPipeline {
 
         Map<String, Object> exec = mcpExecutionService.execute(toolName, params, start, traceId, instruction);
         String previewJson = serializePreview(exec);
+        WriteRemediationContract contract = RemediationContractFactory.build(toolName, parameters, effect, requester);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", Boolean.TRUE.equals(exec.get("success")));
         body.put("phase", "preview");
@@ -72,6 +76,10 @@ public class OpsExecutionPipeline {
         body.put("toolName", toolName);
         body.put("effectFingerprint", fingerprint);
         body.put("toolEffect", effect.toMap());
+        body.put("remediationContract", contract.toMap());
+        body.put("expectedEffect", contract.expectedEffect().toMap());
+        body.put("recover", contract.recover().toMap());
+        body.put("approval", contract.approval().toMap());
         body.put("duration", System.currentTimeMillis() - start);
         body.put("data", exec.get("data"));
         if (!Boolean.TRUE.equals(exec.get("success"))) {
@@ -111,15 +119,23 @@ public class OpsExecutionPipeline {
                 traceId, toolName, params, userMessage, instruction, requester,
                 effect, fingerprint, token, dryRunPreviewJson);
 
+        WriteRemediationContract contract = RemediationContractFactory.build(toolName, params, effect, requester);
         Map<String, Object> body = mcpSecurityService.buildNeedConfirmResponse(
                 traceId, start, decision, toolName, params);
-        body.put("phase", "propose");
+        body.put("phase", "approval");
         body.put("confirmationId", pending.confirmationId());
         body.put("expiresAtMs", pending.expiresAtMs());
         body.put("capabilityToken", token.tokenId());
         body.put("confirmToken", token.confirmTokenHmac());
         body.put("dryRunPreviewHash", token.dryRunPreviewHash());
         body.put("needConfirm", true);
+        body.put("remediationContract", contract.toMap());
+        body.put("expectedEffect", contract.expectedEffect().toMap());
+        body.put("recover", contract.recover().toMap());
+        body.put("approval", contract.approval().toMap());
+        if (!contract.recover().reversible() && !contract.recover().irreversibilityNote().isBlank()) {
+            body.put("irreversibleWarning", contract.recover().irreversibilityNote());
+        }
         mcpAuditService.persistNeedConfirm(traceId, instruction, toolName, decision, start, params, pending.confirmationId());
         return new PipelineResult(body, traceId, start, toolName, effect, fingerprint, dryRunPreviewJson);
     }
@@ -190,45 +206,46 @@ public class OpsExecutionPipeline {
             sessionRiskBudgetService.consume(requester, effect);
             exec.put("riskBudget", sessionRiskBudgetService.summary(requester));
         }
-        mcpAuditService.persistSuccess(traceId, pending.userInstruction(), decision, toolName, exec, start, parameters);
-        Map<String, Object> verifyReport = verify(toolName, exec, dryRunPreview, parameters);
+        WriteRemediationContract contract = RemediationContractFactory.build(
+                toolName, parameters, effect, requester);
+        exec.put("remediationContract", contract.toMap());
+        exec.put("expectedEffect", contract.expectedEffect().toMap());
+        exec.put("approval", contract.approval().toMap());
+        Map<String, Object> verifyReport = verify(toolName, exec, dryRunPreview, parameters, effect, contract);
         exec.put("verify", verifyReport);
         exec.put("verified", verifyReport.get("verified"));
+        exec.put("verifyOutcome", verifyReport.get("verifyOutcome"));
+        exec.put("recover", verifyReport.getOrDefault("recover", contract.recover().toMap()));
+        applyRemediationSuccessGate(exec, verifyReport, parameters);
+        mcpAuditService.persistSuccess(traceId, pending.userInstruction(), decision, toolName, exec, start, parameters);
         return new PipelineResult(exec, traceId, start, toolName, effect, fingerprint, dryRunPreview);
     }
 
     /**
-     * 执行后验证：写操作须有落地证据；预览绑定哈希随报告返回供审计。
+     * 执行后验证：写落地证据 + 预期变化对照；失败产出 {@code VERIFY_FAILED}/{@code EVIDENCE_INCOMPLETE}。
      */
     public Map<String, Object> verify(
             String toolName,
             Map<String, Object> executionBody,
             String dryRunPreviewJson,
             Map<String, Object> requestParameters) {
-        Map<String, Object> report = new LinkedHashMap<>();
-        report.put("phase", "verify");
-        report.put("toolName", toolName == null ? "" : toolName);
-        Map<String, Object> body = executionBody == null ? Map.of() : executionBody;
-        boolean success = Boolean.TRUE.equals(body.get("success"));
-        String execJson = serializePreview(body);
-        boolean requestedWrite = WriteToolResultSupport.requestedRealWrite(
-                requestParameters == null ? Map.of() : requestParameters);
-        boolean realWriteEvidence = WriteToolResultSupport.isConfirmedRealWrite(execJson);
-        boolean verified = success && (!requestedWrite || realWriteEvidence);
-        if (Boolean.TRUE.equals(body.get("writeMismatch"))) {
-            verified = false;
-            report.put("message", "写操作与预览不一致（writeMismatch）");
-        } else if (requestedWrite && success && !realWriteEvidence) {
-            report.put("message", "执行成功但缺少写落地证据，请复核工具返回");
-        }
-        report.put("verified", verified);
-        report.put("realWriteEvidence", realWriteEvidence);
-        report.put("requestedWrite", requestedWrite);
-        if (dryRunPreviewJson != null && !dryRunPreviewJson.isBlank()) {
-            report.put("previewPresent", true);
-            report.put("previewHash", ConfirmTokenHmac.hashPreview(dryRunPreviewJson));
-        }
-        return report;
+        ToolEffect effect = toolEffectResolver != null
+                ? toolEffectResolver.resolve(toolName, requestParameters)
+                : new ToolEffectResolver().resolve(toolName, requestParameters);
+        WriteRemediationContract contract = RemediationContractFactory.build(
+                toolName, requestParameters, effect, "");
+        return verify(toolName, executionBody, dryRunPreviewJson, requestParameters, effect, contract);
+    }
+
+    public Map<String, Object> verify(
+            String toolName,
+            Map<String, Object> executionBody,
+            String dryRunPreviewJson,
+            Map<String, Object> requestParameters,
+            ToolEffect effect,
+            WriteRemediationContract contract) {
+        return RemediationVerifyEvaluator.evaluate(
+                toolName, executionBody, dryRunPreviewJson, requestParameters, contract, effect);
     }
 
     public PipelineResult executeDirect(
@@ -269,13 +286,53 @@ public class OpsExecutionPipeline {
 
         Map<String, Object> exec = mcpExecutionService.execute(toolName, parameters, start, traceId, instruction);
         exec.put("traceId", traceId);
+        exec.put("phase", "execute");
         if (Boolean.TRUE.equals(exec.get("success"))
                 && WriteToolResultSupport.requestedRealWrite(parameters)) {
             sessionRiskBudgetService.consume(requester, effect);
             exec.put("riskBudget", sessionRiskBudgetService.summary(requester));
         }
+        WriteRemediationContract contract = RemediationContractFactory.build(
+                toolName, parameters, effect, requester);
+        exec.put("remediationContract", contract.toMap());
+        exec.put("expectedEffect", contract.expectedEffect().toMap());
+        exec.put("approval", contract.approval().toMap());
+        Map<String, Object> verifyReport = verify(toolName, exec, "", parameters, effect, contract);
+        exec.put("verify", verifyReport);
+        exec.put("verified", verifyReport.get("verified"));
+        exec.put("verifyOutcome", verifyReport.get("verifyOutcome"));
+        exec.put("recover", verifyReport.getOrDefault("recover", contract.recover().toMap()));
+        applyRemediationSuccessGate(exec, verifyReport, parameters);
         mcpAuditService.persistSuccess(traceId, instruction, decision, toolName, exec, start, parameters);
         return new PipelineResult(exec, traceId, start, toolName, effect, fingerprint, "");
+    }
+
+    /**
+     * 真实写：验证未通过（含 VERIFY_WEAK）时不得记为处置成功。
+     */
+    static void applyRemediationSuccessGate(
+            Map<String, Object> exec,
+            Map<String, Object> verifyReport,
+            Map<String, Object> requestParameters) {
+        if (exec == null || verifyReport == null) {
+            return;
+        }
+        if (!WriteToolResultSupport.requestedRealWrite(
+                requestParameters == null ? Map.of() : requestParameters)) {
+            return;
+        }
+        boolean toolOk = Boolean.TRUE.equals(exec.get("success"));
+        exec.put("executionSuccess", toolOk);
+        boolean verified = Boolean.TRUE.equals(verifyReport.get("verified"));
+        exec.put("remediationClosed", verified);
+        if (toolOk && !verified) {
+            exec.put("success", false);
+            exec.put("verifyBlocked", true);
+            Object msg = verifyReport.get("message");
+            Object outcome = verifyReport.get("verifyOutcome");
+            exec.put("error", "处置未闭环（" + outcome + "）："
+                    + (msg == null ? "验证未通过" : msg));
+        }
     }
 
     private Map<String, Object> dryRunParams(String toolName, Map<String, Object> parameters) {

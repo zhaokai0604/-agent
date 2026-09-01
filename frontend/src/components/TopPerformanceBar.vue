@@ -55,7 +55,7 @@
       type="primary"
       plain
       class="sec-check-btn"
-      title="打开安全驾驶舱（策略回放 / 计划效果图）"
+      title="打开安全驾驶舱（策略模拟 / 处置计划预览）"
       @click="openSecurityCockpit"
     >
       驾驶舱
@@ -179,6 +179,7 @@ import SecuritySelfCheckDialog from './SecuritySelfCheckDialog.vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import {
+  formatApiError,
   buildManagementWsUrl,
   getPerformanceData,
   getPatrolAlertsRecent,
@@ -247,6 +248,7 @@ let timer = null
 let patrolTimer = null
 let slowPatrolTimer = null
 let perfWs = null
+let remediationConfirmAbortController = null
 let wsReconnectTimer = null
 let wsReconnectAttempt = 0
 let perfWsUnmounting = false
@@ -328,8 +330,12 @@ async function onConfirmRemediation () {
     return
   }
   remConfirmLoading.value = true
+  remediationConfirmAbortController?.abort()
+  remediationConfirmAbortController = new AbortController()
   try {
-    const res = await confirmPatrolRemediation(id, '确认执行')
+    const res = await confirmPatrolRemediation(id, '确认执行', {
+      signal: remediationConfirmAbortController.signal
+    })
     const actions = Array.isArray(res?.actions) ? res.actions : null
     if (actions && actions.length > 0) {
       const okCount = actions.filter((a) => a && a.success === true).length
@@ -360,11 +366,27 @@ async function onConfirmRemediation () {
       await fetchRemediationPending()
     }
   } catch (e) {
-    ElMessage.error('请求失败')
+    // This component remains mounted while the main route changes. Surface
+    // the actual backend response instead of an ambiguous global toast.
+    const message = formatApiError(e)
+    if (!isRequestCancelled(e) && message && message !== 'canceled' && message !== '已取消') {
+      ElMessage.error(message)
+    }
     console.warn('[TopPerformanceBar] remediation confirm', e)
   } finally {
+    remediationConfirmAbortController = null
     remConfirmLoading.value = false
   }
+}
+
+function isRequestCancelled(error) {
+  return error?.code === 'ERR_CANCELED'
+    || error?.name === 'CanceledError'
+    || /canceled|cancelled|已取消/i.test(String(error?.message || ''))
+}
+
+function handleRouteChanging() {
+  remediationConfirmAbortController?.abort()
 }
 
 function patrolItemKey (it, idx) {
@@ -864,12 +886,15 @@ function handleVisibilityChange () {
 
 onMounted(() => {
   startFeed()
+  window.addEventListener('ops-route-changing', handleRouteChanging)
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', handleVisibilityChange)
   }
 })
 
 onUnmounted(() => {
+  window.removeEventListener('ops-route-changing', handleRouteChanging)
+  remediationConfirmAbortController?.abort()
   if (typeof document !== 'undefined') {
     document.removeEventListener('visibilitychange', handleVisibilityChange)
   }

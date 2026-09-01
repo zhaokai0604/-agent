@@ -60,7 +60,8 @@ public class WorkflowRetriever {
     }
 
     private double score(OpsWorkflow wf, List<String> findingKinds, String userMessage) {
-        double score = 1.0;
+        // 无信号时为 0，避免寒暄默认命中任意 workflow 并触发 reloadCache
+        double score = 0.0;
         if (findingKinds != null && wf.findingKinds() != null) {
             long overlap = findingKinds.stream()
                     .filter(k -> wf.findingKinds().stream().anyMatch(f -> f.equalsIgnoreCase(k)))
@@ -97,6 +98,9 @@ public class WorkflowRetriever {
                     }
                 }
             }
+        }
+        if (score <= 0) {
+            return 0;
         }
         score += Math.min(5, wf.utilityCount()) * 0.2;
         return score;

@@ -282,10 +282,12 @@ const loadTools = async () => {
     tools.value = mergeToolRegistry(raw, { registryLoaded: true, platformInfo: platform })
       .filter((t) => !t.name.startsWith('Remote'))
     registryConnected.value = true
-  } catch {
+  } catch (error) {
     tools.value = mergeToolRegistry(null, { registryLoaded: false })
     registryConnected.value = false
-    ElMessage.warning('未能连接运维服务，请确认已登录')
+    const code = error?.securityCode ? `（${error.securityCode}）` : ''
+    const status = error?.status ? ` HTTP ${error.status}` : ''
+    ElMessage.warning(`工具接口请求失败${status}${code}，请确认后端已启动并已登录`)
   } finally {
     toolsLoading.value = false
   }

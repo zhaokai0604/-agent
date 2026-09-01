@@ -20,6 +20,27 @@ class WorkflowRetrieverTest {
     private WorkflowMemoryService workflowMemoryService;
 
     @Test
+    void greetingShouldNotMatchAnyWorkflow() {
+        WorkflowRetriever retriever = new WorkflowRetriever(workflowMemoryService);
+        OpsWorkflow disk = new OpsWorkflow(
+                "disk-pressure-remediation",
+                "disk",
+                List.of("DISK_PRESSURE"),
+                "disk",
+                "disk",
+                List.of(OpsWorkflowStep.of("x", "x", "DiskTool", Map.of())),
+                "seed",
+                null,
+                9,
+                true
+        );
+        when(workflowMemoryService.isEnabled()).thenReturn(true);
+        when(workflowMemoryService.listByDomain("disk")).thenReturn(List.of(disk));
+
+        assertTrue(retriever.retrieve("disk", List.of(), "你好", 3).isEmpty());
+    }
+
+    @Test
     void bestMatchPrefersDomainAndFindingOverlap() {
         WorkflowRetriever retriever = new WorkflowRetriever(workflowMemoryService);
         OpsWorkflow disk = new OpsWorkflow(

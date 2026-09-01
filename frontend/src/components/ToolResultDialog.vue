@@ -23,6 +23,12 @@
     </template>
 
     <div v-if="payload" class="result-body">
+      <div v-if="closureBanner" class="closure-banner" :class="closureBanner.tone">
+        <div class="closure-banner__title">{{ closureBanner.title }}</div>
+        <p v-if="closureBanner.expected">预期：{{ closureBanner.expected }}</p>
+        <p v-if="closureBanner.verify">验证：{{ closureBanner.verify }}</p>
+        <p v-if="closureBanner.recover">恢复：{{ closureBanner.recover }}</p>
+      </div>
       <div class="result-structured">
         <StructuredResultView :data="viewPayload" />
       </div>
@@ -72,6 +78,11 @@ const viewPayload = computed(() =>
 const statusLabel = computed(() => {
   const p = payload.value
   if (!p) return '执行失败'
+  if (p.verifyBlocked || (p.verifyOutcome && p.verifyOutcome !== 'VERIFIED' && p.verifyOutcome !== 'VERIFY_SKIPPED' && p.verifyOutcome !== '')) {
+    if (p.verifyOutcome === 'VERIFY_WEAK') return '执行完成但验证偏弱（未闭环）'
+    if (p.verifyOutcome === 'EVIDENCE_INCOMPLETE') return '证据不完整（未闭环）'
+    return '验证未通过（未闭环）'
+  }
   if (p.writeMismatch) return '写意图未落地'
   const status = String(p.status || '').toUpperCase()
   if (status === 'WARN' && p.success) return '完成（告警）'
@@ -79,7 +90,7 @@ const statusLabel = computed(() => {
   if ((mode === 'DRY-RUN' || mode === 'PREVIEW') && p.success) return '预览成功'
   if (mode === 'SCAN' && p.success) return '扫描完成'
   if (mode === 'NOOP' && p.success) return '无文件可删'
-  if ((mode === 'DELETE' || mode === 'EXECUTED') && p.success) return '写操作已落地'
+  if ((mode === 'DELETE' || mode === 'EXECUTED') && p.success) return '写操作已闭环'
   if (p.success) return '调用成功'
   return '执行失败'
 })
@@ -87,12 +98,43 @@ const statusLabel = computed(() => {
 const statusChipClass = computed(() => {
   const p = payload.value
   if (!p) return 'fail'
+  if (p.verifyBlocked || (p.verifyOutcome && !['VERIFIED', 'VERIFY_SKIPPED', ''].includes(String(p.verifyOutcome)))) {
+    return 'warn'
+  }
   if (p.writeMismatch) return 'warn'
   if (String(p.status || '').toUpperCase() === 'WARN' && p.success) return 'warn'
   const mode = String(p.mode || '').toUpperCase()
   if ((mode === 'DRY-RUN' || mode === 'PREVIEW' || mode === 'SCAN' || mode === 'NOOP') && p.success) return 'preview'
   if (p.success) return 'ok'
   return 'fail'
+})
+
+const closureBanner = computed(() => {
+  const p = payload.value
+  if (!p) return null
+  const expected = p.expectedEffect?.description || ''
+  const outcome = p.verifyOutcome || ''
+  const recover = p.recover
+  const hasClosure = expected || outcome || recover || p.irreversibleWarning
+  if (!hasClosure) return null
+  let recoverText = ''
+  if (recover && typeof recover === 'object') {
+    if (recover.reversible) {
+      recoverText = recover.recoverHint || `可恢复（${recover.recoverTool || 'RecycleBinTool'}）`
+    } else {
+      recoverText = recover.irreversibilityNote || p.irreversibleWarning || '不可逆'
+    }
+  } else if (p.irreversibleWarning) {
+    recoverText = p.irreversibleWarning
+  }
+  const closed = p.verified === true || p.remediationClosed === true
+  return {
+    tone: closed ? 'ok' : (outcome ? 'warn' : 'info'),
+    title: closed ? '受控处置已闭环' : (outcome ? `处置未闭环（${outcome}）` : '受控处置信息'),
+    expected,
+    verify: outcome ? `${outcome}${p.verifyMessage ? ' · ' + p.verifyMessage : ''}` : '',
+    recover: recoverText
+  }
 })
 
 function pickMode(raw) {
@@ -121,7 +163,15 @@ function open(result) {
     status: result.status || nestedStatus || (result.success === true ? 'SUCCESS' : 'ERROR'),
     writeMismatch:
       result.writeMismatch === true ||
-      raw?.writeMismatch === true
+      raw?.writeMismatch === true,
+    verifyOutcome: result.verifyOutcome || raw?.verifyOutcome || raw?.verify?.verifyOutcome || '',
+    verified: result.verified === true || raw?.verified === true,
+    verifyBlocked: result.verifyBlocked === true || raw?.verifyBlocked === true,
+    remediationClosed: result.remediationClosed === true || raw?.remediationClosed === true,
+    expectedEffect: result.expectedEffect || raw?.expectedEffect || raw?.verify?.expectedEffect || null,
+    recover: result.recover || raw?.recover || raw?.verify?.recover || null,
+    irreversibleWarning: result.irreversibleWarning || raw?.irreversibleWarning || '',
+    verifyMessage: result.verifyMessage || raw?.verify?.message || raw?.error || ''
   }
   visible.value = true
 }
@@ -218,6 +268,36 @@ defineExpose({ open })
 
 .result-body {
   padding-top: 4px;
+}
+
+.closure-banner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--ops-border, #e2e8f0);
+  background: var(--ops-panel-soft, #f8fafc);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.closure-banner.ok {
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.closure-banner.warn {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.closure-banner__title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.closure-banner p {
+  margin: 2px 0;
+  color: var(--ops-text-subtle, #64748b);
 }
 
 .result-structured {

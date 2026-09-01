@@ -111,9 +111,10 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
                 return McpToolResponses.error(objectMapper,
                         "服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
             }
+            String afterState = probeLinuxServiceState(svc);
             String data = String.format(Locale.ROOT,
-                    "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"stderr\":\"%s\"}",
-                    svc, true, escapeJson(r.error() == null ? "" : r.error()));
+                    "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"afterState\":\"%s\",\"stderr\":\"%s\"}",
+                    svc, true, escapeJson(afterState), escapeJson(r.error() == null ? "" : r.error()));
             return McpToolResponses.success(objectMapper, data, System.currentTimeMillis() - startTime);
         } catch (Exception e) {
             log.error("[ServiceRestart] 异常", e);
@@ -139,10 +140,44 @@ public class ServiceRestartTool extends AbstractCommandExecutor {
             return McpToolResponses.error(objectMapper,
                     "服务重启失败: " + (r.error() != null ? r.error() : r.output()), startTime);
         }
+        String afterState = probeWindowsServiceState(unit);
         String data = String.format(Locale.ROOT,
-                "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"platform\":\"windows\",\"stderr\":\"%s\"}",
-                unit, true, escapeJson(r.error() == null ? "" : r.error()));
+                "{\"mode\":\"EXECUTED\",\"service\":\"%s\",\"success\":%s,\"afterState\":\"%s\",\"platform\":\"windows\",\"stderr\":\"%s\"}",
+                unit, true, escapeJson(afterState), escapeJson(r.error() == null ? "" : r.error()));
         return McpToolResponses.success(objectMapper, data, System.currentTimeMillis() - startTime);
+    }
+
+    private String probeLinuxServiceState(String svc) {
+        try {
+            AbstractCommandExecutor.CommandResult st = minPrivilegeExecutor.executeSafely(
+                    List.of("systemctl", "is-active", svc), 15_000L);
+            String out = st != null && st.output() != null ? st.output().trim() : "";
+            if (!out.isBlank()) {
+                return out.split("\\R")[0].trim();
+            }
+        } catch (Exception e) {
+            log.debug("[ServiceRestart] is-active probe failed: {}", e.getMessage());
+        }
+        return "unknown";
+    }
+
+    private String probeWindowsServiceState(String unit) {
+        try {
+            String ps = "(Get-Service -Name '" + unit.replace("'", "''") + "').Status";
+            AbstractCommandExecutor.CommandResult st = minPrivilegeExecutor.executeSafely(
+                    List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps), 15_000L);
+            String out = st != null && st.output() != null ? st.output().trim() : "";
+            if (!out.isBlank()) {
+                String status = out.split("\\R")[0].trim();
+                if ("Running".equalsIgnoreCase(status)) {
+                    return "active";
+                }
+                return status.toLowerCase(Locale.ROOT);
+            }
+        } catch (Exception e) {
+            log.debug("[ServiceRestart] Get-Service probe failed: {}", e.getMessage());
+        }
+        return "unknown";
     }
 
     private boolean isSimulatedDryRun(AbstractCommandExecutor.CommandResult result) {

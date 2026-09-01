@@ -2,7 +2,6 @@ package com.award.log.security.effect;
 
 import com.award.log.mcp.WriteToolResultSupport;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -12,8 +11,6 @@ import java.util.Locale;
  * 写操作证据契约：真实写必须返回可机读证据字段，否则标记证据不完整。
  */
 public final class EvidenceContractValidator {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private EvidenceContractValidator() {
     }
@@ -54,7 +51,7 @@ public final class EvidenceContractValidator {
                     "真实写缺少可机读执行证据");
         }
 
-        JsonNode data = extractData(toolResultJson);
+        JsonNode data = WriteToolResultSupport.businessDataFromToolPayload(toolResultJson);
         List<String> missing = new ArrayList<>();
         switch (contractId) {
             case "DELETE_PATH" -> {
@@ -104,31 +101,6 @@ public final class EvidenceContractValidator {
             return ValidationResult.ok(effect == null ? "" : effect.evidenceContractId());
         }
         return validate(effect, toolResultJson);
-    }
-
-    private static JsonNode extractData(String toolResultJson) {
-        if (toolResultJson == null || toolResultJson.isBlank()) {
-            return null;
-        }
-        try {
-            JsonNode root = MAPPER.readTree(toolResultJson);
-            if (root == null) {
-                return null;
-            }
-            JsonNode data = root.get("data");
-            if (data != null && data.isTextual()) {
-                String raw = data.asText();
-                if (raw != null && raw.trim().startsWith("{")) {
-                    return MAPPER.readTree(raw);
-                }
-            }
-            if (data != null && data.isObject()) {
-                return data;
-            }
-            return root.isObject() ? root : null;
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     private static boolean hasPositiveNumber(JsonNode data, String field) {

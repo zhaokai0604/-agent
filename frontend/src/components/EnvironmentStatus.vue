@@ -2,7 +2,7 @@
   <div class="ops-page environment-status">
     <OpsPageHeader
       title="环境状态"
-      subtitle="连接、AI、向量库与本机执行能力一览；异常项请按提示修复"
+      subtitle="连接、模型服务、知识库与本机执行能力一览；异常项请按提示修复"
     >
       <template #actions>
         <el-button :icon="Refresh" :loading="loading" @click="refresh">刷新</el-button>
@@ -60,7 +60,7 @@
     <el-card shadow="never" class="detail-card">
       <template #header><span>安全与执行策略</span></template>
       <el-descriptions :column="2" border size="small">
-        <el-descriptions-item label="AI 已配置">{{ boolLabel(platform?.security?.aiConfigured) }}</el-descriptions-item>
+        <el-descriptions-item label="模型服务已配置">{{ boolLabel(platform?.security?.aiConfigured) }}</el-descriptions-item>
         <el-descriptions-item label="最小权限执行">{{ boolLabel(platform?.security?.minPrivilegeEnabled) }}</el-descriptions-item>
         <el-descriptions-item label="运行用户">{{ platform?.security?.runAsUser || '当前进程' }}</el-descriptions-item>
         <el-descriptions-item label="自动修复">{{ boolLabel(platform?.security?.autoRemediationEnabled === 'true') }}</el-descriptions-item>
@@ -134,9 +134,9 @@ const summaryCards = computed(() => {
   return [
     {
       key: 'ai',
-      label: 'AI 助手',
+      label: '模型分析',
       value: aiOk ? '就绪' : '未配置',
-      desc: aiOk ? '对话与语义检索可用' : '请配置 AI_API_KEY',
+      desc: aiOk ? '模型分析与语义检索可用' : '请配置模型服务密钥',
       level: aiOk ? 'ok' : 'warn'
     },
     {

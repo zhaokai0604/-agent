@@ -295,7 +295,7 @@ class AutonomousOpsOrchestratorTest {
         when(logCleanupTool.cleanupOldLogs("/var/log", 30, true, false))
                 .thenReturn("{\"success\":true,\"data\":{\"filesFound\":3}}");
         when(logCleanupTool.cleanupOldLogs("/var/log", 30, false, true))
-                .thenReturn("{\"success\":true,\"data\":{\"filesDeleted\":2}}");
+                .thenReturn("{\"success\":true,\"data\":{\"mode\":\"DELETE\",\"filesDeleted\":2,\"bytesFreed\":2048}}");
 
         AutonomousOpsOrchestrator.RunResult result =
                 orchestrator.run("autonomous ops", McpToolSurface.FULL, RiskLevel.LOW);
@@ -317,7 +317,7 @@ class AutonomousOpsOrchestratorTest {
                         OpsTrustTier.AUTO,
                         "restart"));
         when(serviceRestartTool.restartService("nginx", false, true))
-                .thenReturn("{\"success\":true,\"data\":{\"service\":\"nginx\"}}");
+                .thenReturn("{\"success\":true,\"data\":{\"mode\":\"EXECUTED\",\"service\":\"nginx\",\"afterState\":\"active\",\"success\":true}}");
         when(remediationEffectEvaluator.captureMetrics())
                 .thenReturn(Map.of("diskUsagePct", 40.0, "cpuUsagePct", 20.0))
                 .thenReturn(Map.of("diskUsagePct", 40.0, "cpuUsagePct", 20.0));

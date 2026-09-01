@@ -16,7 +16,7 @@
           </div>
           <div class="tc-hero-copy">
             <h1 class="tc-hero-title">ThreshCore</h1>
-            <p class="tc-hero-tag">智能运维与日志洞察</p>
+            <p class="tc-hero-tag">受控运维与日志洞察</p>
           </div>
         </div>
         <p class="tc-hero-lead">
@@ -27,7 +27,7 @@
           <li>任务、报告与链路可追溯</li>
           <li>对话与工具在策略内执行</li>
         </ul>
-        <div class="tc-hero-foot">ThreshCore · 智能运维与日志分析平台</div>
+        <div class="tc-hero-foot">ThreshCore · 受控运维与日志分析平台</div>
       </aside>
 
       <main class="tc-card">
@@ -56,6 +56,12 @@
 
         <!-- 登录表单 -->
         <div v-show="!isRegister" class="form-section tc-form-section">
+          <div class="tc-seg tc-login-mode" role="tablist" aria-label="登录方式">
+            <button type="button" class="tc-seg-btn" :class="{ active: loginMode === 'password' }" @click="loginMode = 'password'">账号密码</button>
+            <button type="button" class="tc-seg-btn" :class="{ active: loginMode === 'key' }" @click="loginMode = 'key'">接口访问密钥</button>
+          </div>
+          <p v-if="loginMode === 'key'" class="key-login-hint">密钥仅用于本次登录，验证成功后将建立安全会话，不会保存到浏览器。</p>
+          <template v-if="loginMode === 'password'">
           <div class="form-group">
             <div class="input-container">
               <div class="input-icon">
@@ -125,6 +131,19 @@
             <span>登录</span>
             <el-icon class="btn-icon"><ArrowRight /></el-icon>
           </button>
+          </template>
+          <template v-else>
+            <div class="form-group">
+              <div class="input-container">
+                <div class="input-icon"><el-icon><Lock /></el-icon></div>
+                <input v-model="keyLoginValue" type="password" autocomplete="off" placeholder="请输入接口访问密钥" class="form-input">
+              </div>
+            </div>
+            <button class="btn login-btn" @click="handleKeyLogin">
+              <span>使用密钥登录</span>
+              <el-icon class="btn-icon"><ArrowRight /></el-icon>
+            </button>
+          </template>
         </div>
 
         <!-- 注册表单 -->
@@ -256,7 +275,7 @@
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Check, Close, View, Hide, ArrowRight } from '@element-plus/icons-vue'
-import { login, register } from '../api'
+import { login, loginWithApiKey, register } from '../api'
 import UserServiceAgreement from './UserServiceAgreement.vue'
 
 const agreementVisible = ref(false)
@@ -272,6 +291,8 @@ const emit = defineEmits(['login-success'])
 
 // 响应式数据
 const isRegister = ref(false)
+const loginMode = ref('password')
+const keyLoginValue = ref('')
 const showForgotPassword = ref(false)
 
 // 密码显示/隐藏状态
@@ -523,6 +544,27 @@ const handleLogin = async () => {
   }
 }
 
+const handleKeyLogin = async () => {
+  if (!keyLoginValue.value.trim()) {
+    ElMessage.error('请输入接口访问密钥')
+    return
+  }
+  try {
+    const response = await loginWithApiKey(keyLoginValue.value.trim())
+    keyLoginValue.value = ''
+    localStorage.setItem('user', JSON.stringify({
+      userId: response.userId,
+      username: response.username,
+      role: response.role
+    }))
+    ElMessage.success('密钥登录成功')
+    emit('login-success')
+  } catch (error) {
+    keyLoginValue.value = ''
+    if (!error?.response) ElMessage.error('无法连接后端，请确认服务已启动')
+  }
+}
+
 // 注册处理
 const handleRegister = async () => {
   validateAccount('register')
@@ -665,7 +707,7 @@ const handleRegister = async () => {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 1024px;
+  max-width: 900px;
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(340px, 1.12fr);
   gap: 0;
@@ -677,13 +719,13 @@ const handleRegister = async () => {
 }
 
 .tc-hero {
-  padding: clamp(24px, 4.5vw, 44px);
+  padding: clamp(22px, 3.5vw, 34px);
   background: linear-gradient(185deg, rgba(15, 23, 42, 0.98) 0%, rgba(12, 18, 32, 0.92) 100%);
   border-right: 1px solid var(--tc-border);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 18px;
+  gap: 14px;
 }
 
 .tc-hero-mark {
@@ -779,10 +821,10 @@ const handleRegister = async () => {
   background: var(--tc-surface);
   backdrop-filter: blur(22px);
   -webkit-backdrop-filter: blur(22px);
-  padding: clamp(22px, 3.8vw, 34px);
+  padding: clamp(20px, 3vw, 30px);
   display: flex;
   flex-direction: column;
-  min-height: min(620px, 90vh);
+  min-height: 0;
 }
 
 .tc-seg {
@@ -791,7 +833,7 @@ const handleRegister = async () => {
   border-radius: 11px;
   background: rgba(2, 6, 23, 0.5);
   border: 1px solid var(--tc-border);
-  margin-bottom: 22px;
+  margin-bottom: 16px;
   flex-shrink: 0;
 }
 
@@ -822,17 +864,28 @@ const handleRegister = async () => {
 }
 
 .form-section.tc-form-section {
-  flex: 1;
+  flex: 0 1 auto;
   padding: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   min-height: 0;
+}
+
+.tc-login-mode {
+  margin-bottom: 14px;
+}
+
+.key-login-hint {
+  margin: -3px 0 14px;
+  color: var(--tc-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* 表单组 */
 .form-group {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   position: relative;
 }
 

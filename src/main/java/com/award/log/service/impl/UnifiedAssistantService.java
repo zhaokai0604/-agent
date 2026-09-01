@@ -33,6 +33,10 @@ import com.award.log.security.ReadOnlySurfaceDenylist;
 import com.award.log.security.RiskLevel;
 import com.award.log.security.ToolSurfaceResolver;
 import com.award.log.security.WriteExecutionCoordinator;
+import com.award.log.security.effect.RemediationContractFactory;
+import com.award.log.security.effect.ToolEffect;
+import com.award.log.security.effect.ToolEffectResolver;
+import com.award.log.security.effect.WriteRemediationContract;
 import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.AiModelRouter;
 import com.award.log.service.KnowledgeBaseService;
@@ -198,7 +202,7 @@ public class UnifiedAssistantService {
     @Value("${agent.assistant.tool-catalog-prompt-max:28}")
     private int toolCatalogPromptMax;
 
-    @Value("${agent.assistant.open-tool-permissions:true}")
+    @Value("${agent.assistant.open-tool-permissions:false}")
     private boolean openToolPermissions;
 
     @Value("${agent.assistant.analysis-skills-prompt-max:10}")
@@ -335,6 +339,16 @@ public class UnifiedAssistantService {
                                    boolean useToolAgent,
                                    boolean confirmRemediation,
                                    String requestedModelProfile) {
+        return chatStream(userMessage, history, useToolAgent, confirmRemediation,
+                requestedModelProfile, "anonymous");
+    }
+
+    public Flux<String> chatStream(String userMessage,
+                                   List<ChatTurn> history,
+                                   boolean useToolAgent,
+                                   boolean confirmRemediation,
+                                   String requestedModelProfile,
+                                   String requester) {
         String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
                 userMessage == null ? "" : userMessage.trim(), 32_000);
         if (safe.isBlank()) {
@@ -344,8 +358,10 @@ public class UnifiedAssistantService {
         history = trimHistory(history);
         AssistantReplyPlanner.ReplyPlan plan = assistantReplyPlanner.plan(
                 safe, history, useToolAgent, confirmRemediation, orchestratorEnabled, opsRuntimeService);
+        log.info("assistant route mode={} category={} toolAgent={} confirmWrite={} msgLen={}",
+                plan.mode(), plan.category(), plan.useToolAgentPath(), confirmRemediation, safe.length());
         if (plan.useToolAgentPath()) {
-            return chatStreamWithToolAgent(safe, history, confirmRemediation, plan, requestedModelProfile);
+            return chatStreamWithToolAgent(safe, history, confirmRemediation, plan, requestedModelProfile, requester);
         }
         return chatStreamPlain(safe, history, plan, requestedModelProfile);
     }
@@ -413,9 +429,11 @@ public class UnifiedAssistantService {
         meta.put("type", "assistant-meta");
         meta.put("ragHits", List.of());
         meta.put("writeConfirmed", false);
-        if (knowledgeBaseService != null && userMessage != null && !userMessage.isBlank()) {
+        boolean skipRag = shouldSkipKnowledgeLookup(extras, userMessage);
+        if (!skipRag && knowledgeBaseService != null && userMessage != null && !userMessage.isBlank()) {
             try {
-                meta.put("ragHits", knowledgeBaseService.search(userMessage, knowledgeSearchTopK));
+                List<Map<String, Object>> hits = boundedKnowledgeSearch(userMessage, knowledgeSearchTopK);
+                meta.put("ragHits", hits == null ? List.of() : hits);
             } catch (Exception e) {
                 log.debug("knowledge lookup skipped in assistant meta: {}", e.getMessage());
             }
@@ -424,6 +442,26 @@ public class UnifiedAssistantService {
             meta.putAll(extras);
         }
         return meta;
+    }
+
+    /** 寒暄/空消息不必打知识库；避免 Qdrant 卡住导致「Agent 不回复」。 */
+    private static boolean shouldSkipKnowledgeLookup(Map<String, Object> extras, String userMessage) {
+        if (extras != null) {
+            Object mode = extras.get("replyMode");
+            if (mode != null && "CHITCHAT".equalsIgnoreCase(String.valueOf(mode))) {
+                return true;
+            }
+            Object cat = extras.get("intentCategory");
+            if (cat != null) {
+                String c = String.valueOf(cat);
+                if ("GREETING".equals(c) || "FAREWELL".equals(c) || "GRATITUDE".equals(c)
+                        || "ACKNOWLEDGMENT".equals(c) || "EMPTY".equals(c)) {
+                    return true;
+                }
+            }
+        }
+        return AssistantIntentSignals.classifySocial(userMessage) != null
+                || AssistantIntentSignals.isBlank(userMessage);
     }
 
     private Flux<String> chatStreamPlain(String userMessage,
@@ -467,13 +505,13 @@ public class UnifiedAssistantService {
         Flux<String> body = resolvedModel.chatModel().stream(prompt)
                 .doOnNext(lastResponse::set)
                 .map(AiChatResponseSupport::textFrom)
+                .map(UnifiedAssistantService::escapeAssistantControlPrefixes)
                 .map(piece -> toStreamingDelta(streamAcc, piece))
                 .filter(piece -> !piece.isEmpty())
                 .timeout(Duration.ofSeconds(90))
-                .retry(1)
                 .onErrorResume(e -> {
                     log.error("assistant plain stream failed", e);
-                    return Flux.just("助手暂时不可用：" + e.getMessage());
+                    return Flux.just("助手暂时不可用：模型服务连接失败，请检查 AI 地址、Key 和模型配置。");
                 });
         if (sanitizeOps) {
             body = body.collectList()
@@ -501,7 +539,8 @@ public class UnifiedAssistantService {
                                                  List<ChatTurn> history,
                                                  boolean confirmRemediation,
                                                  AssistantReplyPlanner.ReplyPlan plan,
-                                                 String requestedModelProfile) {
+                                                 String requestedModelProfile,
+                                                 String requester) {
         if (promptInjectionGuard != null && promptInjectionGuard.isInjection(userMessage)) {
             captureStreamReject(userMessage, "INJECTION", null, "prompt injection detected");
             return Flux.just("检测到疑似注入内容，本轮已拦截，请换一种说法描述您的运维需求。");
@@ -610,7 +649,7 @@ public class UnifiedAssistantService {
                             ? "正在按确认计划执行本机观测与处置编排…"
                             : "正在按计划执行本机观测与处置编排，请稍候…"),
                     Mono.fromCallable(() -> {
-                                OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions);
+                                    OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions, requester);
                                 try {
                                     return opsRuntimeService.runPlaybook(
                                             playbook, userMessage, surface, intentRisk);
@@ -631,7 +670,7 @@ public class UnifiedAssistantService {
                                             streamToolAgentBody(
                                                     userMessage, history, confirmRemediation, plan,
                                                     allowWrite, metaExtras, plannedTools, planPhase,
-                                                    awaitingConfirm, awmHit, requestedModelProfile));
+                                                    awaitingConfirm, awmHit, requestedModelProfile, requester));
                                 }
                                 Flux<String> event = Flux.empty();
                                 String encoded = AssistantStreamEvents.encode(result.report());
@@ -664,7 +703,7 @@ public class UnifiedAssistantService {
                 streamToolAgentBody(
                         userMessage, history, confirmRemediation, plan,
                         allowWrite, metaExtras, plannedTools, planPhase,
-                        awaitingConfirm, awmHit, requestedModelProfile),
+                        awaitingConfirm, awmHit, requestedModelProfile, requester),
                 userMessage, metaExtras, plan);
     }
 
@@ -679,7 +718,8 @@ public class UnifiedAssistantService {
             String planPhase,
             boolean awaitingConfirm,
             OpsWorkflow awmHit,
-            String requestedModelProfile) {
+            String requestedModelProfile,
+            String requester) {
         boolean writeMounted = allowWrite;
         metaExtras.put("writeToolsMounted", writeMounted);
         String toolHint = plan.statusHintZh().isBlank()
@@ -710,7 +750,7 @@ public class UnifiedAssistantService {
                 progressEventFlux("run", runHint),
                 Mono.fromCallable(() -> runBlockingToolAugmentedCompletion(
                                 userMessage, history, confirmRemediation, plan,
-                                toolsForRun, planPhase, awmForRun, requestedModelProfile))
+                                toolsForRun, planPhase, awmForRun, requestedModelProfile, requester))
                         .subscribeOn(Schedulers.boundedElastic())
                         .timeout(Duration.ofMinutes(4))
                         .flatMapMany(completion -> Flux.concat(
@@ -744,7 +784,8 @@ public class UnifiedAssistantService {
                                                                    List<String> plannedTools,
                                                                    String planPhase,
                                                                    OpsWorkflow awmHit,
-                                                                   String requestedModelProfile) {
+                                                                   String requestedModelProfile,
+                                                                   String requester) {
         Map<String, Object> context = getAssistantContext(userMessage);
         augmentContextWithSessionSecurity(userMessage, context);
         context.put("assistantToolLoop", Boolean.TRUE);
@@ -786,7 +827,7 @@ public class UnifiedAssistantService {
         String traceId = UUID.randomUUID().toString();
         long startedAt = System.currentTimeMillis();
         ChatToolExecutionTracker.clear();
-        OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions);
+        OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions, requester);
         try {
             AiModelRouter.ResolvedModel resolvedModel = resolveModel(
                     userMessage, AiUsageSupport.estimateTokens(contextToJson(context)), true,
@@ -823,9 +864,13 @@ public class UnifiedAssistantService {
                 if (toolCallbacks.length > 0) {
                     promptSpec = promptSpec.toolCallbacks(toolCallbacks);
                 }
+                log.info("tool-agent ChatClient.call start tools={} writeMounted={} surface={}",
+                        toolCallbacks.length, writeMounted, surface);
                 var responseSpec = promptSpec.call();
                 content = responseSpec.content();
                 response = responseSpec.chatResponse();
+                log.info("tool-agent ChatClient.call done contentLen={}",
+                        content == null ? 0 : content.length());
             }
             Map<String, Object> contextUsage = AiUsageSupport.usage(
                     response,
@@ -917,6 +962,10 @@ public class UnifiedAssistantService {
                     realWriteOk,
                     cleaned);
             executionState.put("feedbackRecorded", feedbackRecorded);
+            Map<String, Object> pendingConfirmation = ChatToolExecutionTracker.pendingConfirmation();
+            if (!pendingConfirmation.isEmpty()) {
+                executionState.put("pendingConfirmation", pendingConfirmation);
+            }
             return new ToolAgentCompletion(
                     appendChatAntiHallucinationFooter(cleaned, allowWrite),
                     traceId,
@@ -1079,12 +1128,33 @@ public class UnifiedAssistantService {
         ctx.put("agentHostOs", buildAgentHostOsSummary());
         if (knowledgeBaseService != null && userMessage != null && !userMessage.isBlank()) {
             try {
-                ctx.put("knowledgeHints", knowledgeBaseService.search(userMessage, Math.min(3, knowledgeSearchTopK)));
+                ctx.put("knowledgeHints", boundedKnowledgeSearch(userMessage, Math.min(3, knowledgeSearchTopK)));
             } catch (Exception e) {
                 log.debug("light context knowledge skipped: {}", e.getMessage());
             }
         }
         return ctx;
+    }
+
+    /** Knowledge retrieval is optional context and must never block chat delivery. */
+    private List<Map<String, Object>> boundedKnowledgeSearch(String userMessage, int topK) {
+        if (knowledgeBaseService == null || userMessage == null || userMessage.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<Map<String, Object>> hits = java.util.concurrent.CompletableFuture
+                    .supplyAsync(() -> knowledgeBaseService.search(userMessage, Math.max(1, topK)))
+                    .orTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                    .exceptionally(ex -> {
+                        log.warn("knowledge lookup timed out/failed: {}", ex.getMessage());
+                        return List.of();
+                    })
+                    .join();
+            return hits == null ? List.of() : hits;
+        } catch (Exception e) {
+            log.debug("knowledge lookup skipped: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     private Map<String, Object> buildOpsSummaryContext(String userMessage) {
@@ -1121,7 +1191,11 @@ public class UnifiedAssistantService {
 
     private String contextToJson(Map<String, Object> context) {
         try {
-            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(context);
+            return objectMapper
+                    .copy()
+                    .findAndRegisterModules()
+                    .writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(context);
         } catch (JsonProcessingException e) {
             log.warn("assistant context json serialization failed, fallback to string", e);
             return String.valueOf(context);
@@ -1293,10 +1367,11 @@ public class UnifiedAssistantService {
     }
 
     private boolean resolveAllowWrite(boolean confirmRemediation, String userMessage) {
-        if (openToolPermissions) {
-            return true;
-        }
-        return confirmRemediation || opsIntentRouter.forceRemediate(userMessage);
+        // A chat boolean or natural-language confirmation is not a capability
+        // token. Real writes are performed only by /api/mcp/confirmExecute after
+        // the PEP preview has been approved. Keep the explicit opt-in escape
+        // hatch for deployments that intentionally open the tool surface.
+        return openToolPermissions;
     }
 
     private boolean resolveAwaitingConfirm(boolean allowWrite, List<String> plannedTools) {
@@ -1529,11 +1604,42 @@ public class UnifiedAssistantService {
         event.put("writeConfirmed", writeConfirmed);
         event.put("awaitingConfirm", !writeConfirmed && AgentSkillPlan.hasWriteTools(plannedTools));
         event.put("writeToolsMounted", writeConfirmed);
+        attachRemediationPepMeta(event, plannedTools, writeConfirmed);
         if (executionState != null && !executionState.isEmpty()) {
             event.put("executionState", executionState);
         }
         String encoded = AssistantStreamEvents.encode(event);
         return encoded == null ? Flux.empty() : Flux.just(encoded);
+    }
+
+    /** 对话计划阶段挂上预期变化/恢复说明，与 MCP PEP 卡片字段对齐（HMAC 令牌仍由管线签发）。 */
+    private static void attachRemediationPepMeta(
+            Map<String, Object> event, List<String> plannedTools, boolean writeConfirmed) {
+        if (event == null || writeConfirmed || plannedTools == null || plannedTools.isEmpty()) {
+            return;
+        }
+        List<String> pending = AgentSkillPlan.pendingWriteTools(plannedTools);
+        if (pending == null || pending.isEmpty()) {
+            return;
+        }
+        String tool = pending.get(0);
+        Map<String, Object> writeParams = new LinkedHashMap<>();
+        writeParams.put("dryRun", false);
+        if ("ServiceRestartTool".equals(tool) || "ServiceOpsTool".equals(tool) || "SystemdTool".equals(tool)) {
+            writeParams.put("confirmRestart", true);
+        } else {
+            writeParams.put("confirmDelete", true);
+        }
+        ToolEffect effect = new ToolEffectResolver().resolve(tool, writeParams);
+        WriteRemediationContract contract = RemediationContractFactory.build(tool, writeParams, effect, "");
+        event.put("expectedEffect", contract.expectedEffect().toMap());
+        event.put("recover", contract.recover().toMap());
+        if (!contract.recover().reversible()) {
+            String note = contract.recover().irreversibilityNote();
+            if (note != null && !note.isBlank()) {
+                event.put("irreversibleWarning", note);
+            }
+        }
     }
 
     private static Flux<String> toolAgentResultEventFlux(ToolAgentCompletion completion) {
@@ -1581,6 +1687,15 @@ public class UnifiedAssistantService {
         }
         accumulatedFull.set(prev + piece);
         return piece;
+    }
+
+    /** Prevent model text from being interpreted as a control-plane SSE event. */
+    private static String escapeAssistantControlPrefixes(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        return text.replace(ASSISTANT_META_PREFIX, "ASSISTANT_META：")
+                .replace(AssistantStreamEvents.PREFIX, "ASSISTANT_EVENT：");
     }
 
     private static String truncateForAudit(String value, int max) {

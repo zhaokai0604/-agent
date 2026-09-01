@@ -32,8 +32,14 @@ public final class OpsSecurityContext {
 
     public static void openChatAgent(String traceId, String userMessage, McpToolSurface toolSurface,
                                      boolean userConfirmedWrite, boolean openToolPermissions) {
+        openChatAgent(traceId, userMessage, toolSurface, userConfirmedWrite, openToolPermissions, "anonymous");
+    }
+
+    public static void openChatAgent(String traceId, String userMessage, McpToolSurface toolSurface,
+                                     boolean userConfirmedWrite, boolean openToolPermissions,
+                                     String requester) {
         boolean effectiveWrite = userConfirmedWrite || openToolPermissions;
-        open(traceId, userMessage, false, toolSurface, true, effectiveWrite, openToolPermissions);
+        open(traceId, userMessage, false, toolSurface, true, effectiveWrite, openToolPermissions, requester);
     }
 
     public static void open(String traceId, String userMessage, boolean skipPerToolCheck,
@@ -44,6 +50,13 @@ public final class OpsSecurityContext {
     public static void open(String traceId, String userMessage, boolean skipPerToolCheck,
                             McpToolSurface toolSurface, boolean chatAgentPath, boolean userConfirmedWrite,
                             boolean openToolPermissions) {
+        open(traceId, userMessage, skipPerToolCheck, toolSurface, chatAgentPath,
+                userConfirmedWrite, openToolPermissions, "anonymous");
+    }
+
+    public static void open(String traceId, String userMessage, boolean skipPerToolCheck,
+                            McpToolSurface toolSurface, boolean chatAgentPath, boolean userConfirmedWrite,
+                            boolean openToolPermissions, String requester) {
         HOLDER.set(Ctx.builder()
                 .traceId(traceId)
                 .userMessage(userMessage)
@@ -52,6 +65,7 @@ public final class OpsSecurityContext {
                 .chatAgentPath(chatAgentPath)
                 .userConfirmedWrite(userConfirmedWrite || openToolPermissions)
                 .openToolPermissions(openToolPermissions)
+                .requester(requester)
                 .build());
     }
 
@@ -81,5 +95,7 @@ public final class OpsSecurityContext {
         /** 对话开放工具权限：挂载全量工具并跳过确认门，仍走注入/治理等硬护栏 */
         @Builder.Default
         private boolean openToolPermissions = false;
+        @Builder.Default
+        private String requester = "anonymous";
     }
 }

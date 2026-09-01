@@ -9,12 +9,12 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * 前端可见 Agent 闭环的后端契约：objective → plan → act → verify → reflect。
+ * 前端可见 Agent 闭环的后端契约：plan → preview → approval → execute → verify → recover → audit。
  * 把写确认、计划工具、AWM 命中与安全结论折叠成统一 executionState JSON。
  */
 public final class AgentExecutionState {
 
-    private static final String LOOP_CONTRACT = "objective-plan-act-verify-reflect";
+    private static final String LOOP_CONTRACT = "plan-preview-approval-execute-verify-recover-audit";
 
     private AgentExecutionState() {
     }
@@ -40,8 +40,10 @@ public final class AgentExecutionState {
         String phase = resolvePhase(writeToolsMounted, awaitingConfirm, securityOutcome);
 
         Map<String, Object> state = new LinkedHashMap<>();
-        state.put("version", 1);
+        state.put("version", 2);
         state.put("loopContract", LOOP_CONTRACT);
+        state.put("remediationChain", List.of(
+                "plan", "preview", "approval", "execute", "verify", "recover", "audit"));
         state.put("replyMode", blankToDefault(replyMode, "TOOL_AGENT"));
         state.put("phase", phase);
         state.put("phaseLabel", phaseLabel(phase, awaitingConfirm, securityOutcome));
@@ -49,6 +51,7 @@ public final class AgentExecutionState {
         state.put("writeConfirmed", writeConfirmed);
         state.put("writeToolsMounted", writeToolsMounted);
         state.put("awaitingConfirm", awaitingConfirm);
+        state.put("awaitingApproval", awaitingConfirm);
         state.put("plannedTools", tools);
         state.put("observeTools", AgentSkillPlan.observeTools(tools));
         state.put("pendingWriteTools", AgentSkillPlan.pendingWriteTools(tools));
@@ -90,18 +93,19 @@ public final class AgentExecutionState {
 
     private static String resolvePhase(boolean writeToolsMounted, boolean awaitingConfirm, String securityOutcome) {
         String outcome = securityOutcome == null ? "" : securityOutcome.trim().toUpperCase(Locale.ROOT);
-        if (outcome.contains("ERROR") || outcome.contains("FAILED") || outcome.contains("REJECT")) {
+        if (outcome.contains("ERROR") || outcome.contains("FAILED") || outcome.contains("REJECT")
+                || outcome.contains("VERIFY_FAILED") || outcome.contains("EVIDENCE_INCOMPLETE")) {
             return "reflect";
         }
         if (outcome.equals("EXECUTED") || outcome.equals("REMEDIATED") || outcome.equals("HEALTHY")
                 || outcome.equals("DIAGNOSED") || outcome.equals("PREVIEW")
-                || outcome.equals("PREVIEW_OR_WRITE_PENDING")) {
+                || outcome.equals("PREVIEW_OR_WRITE_PENDING") || outcome.equals("VERIFIED")) {
             return "verify";
         }
         if (awaitingConfirm) {
-            return "plan";
+            return "approval";
         }
-        return writeToolsMounted ? "act" : "observe";
+        return writeToolsMounted ? "execute" : "plan";
     }
 
     private static String phaseLabel(String phase, boolean awaitingConfirm, String securityOutcome) {
@@ -109,18 +113,20 @@ public final class AgentExecutionState {
             return "等待确认";
         }
         String outcome = securityOutcome == null ? "" : securityOutcome.trim().toUpperCase(Locale.ROOT);
-        if (outcome.equals("EXECUTED") || outcome.equals("REMEDIATED")) {
+        if (outcome.equals("EXECUTED") || outcome.equals("REMEDIATED") || outcome.equals("VERIFIED")) {
             return "已执行验证";
         }
         if (outcome.equals("DIAGNOSED") || outcome.equals("PREVIEW") || outcome.equals("PREVIEW_OR_WRITE_PENDING")) {
             return "已诊断验证";
         }
         return switch (phase) {
-            case "act" -> "执行中";
+            case "execute", "act" -> "执行中";
             case "verify" -> "验证中";
+            case "recover" -> "可恢复/回滚";
             case "reflect" -> "复盘中";
-            case "plan" -> "计划待确认";
-            default -> "观测中";
+            case "approval", "plan" -> "计划待确认";
+            case "preview" -> "预览中";
+            default -> "规划中";
         };
     }
 
@@ -178,16 +184,23 @@ public final class AgentExecutionState {
 
     private static List<Map<String, Object>> phaseTrail(String currentPhase) {
         List<String[]> phases = List.of(
-                new String[]{"objective", "目标"},
                 new String[]{"plan", "计划"},
-                new String[]{"observe", "观测"},
-                new String[]{"act", "执行"},
+                new String[]{"preview", "预览"},
+                new String[]{"approval", "确认"},
+                new String[]{"execute", "执行"},
                 new String[]{"verify", "验证"},
-                new String[]{"reflect", "反思"}
+                new String[]{"recover", "恢复"},
+                new String[]{"audit", "审计"}
         );
+        String normalized = switch (currentPhase == null ? "" : currentPhase) {
+            case "act" -> "execute";
+            case "observe", "objective" -> "plan";
+            case "reflect" -> "audit";
+            default -> currentPhase;
+        };
         int current = 0;
         for (int i = 0; i < phases.size(); i++) {
-            if (phases.get(i)[0].equals(currentPhase)) {
+            if (phases.get(i)[0].equals(normalized)) {
                 current = i;
                 break;
             }

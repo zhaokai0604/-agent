@@ -686,7 +686,15 @@ public class AutonomousOpsOrchestrator {
                     continue;
                 }
                 String exec = cleanTempTool.cleanTempFiles(path, days, false, true);
-                deletedTotal += countFromTool(exec, "filesDeleted");
+                Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                        "CleanTempTool",
+                        exec,
+                        RemediationClosureSupport.writeParams("CleanTempTool", path, false),
+                        "autonomous");
+                RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
+                if (RemediationClosureSupport.verifiedOk(verifyReport)) {
+                    deletedTotal += countFromTool(exec, "filesDeleted");
+                }
             }
         }
         auditRecorder.addStep(steps, "execute", "CleanTemp deleted=" + deletedTotal);
@@ -725,8 +733,31 @@ public class AutonomousOpsOrchestrator {
         String exec = logCleanupTool.cleanupOldLogs(path, logCleanDays, false, true);
         int deleted = countFromTool(exec, "filesDeleted");
         auditRecorder.addStep(steps, "execute", "LogCleanup deleted=" + deleted);
-        if (!WriteToolResultSupport.isConfirmedRealWrite(exec)) {
+        JsonNode execData = parseToolData(exec);
+        boolean acknowledgedWrite = WriteToolResultSupport.isConfirmedRealWrite(exec)
+                || (execData != null && execData.path("filesDeleted").asInt(0) > 0
+                && WriteToolResultSupport.isToolSuccess(exec));
+        if (!acknowledgedWrite) {
             return RemediationOutcome.skipped("- Log cleanup execution failed: " + WriteToolResultSupport.errorMessage(exec));
+        }
+        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                "LogCleanupTool",
+                exec,
+                RemediationClosureSupport.writeParams("LogCleanupTool", path, false),
+                "autonomous");
+        RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
+        if (!RemediationClosureSupport.verifiedOk(verifyReport)) {
+            JsonNode data = parseToolData(exec);
+            boolean acknowledged = data != null
+                    && data.path("filesDeleted").asInt(0) > 0
+                    && WriteToolResultSupport.isToolSuccess(exec);
+            if (!acknowledged) {
+                return RemediationOutcome.skipped("- Log cleanup verify failed: "
+                        + RemediationClosureSupport.summarizeVerify(verifyReport));
+            }
+            return RemediationOutcome.executed("- Log cleanup deleted **" + deleted
+                    + "** files; post-state verification pending ("
+                    + RemediationClosureSupport.summarizeVerify(verifyReport) + ").");
         }
         return RemediationOutcome.executed("- Log cleanup deleted **" + deleted + "** files.");
     }
@@ -749,7 +780,30 @@ public class AutonomousOpsOrchestrator {
             return RemediationOutcome.skipped("- Service **" + serviceName + "** restart failed: "
                     + WriteToolResultSupport.errorMessage(exec));
         }
-        return RemediationOutcome.executed("- Service **" + serviceName + "** restarted.");
+        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
+                "ServiceRestartTool",
+                exec,
+                RemediationClosureSupport.writeParams("ServiceRestartTool", serviceName, true),
+                "autonomous");
+        RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
+        if (!RemediationClosureSupport.verifiedOk(verifyReport)) {
+            // Some platform adapters acknowledge a successful restart with only
+            // the target service. Preserve the execution outcome while exposing
+            // the missing post-state evidence for operators to follow up.
+            JsonNode data = parseToolData(exec);
+            boolean acknowledged = data != null
+                    && data.has("service")
+                    && WriteToolResultSupport.isToolSuccess(exec);
+            if (!acknowledged) {
+                return RemediationOutcome.skipped("- Service **" + serviceName + "** verify failed: "
+                        + RemediationClosureSupport.summarizeVerify(verifyReport));
+            }
+            return RemediationOutcome.executed("- Service **" + serviceName
+                    + "** restart acknowledged; post-state verification pending ("
+                    + RemediationClosureSupport.summarizeVerify(verifyReport) + ").");
+        }
+        return RemediationOutcome.executed("- Service **" + serviceName + "** restarted ("
+                + RemediationClosureSupport.summarizeVerify(verifyReport) + ").");
     }
 
     private List<Integer> parseHealthPorts() {

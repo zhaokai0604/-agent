@@ -11,6 +11,7 @@ public final class AdminAccessPaths {
     /** 无需登录：登录、注册、用户名占用检查 */
     public static boolean isPublic(String path) {
         return equalsPath(path, "/admin/user/login")
+                || equalsPath(path, "/admin/user/key-login")
                 || equalsPath(path, "/admin/user/register")
                 || equalsPath(path, "/admin/user/check-user");
     }

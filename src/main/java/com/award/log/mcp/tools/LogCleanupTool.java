@@ -137,9 +137,12 @@ public class LogCleanupTool extends AbstractCommandExecutor {
 
             int filesDeleted = 0;
             int lockedSkipped = 0;
+            long bytesFreed = 0L;
             List<String> previewFiles = new ArrayList<>();
+            List<String> recycleHandles = new ArrayList<>();
             if (!isDryRun) {
                 for (String file : deletable) {
+                    long fileBytes = sizeOfFile(file);
                     if (remediationProperties.isSkipLockedFiles() && isFileLocked(file)) {
                         lockedSkipped++;
                         continue;
@@ -150,13 +153,18 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                                 Path.of(file), null, true);
                         if (outcome.success()) {
                             filesDeleted++;
+                            bytesFreed += fileBytes;
                             recycled = true;
+                            if (outcome.handle() != null && !outcome.handle().isBlank()) {
+                                recycleHandles.add(outcome.handle());
+                            }
                         }
                     }
                     if (!recycled) {
                         AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
                         if (delResult.success() && !isSimulatedDryRun(delResult)) {
                             filesDeleted++;
+                            bytesFreed += fileBytes;
                         }
                     }
                 }
@@ -180,8 +188,9 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                             "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
                 }
                 data = String.format(
-                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d}",
-                        jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped, filesDeleted, lockedSkipped, maxDepth);
+                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"maxScanDepth\":%d}",
+                        jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
+                        filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles), maxDepth);
                 if (filesDeleted == 0) {
                     return finishZeroDeleteResponse(data, targetPath, startTime);
                 }
@@ -231,9 +240,12 @@ public class LogCleanupTool extends AbstractCommandExecutor {
 
         int filesDeleted = 0;
         int lockedSkipped = 0;
+        long bytesFreed = 0L;
         List<String> previewFiles = new ArrayList<>();
+        List<String> recycleHandles = new ArrayList<>();
         if (!isDryRun) {
             for (String file : deletable) {
+                long fileBytes = sizeOfFile(file);
                 if (remediationProperties.isSkipLockedFiles() && isFileLocked(file)) {
                     lockedSkipped++;
                     continue;
@@ -244,7 +256,11 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                             Path.of(file), null, true);
                     if (outcome.success()) {
                         filesDeleted++;
+                        bytesFreed += fileBytes;
                         recycled = true;
+                        if (outcome.handle() != null && !outcome.handle().isBlank()) {
+                            recycleHandles.add(outcome.handle());
+                        }
                     }
                 }
                 if (!recycled) {
@@ -254,6 +270,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                             "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
                     if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
                         filesDeleted++;
+                        bytesFreed += fileBytes;
                     }
                 }
             }
@@ -274,8 +291,9 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                         "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
             }
             data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"platform\":\"windows\"}",
-                    jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped, filesDeleted, lockedSkipped, maxDepth);
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"maxScanDepth\":%d,\"platform\":\"windows\"}",
+                    jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
+                    filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles), maxDepth);
             if (filesDeleted == 0) {
                 return finishZeroDeleteResponse(data, targetPath, startTime);
             }
@@ -376,6 +394,17 @@ public class LogCleanupTool extends AbstractCommandExecutor {
             return null;
         } catch (Exception e) {
             return "SKIP: 无写权限";
+        }
+    }
+
+    private static long sizeOfFile(String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Files.size(Path.of(filePath));
+        } catch (Exception e) {
+            return 0L;
         }
     }
 

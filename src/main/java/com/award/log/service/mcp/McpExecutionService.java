@@ -1,12 +1,14 @@
 package com.award.log.service.mcp;
 
 import com.award.log.mcp.McpToolPayloadParser;
+import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.dispatch.McpToolDispatchResult;
 import com.award.log.mcp.dispatch.McpToolDispatcher;
 import com.award.log.security.ChatToolExecutionTracker;
 import com.award.log.security.McpToolSurface;
 import com.award.log.security.OpsSecurityContext;
 import com.award.log.security.WriteExecutionCoordinator;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,7 +54,13 @@ public class McpExecutionService {
             if (toolOk) {
                 response.put("success", true);
                 response.put("status", status);
+                // Keep the established API contract: data is the raw tool
+                // payload string. Expose the unwrapped object separately so
+                // newer clients can consume structured fields without breaking
+                // existing JSONPath/UI consumers.
                 response.put("data", dispatched.data());
+                response.put("businessData", normalizeBusinessData(dispatched.data()));
+                response.put("toolResultRaw", dispatched.data());
                 response.put("duration", duration);
                 if ("WARN".equalsIgnoreCase(status)) {
                     log.warn("工具 {} 执行完成但为 WARN，耗时: {}ms", toolName, duration);
@@ -68,6 +76,8 @@ public class McpExecutionService {
                 response.put("error", err != null ? err : "工具执行失败");
                 if (dispatched.success() && dispatched.data() != null) {
                     response.put("data", dispatched.data());
+                    response.put("businessData", normalizeBusinessData(dispatched.data()));
+                    response.put("toolResultRaw", dispatched.data());
                 }
                 response.put("duration", duration);
                 log.info("工具 {} 执行失败: {}", toolName, response.get("error"));
@@ -90,5 +100,26 @@ public class McpExecutionService {
             ChatToolExecutionTracker.clear();
             OpsSecurityContext.clear();
         }
+    }
+
+    /**
+     * 将 ToolResult 信封展开为业务 data Map，避免管线验证误读双层 JSON。
+     */
+    private Object normalizeBusinessData(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            JsonNode business = WriteToolResultSupport.businessDataFromToolPayload(String.valueOf(raw));
+            if (business != null && business.isObject()) {
+                return objectMapper.convertValue(business, Map.class);
+            }
+            if (business != null && !business.isNull()) {
+                return objectMapper.convertValue(business, Object.class);
+            }
+        } catch (Exception e) {
+            log.debug("normalizeBusinessData fallback: {}", e.getMessage());
+        }
+        return raw;
     }
 }

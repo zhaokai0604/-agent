@@ -46,5 +46,8 @@ export async function runMcpToolExecute(toolName, parameters, options = {}) {
   if (normalized.evidenceIncomplete && normalized.evidenceMessage) {
     ElMessage.warning(normalized.evidenceMessage)
   }
+  if (normalized.verifyBlocked || (normalized.verifyOutcome && normalized.verifyOutcome !== 'VERIFIED' && normalized.verifyOutcome !== 'VERIFY_SKIPPED' && normalized.verifyOutcome !== '')) {
+    ElMessage.warning(normalized.verifyMessage || `处置未闭环：${normalized.verifyOutcome}`)
+  }
   return normalized
 }

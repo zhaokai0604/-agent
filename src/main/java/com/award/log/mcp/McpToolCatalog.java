@@ -249,6 +249,9 @@ public class McpToolCatalog {
             row.put("dependencyChecks", dependencyChecksFor(descriptor.toolName(), OsRuntime.isWindows()));
             row.put("defaultParameters", defaultParametersFor(descriptor.toolName()));
             row.put("platformSupport", platformSupport);
+            row.put("implementation", platformSupport.get("implementation"));
+            row.put("fallbackUsed", platformSupport.get("fallbackUsed"));
+            row.put("requiredPrivilege", platformSupport.get("requiredPrivilege"));
             row.put("status", available ? "online" : "unavailable");
             row.put("unavailableReason", available ? "" : String.valueOf(platformSupport.getOrDefault("reason", "")));
             row.put("warnings", available
@@ -282,8 +285,19 @@ public class McpToolCatalog {
         support.put("supportedPlatforms", supportedPlatforms);
         support.put("requiredCapabilities", dependencyChecks);
         support.put("capabilities", capabilities);
+        support.put("implementation", windows ? "Windows 原生接口 / PowerShell" : "Linux / 麒麟系统命令");
+        support.put("fallbackUsed", !available && platformMatched);
+        support.put("requiredPrivilege", descriptorRequiresPrivilege(toolName) ? "管理员或受控执行账号" : "当前应用运行账号");
         support.put("reason", buildUnavailableReason(toolName, currentPlatform, supportedPlatforms, dependencyChecks, capabilities));
         return support;
+    }
+
+    private static boolean descriptorRequiresPrivilege(String toolName) {
+        return switch (toolName) {
+            case "CleanTempTool", "LogCleanupTool", "ServiceRestartTool", "FirewallTool", "SystemdTool",
+                    "DiskOpsTool", "LogOpsTool", "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool" -> true;
+            default -> false;
+        };
     }
 
     /** 供 Tool Agent 系统提示词注入：简要工具目录 */

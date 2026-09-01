@@ -34,7 +34,7 @@ public class ToolSurfaceResolver {
     private boolean readOnlyUtteranceAppliesToLowIntentOnly;
 
     /** true：对话 Agent 始终 FULL 工具面（仍保留 HIGH 意图/stream 层拦截） */
-    @Value("${agent.assistant.open-tool-permissions:true}")
+    @Value("${agent.assistant.open-tool-permissions:false}")
     private boolean openToolPermissions;
 
     public ToolSurfaceResolver(AgenticRiskScoreEngine agenticRiskScoreEngine) {

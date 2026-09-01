@@ -8,7 +8,14 @@
     </div>
     <p class="plan-body">{{ planSummary }}</p>
     <p v-if="pendingWriteLabel" class="plan-pending">待挂载写工具：{{ pendingWriteLabel }}</p>
-    <div v-if="pepMeta && (pepMeta.confirmToken || pepMeta.dryRunPreviewHash)" class="plan-pep">
+    <div v-if="pepMeta && (pepMeta.confirmToken || pepMeta.dryRunPreviewHash || pepMeta.expectedEffect || pepMeta.irreversibleWarning)" class="plan-pep">
+      <p v-if="pepMeta.expectedEffect?.description">预期变化：{{ pepMeta.expectedEffect.description }}</p>
+      <p v-if="pepMeta.irreversibleWarning || pepMeta.recover?.irreversibilityNote" class="plan-irreversible">
+        不可逆：{{ pepMeta.irreversibleWarning || pepMeta.recover?.irreversibilityNote }}
+      </p>
+      <p v-else-if="pepMeta.recover?.reversible && pepMeta.recover?.recoverHint">
+        恢复：{{ pepMeta.recover.recoverHint }}
+      </p>
       <p v-if="pepMeta.dryRunPreviewHash">预览哈希：{{ pepMeta.dryRunPreviewHash }}</p>
       <p v-if="pepMeta.expiresAtMs">令牌有效期至：{{ formatExpire(pepMeta.expiresAtMs) }}</p>
       <p v-if="pepMeta.confirmToken" class="plan-hint">HMAC 确认令牌已绑定预览，参数变更将失效</p>
@@ -123,5 +130,10 @@ function formatExpire(ms) {
 .plan-hint {
   font-size: 12px;
   color: var(--ops-text-muted, #888);
+}
+
+.plan-irreversible {
+  color: var(--el-color-danger);
+  font-weight: 600;
 }
 </style>

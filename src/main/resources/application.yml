@@ -341,7 +341,7 @@ agent:
   assistant:
     use-tool-agent-default: ${AGENT_ASSISTANT_USE_TOOLS:true}
     # 对话 Agent 开放工具权限：挂载全量 MCP + 写工具，跳过确认门（仍保留注入/治理等硬护栏）
-    open-tool-permissions: ${AGENT_ASSISTANT_OPEN_PERMISSIONS:true}
+    open-tool-permissions: ${AGENT_ASSISTANT_OPEN_PERMISSIONS:false}
     analysis-skills-prompt-max: ${AGENT_ASSISTANT_ANALYSIS_SKILLS_MAX:10}
     tool-agent-stream-chunk-chars: ${AGENT_ASSISTANT_TOOL_CHUNK:900}
     tool-catalog-prompt-max: ${AGENT_ASSISTANT_TOOL_CATALOG_MAX:28}

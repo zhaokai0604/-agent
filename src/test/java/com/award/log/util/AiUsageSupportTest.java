@@ -20,6 +20,8 @@ class AiUsageSupportTest {
         assertTrue(estimated > 0);
         assertEquals("estimated", usage.get("source"));
         assertEquals(estimated + 20, usage.get("totalTokens"));
+        assertEquals(estimated, usage.get("contextTokens"));
         assertEquals(1000, usage.get("contextWindow"));
+        assertEquals(Math.round(estimated * 10000.0 / 1000.0) / 100.0, usage.get("contextUtilizationPct"));
     }
 }
