@@ -64,6 +64,10 @@ public final class RemediationVerifyEvaluator {
         if (!success) {
             return fail(report, VerifyOutcome.VERIFY_FAILED, "执行失败，业务验证未通过", dryRunPreviewJson);
         }
+        if (Boolean.FALSE.equals(extractBoolean(extractData(execJson), "protectedFilesPreserved"))) {
+            return fail(report, VerifyOutcome.VERIFY_FAILED,
+                    "受保护文件保全校验失败，已阻止将本次清理记为成功", dryRunPreviewJson);
+        }
 
         EvidenceContractValidator.ValidationResult evidence =
                 EvidenceContractValidator.validateRequestedWrite(effect, true, execJson);
@@ -87,6 +91,12 @@ public final class RemediationVerifyEvaluator {
         }
         if (business.outcome() != VerifyOutcome.VERIFIED) {
             return fail(report, business.outcome(), business.message(), dryRunPreviewJson);
+        }
+
+        BusinessCheck measured = checkMeasuredEffect(body, c.expectedEffect());
+        report.put("measuredEffectCheck", measured.toMap());
+        if (measured.outcome() != VerifyOutcome.VERIFIED) {
+            return fail(report, measured.outcome(), measured.message(), dryRunPreviewJson);
         }
 
         report.put("verified", true);
@@ -217,6 +227,54 @@ public final class RemediationVerifyEvaluator {
         return data != null && data.path(field).asBoolean(false);
     }
 
+    private static Boolean extractBoolean(JsonNode data, String field) {
+        if (data == null || !data.has(field)) {
+            return null;
+        }
+        return data.path(field).asBoolean(false);
+    }
+
+    /** 执行后只读复测：候选数必须下降，且复测本身必须可用。 */
+    private static BusinessCheck checkMeasuredEffect(
+            Map<String, Object> executionBody, ExpectedEffect expected) {
+        if (executionBody == null || expected == null || !"PATH_USAGE".equals(expected.metric())
+                || !(executionBody.get("metricsBefore") instanceof Map<?, ?> before)
+                || !(executionBody.get("metricsAfter") instanceof Map<?, ?> after)) {
+            return BusinessCheck.ok("未配置路径复测指标，沿用工具写证据校验");
+        }
+        if (!Boolean.TRUE.equals(after.get("available"))) {
+            return BusinessCheck.incomplete("执行后路径指标复测不可用，不得将清理记为已验证");
+        }
+        long beforeCount = metricNumber(before, "deletableCount", "filesFound");
+        long afterCount = metricNumber(after, "deletableCount", "filesFound");
+        long deleted = number(extractData(serialize(executionBody)), "filesDeleted", "deletedCount");
+        if (deleted > 0 && afterCount < beforeCount) {
+            return BusinessCheck.ok("执行后复测通过：候选数 " + beforeCount + " -> " + afterCount);
+        }
+        if (deleted == 0 && beforeCount == 0 && afterCount == 0) {
+            return BusinessCheck.ok("执行前后均无可清理候选");
+        }
+        return BusinessCheck.weak("执行后复测未证明路径占用下降：候选数 "
+                + beforeCount + " -> " + afterCount);
+    }
+
+    private static long metricNumber(Map<?, ?> values, String... fields) {
+        for (String field : fields) {
+            Object value = values.get(field);
+            if (value instanceof Number number) {
+                return number.longValue();
+            }
+            if (value != null) {
+                try {
+                    return Long.parseLong(String.valueOf(value));
+                } catch (NumberFormatException ignored) {
+                    // 尝试下一个候选字段。
+                }
+            }
+        }
+        return 0L;
+    }
+
     private static String serialize(Map<String, Object> body) {
         try {
             return MAPPER.writeValueAsString(body);
@@ -232,6 +290,10 @@ public final class RemediationVerifyEvaluator {
 
         static BusinessCheck weak(String message) {
             return new BusinessCheck(VerifyOutcome.VERIFY_WEAK, message == null ? "" : message);
+        }
+
+        static BusinessCheck incomplete(String message) {
+            return new BusinessCheck(VerifyOutcome.EVIDENCE_INCOMPLETE, message == null ? "" : message);
         }
 
         static BusinessCheck fail(String message) {

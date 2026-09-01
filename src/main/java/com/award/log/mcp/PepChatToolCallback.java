@@ -24,13 +24,16 @@ final class PepChatToolCallback implements ToolCallback {
     private final String pipelineToolName;
     private final OpsExecutionPipeline pipeline;
     private final ObjectMapper objectMapper;
+    private final boolean allowWrite;
 
     PepChatToolCallback(ToolCallback delegate, String pipelineToolName,
-                        OpsExecutionPipeline pipeline, ObjectMapper objectMapper) {
+                        OpsExecutionPipeline pipeline, ObjectMapper objectMapper,
+                        boolean allowWrite) {
         this.delegate = delegate;
         this.pipelineToolName = pipelineToolName;
         this.pipeline = pipeline;
         this.objectMapper = objectMapper;
+        this.allowWrite = allowWrite;
     }
 
     @Override
@@ -46,21 +49,23 @@ final class PepChatToolCallback implements ToolCallback {
     @Override
     public String call(String arguments) {
         OpsSecurityContext.Ctx ctx = OpsSecurityContext.get();
-        if (ctx == null || ctx.isOpenToolPermissions() || ctx.isUserConfirmedWrite()) {
-            return delegate.call(arguments);
-        }
         try {
             Map<String, Object> params = objectMapper.readValue(
                     arguments == null || arguments.isBlank() ? "{}" : arguments,
                     objectMapper.getTypeFactory().constructMapType(LinkedHashMap.class, String.class, Object.class));
+            String userMessage = ctx == null ? "chat agent write" : ctx.getUserMessage();
+            String requester = ctx == null ? "chat-agent" : ctx.getRequester();
+            if (allowWrite) {
+                OpsExecutionPipeline.PipelineResult executed = pipeline.executeDirect(
+                        pipelineToolName, params, userMessage, requester);
+                return objectMapper.writeValueAsString(executed.body());
+            }
             McpToolParamReader.applyDryRunDefaults(pipelineToolName, params);
-            String preview = delegate.call(objectMapper.writeValueAsString(params));
+            OpsExecutionPipeline.PipelineResult preview = pipeline.preview(
+                    pipelineToolName, params, userMessage, requester);
             OpsExecutionPipeline.PipelineResult proposed = pipeline.propose(
-                    pipelineToolName,
-                    params,
-                    ctx.getUserMessage(),
-                    ctx.getRequester(),
-                    preview);
+                    pipelineToolName, params, userMessage, requester,
+                    objectMapper.writeValueAsString(preview.body()));
             com.award.log.security.ChatToolExecutionTracker.recordPendingConfirmation(proposed.body());
             return objectMapper.writeValueAsString(proposed.body());
         } catch (JsonProcessingException e) {

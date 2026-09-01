@@ -6,6 +6,7 @@ import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowRetriever;
 import com.award.log.agent.skill.SkillRoutingAdvisor;
 import com.award.log.governance.OpsRemediationGate;
+import com.award.log.governance.OpsExecutionPipeline;
 import com.award.log.mcp.McpToolPayloadParser;
 import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.tools.CleanTempTool;
@@ -29,6 +30,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
@@ -79,6 +81,11 @@ public class AssistantOrchestrator {
 
     @Autowired(required = false)
     private RemediationEffectEvaluator remediationEffectEvaluator;
+
+    /** Agent 写操作统一委托给 PEP 管线；为空仅用于兼容单测中的旧工具 mock。 */
+    @Autowired(required = false)
+    @Lazy
+    private OpsExecutionPipeline opsExecutionPipeline;
 
     public AssistantOrchestrator(
             DiskTool diskTool,
@@ -393,7 +400,7 @@ public class AssistantOrchestrator {
         OpsRemediationGate.RemediationDecision decision =
                 opsRemediationGate.decideLogCleanup(path, logCleanDays, forceExecute, instruction);
 
-        String preview = logCleanupTool.cleanupOldLogs(path, logCleanDays, true, false);
+        String preview = previewWrite("LogCleanupTool", writeParams("LogCleanupTool", path, logCleanDays), instruction);
         if (!McpToolPayloadParser.isSuccessful(objectMapper, preview)) {
             md.append("### 日志清理 (`").append(path).append("`)\n\n");
             md.append("- **预览失败：** ").append(WriteToolResultSupport.errorMessage(preview)).append("\n\n");
@@ -423,7 +430,7 @@ public class AssistantOrchestrator {
             return false;
         }
 
-        String exec = logCleanupTool.cleanupOldLogs(path, logCleanDays, false, true);
+        String exec = executeWrite("LogCleanupTool", writeParams("LogCleanupTool", path, logCleanDays), instruction);
         if (!WriteToolResultSupport.isConfirmedRealWrite(exec)) {
             md.append("- **执行失败：** ").append(WriteToolResultSupport.errorMessage(exec)).append("\n\n");
             return false;
@@ -431,11 +438,8 @@ public class AssistantOrchestrator {
         JsonNode execData = parseToolData(exec);
         int deleted = execData != null && execData.has("filesDeleted") ? execData.get("filesDeleted").asInt(0) : 0;
         auditRecorder.addStep(steps, "execute", "LogCleanup deleted=" + deleted);
-        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
-                "LogCleanupTool",
-                exec,
-                RemediationClosureSupport.writeParams("LogCleanupTool", path, false),
-                "assistant");
+        Map<String, Object> verifyReport = verifyWrite("LogCleanupTool", exec,
+                RemediationClosureSupport.writeParams("LogCleanupTool", path, false), "assistant");
         RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
         md.append("- **已执行删除：** ").append(deleted).append(" 个文件（已排除受保护项）。\n");
         md.append("- **验证：** ").append(RemediationClosureSupport.summarizeVerify(verifyReport)).append("\n\n");
@@ -458,7 +462,9 @@ public class AssistantOrchestrator {
         OpsRemediationGate.RemediationDecision decision =
                 opsRemediationGate.decideTempCleanup(path, days, forceExecute, instruction);
 
-        String preview = cleanTempTool.cleanTempFiles(path, days, true, false, removeDirectory);
+        Map<String, Object> tempParams = writeParams("CleanTempTool", path, days);
+        tempParams.put("removeDirectory", removeDirectory);
+        String preview = previewWrite("CleanTempTool", tempParams, instruction);
         JsonNode previewRoot = objectMapper.readTree(preview);
         if (!previewRoot.path("success").asBoolean(false)) {
             md.append("### 临时目录清理 (`").append(path).append("`)\n\n");
@@ -507,7 +513,9 @@ public class AssistantOrchestrator {
             return false;
         }
 
-        String exec = cleanTempTool.cleanTempFiles(path, days, false, true, removeDirectory);
+        tempParams.put("dryRun", false);
+        tempParams.put("confirmDelete", true);
+        String exec = executeWrite("CleanTempTool", tempParams, instruction);
         JsonNode execRoot = objectMapper.readTree(exec);
         if (!execRoot.path("success").asBoolean(false)) {
             md.append("- **执行失败：** ").append(execRoot.path("error").asText("未知错误")).append("\n\n");
@@ -522,11 +530,8 @@ public class AssistantOrchestrator {
             md.append("- **未删除到文件**（路径下无匹配或无写权限），请勿视为已完成清理。\n\n");
             return false;
         }
-        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
-                "CleanTempTool",
-                exec,
-                RemediationClosureSupport.writeParams("CleanTempTool", path, false),
-                "assistant");
+        Map<String, Object> verifyReport = verifyWrite("CleanTempTool", exec,
+                RemediationClosureSupport.writeParams("CleanTempTool", path, false), "assistant");
         RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
         md.append("- **已执行删除：** ").append(deleted).append(" 项");
         if (bytesFreed > 0) {
@@ -612,7 +617,8 @@ public class AssistantOrchestrator {
                         .append(" | 是 | 策略拦截：").append(decision.reason()).append(" |\n");
                 continue;
             }
-            String exec = cleanTempTool.cleanTempFiles(path, days, false, true, false);
+            String exec = executeWrite("CleanTempTool", writeParams("CleanTempTool", path, days),
+                    "执行 CleanTempTool path=" + path + " days=" + days);
             JsonNode execRoot = objectMapper.readTree(exec);
             if (!execRoot.path("success").asBoolean(false)) {
                 md.append("| ").append(drive).append(" | `").append(path).append("` | ").append(found)
@@ -622,11 +628,8 @@ public class AssistantOrchestrator {
             JsonNode execData = parseToolData(exec);
             int deleted = execData != null && execData.has("filesDeleted") ? execData.get("filesDeleted").asInt(0) : 0;
             auditRecorder.addStep(steps, "execute", "CleanTemp multi-drive deleted=" + deleted + " path=" + path);
-            Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
-                    "CleanTempTool",
-                    exec,
-                    RemediationClosureSupport.writeParams("CleanTempTool", path, false),
-                    "assistant");
+            Map<String, Object> verifyReport = verifyWrite("CleanTempTool", exec,
+                    RemediationClosureSupport.writeParams("CleanTempTool", path, false), "assistant");
             RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
             boolean ok = deleted > 0 && RemediationClosureSupport.verifiedOk(verifyReport);
             anyExecuted |= ok;
@@ -957,7 +960,8 @@ public class AssistantOrchestrator {
         OpsRemediationGate.RemediationDecision decision =
                 opsRemediationGate.decideServiceRestart(serviceName, forceExecute, instruction);
 
-        serviceRestartTool.restartService(serviceName, true, false);
+        Map<String, Object> serviceParams = writeParams("ServiceRestartTool", serviceName, 0);
+        String preview = previewWrite("ServiceRestartTool", serviceParams, instruction);
         md.append("### 服务重启（").append(serviceName).append("）\n\n");
         md.append("- ").append(decision.reason()).append("\n");
 
@@ -969,14 +973,13 @@ public class AssistantOrchestrator {
             md.append("- 已预览，回复「执行清理」或明确「重启 ").append(serviceName).append("」后执行。\n\n");
             return false;
         }
-        String exec = serviceRestartTool.restartService(serviceName, false, true);
+        serviceParams.put("dryRun", false);
+        serviceParams.put("confirmRestart", true);
+        String exec = executeWrite("ServiceRestartTool", serviceParams, instruction);
         auditRecorder.addStep(steps, "execute", truncate(exec, 800));
         boolean restarted = parseToolSuccess(exec);
-        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
-                "ServiceRestartTool",
-                exec,
-                RemediationClosureSupport.writeParams("ServiceRestartTool", serviceName, true),
-                "assistant");
+        Map<String, Object> verifyReport = verifyWrite("ServiceRestartTool", exec,
+                RemediationClosureSupport.writeParams("ServiceRestartTool", serviceName, true), "assistant");
         RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
         if (restarted && RemediationClosureSupport.verifiedOk(verifyReport)) {
             md.append("- **已执行重启**；").append(RemediationClosureSupport.summarizeVerify(verifyReport)).append("\n");
@@ -1134,6 +1137,78 @@ public class AssistantOrchestrator {
 
     private JsonNode parseToolData(String toolJson) {
         return McpToolPayloadParser.parsePayload(objectMapper, toolJson);
+    }
+
+    /** Agent 的预览/执行统一转入 PEP；旧工具仅作为无 Spring 单测的兼容替身。 */
+    private String previewWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
+        if (opsExecutionPipeline != null) {
+            return objectMapper.writeValueAsString(opsExecutionPipeline.preview(
+                    toolName, params, instruction, "assistant").body());
+        }
+        return switch (toolName) {
+            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), logCleanDays), true, false);
+            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), tempCleanDays), true, false,
+                    Boolean.TRUE.equals(params.get("removeDirectory")));
+            case "ServiceRestartTool" -> serviceRestartTool.restartService(
+                    String.valueOf(params.get("serviceName")), true, false);
+            default -> throw new IllegalArgumentException("不支持的 Agent 写工具: " + toolName);
+        };
+    }
+
+    /** 统一真实写入口；管线返回的 verify/metrics 会随原始 JSON 一并进入审计与展示。 */
+    private String executeWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
+        if (opsExecutionPipeline != null) {
+            return objectMapper.writeValueAsString(opsExecutionPipeline.executeDirect(
+                    toolName, params, instruction, "assistant").body());
+        }
+        return switch (toolName) {
+            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), logCleanDays), false, true);
+            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), tempCleanDays), false, true,
+                    Boolean.TRUE.equals(params.get("removeDirectory")));
+            case "ServiceRestartTool" -> serviceRestartTool.restartService(
+                    String.valueOf(params.get("serviceName")), false, true);
+            default -> throw new IllegalArgumentException("不支持的 Agent 写工具: " + toolName);
+        };
+    }
+
+    private Map<String, Object> writeParams(String toolName, String target, int days) {
+        Map<String, Object> params = new LinkedHashMap<>(
+                RemediationClosureSupport.writeParams(toolName, target, "ServiceRestartTool".equals(toolName)));
+        if (!"ServiceRestartTool".equals(toolName)) {
+            params.put("days", days);
+        }
+        return params;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> verifyWrite(
+            String toolName, String result, Map<String, Object> params, String requester) {
+        if (opsExecutionPipeline != null) {
+            try {
+                Map<String, Object> root = objectMapper.readValue(result, Map.class);
+                if (root.get("verify") instanceof Map<?, ?> verify) {
+                    return new LinkedHashMap<>((Map<String, Object>) verify);
+                }
+            } catch (Exception ignored) {
+                // 统一管线已返回原始结果，解析失败时下面的兼容验证仍可给出结论。
+            }
+        }
+        return RemediationClosureSupport.verifyToolJson(toolName, result, params, requester);
+    }
+
+    private int asInt(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     private double extractMaxDiskUsePercent(String diskToolJson) {

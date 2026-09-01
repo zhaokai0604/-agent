@@ -59,6 +59,11 @@ class OpsRecycleBinServiceTest {
     }
 
     @Test
+    void restoreRejectsPathTraversalHandle() throws Exception {
+        assertFalse(service.restore("../outside"));
+    }
+
+    @Test
     void moveThrowsWhenSourceMissing() {
         Path missing = tempDir.resolve("nope.txt");
         assertThrows(IOException.class, () -> service.moveToRecycleBin(missing, "t"));

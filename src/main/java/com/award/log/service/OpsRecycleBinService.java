@@ -48,6 +48,9 @@ public class OpsRecycleBinService {
     }
 
     public boolean restore(String handle) throws IOException {
+        if (!isSafeHandle(handle)) {
+            return false;
+        }
         Path meta = recycleRoot.resolve(handle).resolve("meta.json");
         if (!Files.exists(meta)) {
             return false;
@@ -56,6 +59,9 @@ public class OpsRecycleBinService {
         String original = extractJsonField(content, "originalPath");
         Path staged = Path.of(extractJsonField(content, "stagedPath"));
         if (original == null || original.isBlank() || !Files.exists(staged)) {
+            return false;
+        }
+        if (!staged.toAbsolutePath().normalize().startsWith(recycleRoot.toAbsolutePath().normalize())) {
             return false;
         }
         Path target = Path.of(original);
@@ -112,6 +118,9 @@ public class OpsRecycleBinService {
     }
 
     private void deleteHandle(String handle) throws IOException {
+        if (!isSafeHandle(handle)) {
+            return;
+        }
         Path dir = recycleRoot.resolve(handle);
         if (!Files.exists(dir)) {
             return;
@@ -131,6 +140,11 @@ public class OpsRecycleBinService {
                 + "\"traceId\":\"" + escape(traceId == null ? "" : traceId) + "\","
                 + "\"expiresAtMs\":" + expires + "}";
         Files.writeString(recycleRoot.resolve(handle).resolve("meta.json"), json);
+    }
+
+    /** 句柄只能是 moveToRecycleBin 生成的单层安全目录名，阻断路径穿越恢复。 */
+    private static boolean isSafeHandle(String handle) {
+        return handle != null && handle.matches("[A-Za-z0-9]{12}");
     }
 
     private static String escape(String s) {

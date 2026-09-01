@@ -141,30 +141,22 @@ public class LogCleanupTool extends AbstractCommandExecutor {
             List<String> previewFiles = new ArrayList<>();
             List<String> recycleHandles = new ArrayList<>();
             if (!isDryRun) {
+                if (safeDeleteSupport == null) {
+                    return buildErrorResponse("回收站服务不可用，已拒绝执行日志删除（fail-closed）", startTime);
+                }
                 for (String file : deletable) {
                     long fileBytes = sizeOfFile(file);
                     if (remediationProperties.isSkipLockedFiles() && isFileLocked(file)) {
                         lockedSkipped++;
                         continue;
                     }
-                    boolean recycled = false;
-                    if (safeDeleteSupport != null) {
-                        SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
-                                Path.of(file), null, true);
-                        if (outcome.success()) {
-                            filesDeleted++;
-                            bytesFreed += fileBytes;
-                            recycled = true;
-                            if (outcome.handle() != null && !outcome.handle().isBlank()) {
-                                recycleHandles.add(outcome.handle());
-                            }
-                        }
-                    }
-                    if (!recycled) {
-                        AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
-                        if (delResult.success() && !isSimulatedDryRun(delResult)) {
-                            filesDeleted++;
-                            bytesFreed += fileBytes;
+                    SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
+                            Path.of(file), null, true);
+                    if (outcome.success() && "RECYCLE".equals(outcome.mode())) {
+                        filesDeleted++;
+                        bytesFreed += fileBytes;
+                        if (outcome.handle() != null && !outcome.handle().isBlank()) {
+                            recycleHandles.add(outcome.handle());
                         }
                     }
                 }
@@ -181,16 +173,19 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                 data = String.format(
                         "{\"mode\":\"DRY-RUN\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"previewCount\":%d,\"preview\":%s,\"protectedSamples\":%s,\"maxScanDepth\":%d,\"note\":\"仅列出可删除候选；受保护文件已排除。真实删除：dryRun=false 且 confirmDelete=true\"}",
                         jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
-                        previewCount, toJsonArray(previewFiles), toJsonArray(truncateDenied(filtered.deniedReasons(), 8)), maxDepth);
+                        previewCount, toJsonArray(previewFiles), toJsonArray(truncateDenied(filtered.deniedReasons(), 8)),
+                        maxDepth);
             } else {
                 if (filesDeleted == 0 && !deletable.isEmpty() && lockedSkipped < deletable.size()) {
                     return buildErrorResponse(
                             "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
                 }
                 data = String.format(
-                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"maxScanDepth\":%d}",
+                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"protectedSamples\":%s,\"protectedFilesPreserved\":%s,\"maxScanDepth\":%d}",
                         jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
-                        filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles), maxDepth);
+                        filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles),
+                        toJsonArray(truncateDenied(filtered.deniedReasons(), 8)),
+                        protectedFilesPreserved(filtered.deniedReasons()), maxDepth);
                 if (filesDeleted == 0) {
                     return finishZeroDeleteResponse(data, targetPath, startTime);
                 }
@@ -244,33 +239,22 @@ public class LogCleanupTool extends AbstractCommandExecutor {
         List<String> previewFiles = new ArrayList<>();
         List<String> recycleHandles = new ArrayList<>();
         if (!isDryRun) {
+            if (safeDeleteSupport == null) {
+                return buildErrorResponse("回收站服务不可用，已拒绝执行日志删除（fail-closed）", startTime);
+            }
             for (String file : deletable) {
                 long fileBytes = sizeOfFile(file);
                 if (remediationProperties.isSkipLockedFiles() && isFileLocked(file)) {
                     lockedSkipped++;
                     continue;
                 }
-                boolean recycled = false;
-                if (safeDeleteSupport != null) {
-                    SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
-                            Path.of(file), null, true);
-                    if (outcome.success()) {
-                        filesDeleted++;
-                        bytesFreed += fileBytes;
-                        recycled = true;
-                        if (outcome.handle() != null && !outcome.handle().isBlank()) {
-                            recycleHandles.add(outcome.handle());
-                        }
-                    }
-                }
-                if (!recycled) {
-                    String f = file.replace("'", "''");
-                    AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
-                            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                            "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
-                    if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
-                        filesDeleted++;
-                        bytesFreed += fileBytes;
+                SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
+                        Path.of(file), null, true);
+                if (outcome.success() && "RECYCLE".equals(outcome.mode())) {
+                    filesDeleted++;
+                    bytesFreed += fileBytes;
+                    if (outcome.handle() != null && !outcome.handle().isBlank()) {
+                        recycleHandles.add(outcome.handle());
                     }
                 }
             }
@@ -291,9 +275,11 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                         "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
             }
             data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"maxScanDepth\":%d,\"platform\":\"windows\"}",
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"protectedSamples\":%s,\"protectedFilesPreserved\":%s,\"maxScanDepth\":%d,\"platform\":\"windows\"}",
                     jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
-                    filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles), maxDepth);
+                    filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles),
+                    toJsonArray(truncateDenied(filtered.deniedReasons(), 8)),
+                    protectedFilesPreserved(filtered.deniedReasons()), maxDepth);
             if (filesDeleted == 0) {
                 return finishZeroDeleteResponse(data, targetPath, startTime);
             }
@@ -346,6 +332,28 @@ public class LogCleanupTool extends AbstractCommandExecutor {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** 保护候选在执行后仍存在，作为“没有误删受保护文件”的可机读证据。 */
+    private static boolean protectedFilesPreserved(List<String> deniedReasons) {
+        if (deniedReasons == null) {
+            return true;
+        }
+        for (String reason : deniedReasons) {
+            if (reason == null || reason.isBlank()) {
+                continue;
+            }
+            int arrow = reason.indexOf(" → ");
+            String path = arrow > 0 ? reason.substring(0, arrow) : reason;
+            try {
+                if (!Files.exists(Path.of(path.trim()))) {
+                    return false;
+                }
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private String enrichZeroDeleteWarnPayload(String dataJson, long durationMs) {

@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * 回收站：list / restore / purge 可逆删除条目。
@@ -38,9 +40,17 @@ public class RecycleBinTool {
             if ("list".equals(op)) {
                 data.put("entries", recycleBinService.listEntries());
             } else if ("restore".equals(op)) {
+                String originalPath = recycleBinService.listEntries().stream()
+                        .filter(entry -> handle != null && handle.equals(entry.get("handle")))
+                        .map(entry -> String.valueOf(entry.getOrDefault("originalPath", "")))
+                        .findFirst()
+                        .orElse("");
                 boolean ok = recycleBinService.restore(handle);
                 data.put("restored", ok);
                 data.put("handle", handle);
+                data.put("originalPath", originalPath);
+                data.put("recoveryVerified", ok && !originalPath.isBlank()
+                        && Files.exists(Path.of(originalPath)));
             } else if ("purge".equals(op)) {
                 recycleBinService.purgeExpired();
                 data.put("purged", true);

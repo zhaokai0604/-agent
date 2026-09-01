@@ -174,7 +174,7 @@ public class McpToolRegistry {
             default -> null;
         };
         return beanName == null ? callback
-                : new PepChatToolCallback(callback, beanName, opsExecutionPipeline, objectMapper);
+                : new PepChatToolCallback(callback, beanName, opsExecutionPipeline, objectMapper, allowWrite);
     }
 
     private static ToolCallback[] buildToolCallbacks(List<Object> beans) {

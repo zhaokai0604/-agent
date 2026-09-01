@@ -1,0 +1,18 @@
+{
+  "datasetId": "threshcore-demo-v1",
+  "scenario": "日志清理受控处置闭环",
+  "toolName": "LogCleanupTool",
+  "targetRoot": "${TEMP}/threshcore-demo-logs",
+  "days": 30,
+  "files": [
+    {"name": "app.log.20240101", "kind": "deletable", "bytes": 4096},
+    {"name": "mysql-slow.log", "kind": "protected", "bytes": 2048},
+    {"name": "audit.log", "kind": "protected", "bytes": 1024}
+  ],
+  "expected": {
+    "preview": {"filesFound": 3, "deletableCount": 1, "protectedSkipped": 2},
+    "execute": {"filesDeleted": 1, "recycledCount": 1, "protectedFilesPreserved": true},
+    "afterProbe": {"deletableCount": 0},
+    "restore": {"restored": true, "originalFileExists": true}
+  }
+}

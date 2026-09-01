@@ -82,6 +82,8 @@ public class OpsExecutionPipeline {
         body.put("approval", contract.approval().toMap());
         body.put("duration", System.currentTimeMillis() - start);
         body.put("data", exec.get("data"));
+        body.put("metricsBefore", RemediationMetricsCollector.fromResponse(
+                objectMapper, toolName, exec, "preview"));
         if (!Boolean.TRUE.equals(exec.get("success"))) {
             body.put("error", exec.get("error"));
         }
@@ -208,6 +210,7 @@ public class OpsExecutionPipeline {
         }
         WriteRemediationContract contract = RemediationContractFactory.build(
                 toolName, parameters, effect, requester);
+        attachExecutionMetrics(exec, toolName, parameters, dryRunPreview, traceId, pending.userInstruction());
         exec.put("remediationContract", contract.toMap());
         exec.put("expectedEffect", contract.expectedEffect().toMap());
         exec.put("approval", contract.approval().toMap());
@@ -284,6 +287,13 @@ public class OpsExecutionPipeline {
             return new PipelineResult(body, traceId, start, toolName, effect, fingerprint, "");
         }
 
+        String beforePreviewJson = "";
+        if (WriteToolResultSupport.requestedRealWrite(parameters)) {
+            Map<String, Object> beforePreview = mcpExecutionService.execute(
+                    toolName, dryRunParams(toolName, parameters), start, traceId,
+                    instruction + " | pre-execution metrics");
+            beforePreviewJson = serializePreview(beforePreview);
+        }
         Map<String, Object> exec = mcpExecutionService.execute(toolName, parameters, start, traceId, instruction);
         exec.put("traceId", traceId);
         exec.put("phase", "execute");
@@ -294,6 +304,8 @@ public class OpsExecutionPipeline {
         }
         WriteRemediationContract contract = RemediationContractFactory.build(
                 toolName, parameters, effect, requester);
+        attachExecutionMetrics(exec, toolName, parameters, beforePreviewJson, traceId,
+                instruction + " | post-execution metrics");
         exec.put("remediationContract", contract.toMap());
         exec.put("expectedEffect", contract.expectedEffect().toMap());
         exec.put("approval", contract.approval().toMap());
@@ -340,6 +352,56 @@ public class OpsExecutionPipeline {
         params.put("dryRun", true);
         McpToolParamReader.applyDryRunDefaults(toolName, params);
         return params;
+    }
+
+    /**
+     * 统一采集执行前后指标：前值来自预览，后值来自一次只读 dry-run 复测。
+     * 这样 Agent、MCP、定时任务拿到的是同一套 effectMetrics，而不是各自拼接的日志。
+     */
+    private void attachExecutionMetrics(
+            Map<String, Object> execution,
+            String toolName,
+            Map<String, Object> parameters,
+            String beforePreviewJson,
+            String traceId,
+            String instruction) {
+        if (execution == null || !WriteToolResultSupport.requestedRealWrite(
+                parameters == null ? Map.of() : parameters)) {
+            return;
+        }
+        Map<String, Object> beforeResponse = parseResponse(beforePreviewJson);
+        Map<String, Object> before = RemediationMetricsCollector.fromResponse(
+                objectMapper, toolName, beforeResponse, "pre-execution-preview");
+        Map<String, Object> afterResponse;
+        try {
+            afterResponse = mcpExecutionService.execute(
+                    toolName,
+                    dryRunParams(toolName, parameters),
+                    System.currentTimeMillis(),
+                    traceId,
+                    instruction);
+        } catch (Exception e) {
+            log.warn("执行后指标复测失败 tool={} traceId={}: {}", toolName, traceId, e.getMessage());
+            afterResponse = Map.of("success", false, "error", e.getMessage());
+        }
+        Map<String, Object> after = RemediationMetricsCollector.fromResponse(
+                objectMapper, toolName, afterResponse, "post-execution-probe");
+        execution.put("metricsBefore", before);
+        execution.put("metricsAfter", after);
+        execution.put("metricsDelta", RemediationMetricsCollector.numericDelta(before, after));
+        execution.put("metricsVerified", Boolean.TRUE.equals(after.get("available")));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseResponse(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of("success", false, "error", "执行前预览不可用");
+        }
+        try {
+            return objectMapper.readValue(json, Map.class);
+        } catch (Exception e) {
+            return Map.of("success", false, "error", "执行前预览解析失败");
+        }
     }
 
     private Validation validateTool(String toolName, String traceId, long start) {

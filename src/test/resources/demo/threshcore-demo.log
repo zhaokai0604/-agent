@@ -1,0 +1,8 @@
+2024-01-15T08:00:00+08:00 INFO  demo-app boot completed instance=demo-01
+2024-01-15T08:01:12+08:00 WARN  disk usage high path=/demo/logs usage=91%
+2024-01-15T08:02:03+08:00 ERROR payment timeout requestId=demo-1001 upstream=mock-pay
+2024-01-15T08:02:04+08:00 ERROR payment timeout requestId=demo-1002 upstream=mock-pay
+2024-01-15T08:03:21+08:00 INFO  cleanup candidate file=app.log.20240101 bytes=4096
+2024-01-15T08:03:22+08:00 INFO  protected file=var/lib/mysql/slow.log reason=database-data
+2024-01-15T08:03:23+08:00 INFO  protected file=var/lib/mysql/audit.log reason=database-audit
+2024-01-15T08:04:00+08:00 INFO  demo-app request completed requestId=demo-1002

@@ -1,6 +1,7 @@
 package com.award.log.service;
 
 import com.award.log.agent.RemediationClosureSupport;
+import com.award.log.governance.OpsExecutionPipeline;
 import com.award.log.governance.GovernanceAdmissionVerdict;
 import com.award.log.governance.OpsGovernanceService;
 import com.award.log.handler.PerformanceWebSocketHandler;
@@ -18,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -66,6 +68,11 @@ public class OpsAutoRemediationService {
     private final OpsGovernanceService opsGovernanceService;
     private final OpsAuditTraceService opsAuditTraceService;
     private final HttpAuditSubject httpAuditSubject;
+
+    /** 巡检自动修复的真实写也必须与 MCP/Agent 共用 PEP 管线。 */
+    @Autowired(required = false)
+    @Lazy
+    private OpsExecutionPipeline opsExecutionPipeline;
 
     @Autowired(required = false)
     private PerformanceWebSocketHandler performanceWebSocketHandler;
@@ -829,18 +836,18 @@ public class OpsAutoRemediationService {
                     case "CLEAN_TEMP" -> {
                         String path = String.valueOf(step.get("path"));
                         int days = asInt(step.get("days"), tempCleanDays);
-                        String out = cleanTempTool.cleanTempFiles(path, days, false, true);
+                        String out = executeWrite("CleanTempTool", path, days, source);
                         actions.add(verifiedActionRow("CleanTempTool", path, out, false));
                     }
                     case "CLEAN_LOG" -> {
                         String path = String.valueOf(step.get("path"));
                         int days = asInt(step.get("days"), logCleanDays);
-                        String out = logCleanupTool.cleanupOldLogs(path, days, false, true);
+                        String out = executeWrite("LogCleanupTool", path, days, source);
                         actions.add(verifiedActionRow("LogCleanupTool", path, out, false));
                     }
                     case "RESTART_SERVICE" -> {
                         String svc = String.valueOf(step.get("serviceName"));
-                        String out = serviceRestartTool.restartService(svc, false, true);
+                        String out = executeWrite("ServiceRestartTool", svc, 0, source);
                         actions.add(verifiedActionRow("ServiceRestartTool", svc, out, true));
                     }
                     default -> actions.add(actionRow(kind, String.valueOf(step), false, "未知步骤类型"));
@@ -864,6 +871,37 @@ public class OpsAutoRemediationService {
         res.put("actions", actions);
         res.put("resultSummary", resultSummary);
         return res;
+    }
+
+    /**
+     * 自动修复统一写入口：真实执行、风险预算、前后指标、效果验证和审计全部由 PEP 管线完成。
+     * 无管线时的分支只服务于现有轻量单测，不作为生产运行路径。
+     */
+    private String executeWrite(String toolName, String target, int days, String source) throws Exception {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("dryRun", false);
+        if ("ServiceRestartTool".equals(toolName)) {
+            params.put("serviceName", target);
+            params.put("confirmRestart", true);
+        } else {
+            params.put("path", target);
+            params.put("confirmDelete", true);
+            params.put("days", days);
+            if ("LogCleanupTool".equals(toolName)) {
+                params.put("logPath", target);
+            }
+        }
+        if (opsExecutionPipeline != null) {
+            return objectMapper.writeValueAsString(opsExecutionPipeline.executeDirect(
+                    toolName, params, "巡检自动修复 " + source + " " + target,
+                    source == null || source.isBlank() ? "autonomous" : source).body());
+        }
+        return switch (toolName) {
+            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(target, days, false, true);
+            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(target, days, false, true);
+            case "ServiceRestartTool" -> serviceRestartTool.restartService(target, false, true);
+            default -> throw new IllegalArgumentException("不支持的自动修复写工具: " + toolName);
+        };
     }
 
     private void finalizeSummary(String ts, double disk, int findingsCount,

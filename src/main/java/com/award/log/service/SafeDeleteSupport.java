@@ -8,7 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * safe_delete：优先移入回收站，失败时回退 rm。
+ * safe_delete：将文件移入回收站；回收站不可用时 fail-closed，绝不悄悄改成不可逆删除。
  */
 @Slf4j
 @Component
@@ -30,8 +30,12 @@ public class SafeDeleteSupport {
                 String handle = recycleBinService.moveToRecycleBin(file, traceId);
                 return DeleteOutcome.recycled(handle, file.toString());
             } catch (Exception e) {
-                log.warn("回收站移动失败，回退删除: {} {}", file, e.getMessage());
+                log.warn("回收站移动失败，拒绝不可逆删除: {} {}", file, e.getMessage());
+                return DeleteOutcome.failed("recycle_failed: " + e.getMessage());
             }
+        }
+        if (useRecycleBin) {
+            return DeleteOutcome.failed("recycle_service_unavailable");
         }
         try {
             Files.deleteIfExists(file);

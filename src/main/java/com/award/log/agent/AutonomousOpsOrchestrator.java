@@ -6,6 +6,7 @@ import com.award.log.agent.awm.WorkflowInductionService;
 import com.award.log.agent.awm.WorkflowRetriever;
 import com.award.log.config.SystemConfigRuntimeState;
 import com.award.log.governance.OpsRemediationGate;
+import com.award.log.governance.OpsExecutionPipeline;
 import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.tools.CleanTempTool;
 import com.award.log.mcp.tools.CronJobTool;
@@ -33,6 +34,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -89,6 +91,11 @@ public class AutonomousOpsOrchestrator {
     private final TimeSource timeSource;
     private final TraceIdGenerator traceIdGenerator;
     private final ExecutorService perceiveExecutor;
+
+    /** 自动修复与 MCP 共用同一 PEP 写入管线；旧工具只保留给无 Spring 单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @Lazy
+    private OpsExecutionPipeline opsExecutionPipeline;
 
     @Value("${agent.autonomous.enabled:true}")
     private boolean enabled;
@@ -685,12 +692,10 @@ public class AutonomousOpsOrchestrator {
                 if (decision.forbidden() || decision.mayPreview()) {
                     continue;
                 }
-                String exec = cleanTempTool.cleanTempFiles(path, days, false, true);
-                Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
-                        "CleanTempTool",
-                        exec,
-                        RemediationClosureSupport.writeParams("CleanTempTool", path, false),
-                        "autonomous");
+                String exec = executeWrite("CleanTempTool", writeParams("CleanTempTool", path, days),
+                        "AutonomousOps CleanTempTool path=" + path);
+                Map<String, Object> verifyReport = verifyWrite("CleanTempTool", exec,
+                        RemediationClosureSupport.writeParams("CleanTempTool", path, false), "autonomous");
                 RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
                 if (RemediationClosureSupport.verifiedOk(verifyReport)) {
                     deletedTotal += countFromTool(exec, "filesDeleted");
@@ -719,7 +724,8 @@ public class AutonomousOpsOrchestrator {
         String path = defaultLogRoot();
         OpsRemediationGate.RemediationDecision decision =
                 opsRemediationGate.decideLogCleanup(path, logCleanDays, force, "AutonomousOps LogCleanupTool path=" + path);
-        String preview = logCleanupTool.cleanupOldLogs(path, logCleanDays, true, false);
+        String preview = previewWrite("LogCleanupTool", writeParams("LogCleanupTool", path, logCleanDays),
+                "AutonomousOps LogCleanupTool path=" + path);
         int found = countFromTool(preview, "deletableCount", "filesFound");
         if (found == 0) {
             return RemediationOutcome.skipped("- Log cleanup found no old files.");
@@ -730,7 +736,8 @@ public class AutonomousOpsOrchestrator {
         if (decision.mayPreview()) {
             return RemediationOutcome.previewed("- Log cleanup preview found **" + found + "** files.");
         }
-        String exec = logCleanupTool.cleanupOldLogs(path, logCleanDays, false, true);
+        String exec = executeWrite("LogCleanupTool", writeParams("LogCleanupTool", path, logCleanDays),
+                "AutonomousOps LogCleanupTool path=" + path);
         int deleted = countFromTool(exec, "filesDeleted");
         auditRecorder.addStep(steps, "execute", "LogCleanup deleted=" + deleted);
         JsonNode execData = parseToolData(exec);
@@ -740,11 +747,8 @@ public class AutonomousOpsOrchestrator {
         if (!acknowledgedWrite) {
             return RemediationOutcome.skipped("- Log cleanup execution failed: " + WriteToolResultSupport.errorMessage(exec));
         }
-        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
-                "LogCleanupTool",
-                exec,
-                RemediationClosureSupport.writeParams("LogCleanupTool", path, false),
-                "autonomous");
+        Map<String, Object> verifyReport = verifyWrite("LogCleanupTool", exec,
+                RemediationClosureSupport.writeParams("LogCleanupTool", path, false), "autonomous");
         RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
         if (!RemediationClosureSupport.verifiedOk(verifyReport)) {
             JsonNode data = parseToolData(exec);
@@ -771,20 +775,19 @@ public class AutonomousOpsOrchestrator {
             return RemediationOutcome.skipped("- Service **" + serviceName + "** blocked: " + decision.reason());
         }
         if (decision.mayPreview()) {
-            serviceRestartTool.restartService(serviceName, true, false);
+            previewWrite("ServiceRestartTool", writeParams("ServiceRestartTool", serviceName, 0),
+                    "AutonomousOps ServiceRestartTool " + serviceName);
             return RemediationOutcome.previewed("- Service **" + serviceName + "** preview completed.");
         }
-        String exec = serviceRestartTool.restartService(serviceName, false, true);
+        String exec = executeWrite("ServiceRestartTool", writeParams("ServiceRestartTool", serviceName, 0),
+                "AutonomousOps ServiceRestartTool " + serviceName);
         auditRecorder.addStep(steps, "execute", "ServiceRestart " + serviceName);
         if (!WriteToolResultSupport.isConfirmedRealWrite(exec)) {
             return RemediationOutcome.skipped("- Service **" + serviceName + "** restart failed: "
                     + WriteToolResultSupport.errorMessage(exec));
         }
-        Map<String, Object> verifyReport = RemediationClosureSupport.verifyToolJson(
-                "ServiceRestartTool",
-                exec,
-                RemediationClosureSupport.writeParams("ServiceRestartTool", serviceName, true),
-                "autonomous");
+        Map<String, Object> verifyReport = verifyWrite("ServiceRestartTool", exec,
+                RemediationClosureSupport.writeParams("ServiceRestartTool", serviceName, true), "autonomous");
         RemediationClosureSupport.appendClosureSteps(auditRecorder, steps, verifyReport);
         if (!RemediationClosureSupport.verifiedOk(verifyReport)) {
             // Some platform adapters acknowledge a successful restart with only
@@ -902,6 +905,75 @@ public class AutonomousOpsOrchestrator {
             return dataNode;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /** Agent 自动修复统一调用 PEP 管线，确保前后指标、审计与恢复句柄一致。 */
+    private String previewWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
+        if (opsExecutionPipeline != null) {
+            return objectMapper.writeValueAsString(opsExecutionPipeline.preview(
+                    toolName, params, instruction, "autonomous").body());
+        }
+        return switch (toolName) {
+            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), logCleanDays), true, false);
+            case "ServiceRestartTool" -> serviceRestartTool.restartService(
+                    String.valueOf(params.get("serviceName")), true, false);
+            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), tempCleanDays), true, false);
+            default -> throw new IllegalArgumentException("不支持的自动修复写工具: " + toolName);
+        };
+    }
+
+    private String executeWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
+        if (opsExecutionPipeline != null) {
+            return objectMapper.writeValueAsString(opsExecutionPipeline.executeDirect(
+                    toolName, params, instruction, "autonomous").body());
+        }
+        return switch (toolName) {
+            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), logCleanDays), false, true);
+            case "ServiceRestartTool" -> serviceRestartTool.restartService(
+                    String.valueOf(params.get("serviceName")), false, true);
+            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(
+                    String.valueOf(params.get("path")), asInt(params.get("days"), tempCleanDays), false, true);
+            default -> throw new IllegalArgumentException("不支持的自动修复写工具: " + toolName);
+        };
+    }
+
+    private Map<String, Object> writeParams(String toolName, String target, int days) {
+        Map<String, Object> params = new LinkedHashMap<>(RemediationClosureSupport.writeParams(
+                toolName, target, "ServiceRestartTool".equals(toolName)));
+        if (!"ServiceRestartTool".equals(toolName)) {
+            params.put("days", days);
+        }
+        return params;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> verifyWrite(
+            String toolName, String result, Map<String, Object> params, String requester) {
+        if (opsExecutionPipeline != null) {
+            try {
+                Map<String, Object> root = objectMapper.readValue(result, Map.class);
+                if (root.get("verify") instanceof Map<?, ?> verify) {
+                    return new LinkedHashMap<>((Map<String, Object>) verify);
+                }
+            } catch (Exception ignored) {
+                // 下方兼容验证用于无 Spring 的单元测试。
+            }
+        }
+        return RemediationClosureSupport.verifyToolJson(toolName, result, params, requester);
+    }
+
+    private int asInt(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Exception ignored) {
+            return fallback;
         }
     }
 
