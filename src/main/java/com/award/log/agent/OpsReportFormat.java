@@ -167,20 +167,20 @@ public final class OpsReportFormat {
             int infoCount,
             List<String> actionableTitles) {
         StringBuilder sb = new StringBuilder();
-        sb.append("### Conclusion\n\n");
+        sb.append("### 检查结论\n\n");
         if (actionableCount == 0) {
-            sb.append(tableHeaderLine("Item", "Status"));
-            sb.append("| Overall | Healthy |\n");
+            sb.append(tableHeaderLine("项目", "状态"));
+            sb.append("| 总体 | 正常 |\n");
             sb.append(String.format(Locale.ROOT,
-                    "| CPU / Memory / Disk | `%.0f%%` / `%.0f%%` / `%.0f%%` |\n",
+                    "| CPU / 内存 / 磁盘 | `%.0f%%` / `%.0f%%` / `%.0f%%` |\n",
                     cpuPct, memPct, diskPct));
             if (infoCount > 0) {
-                sb.append("\n> There are also ").append(infoCount)
-                        .append(" info-level findings for awareness.\n");
+                sb.append("\n> 另有 ").append(infoCount)
+                        .append(" 个提示级发现项，请留意。\n");
             }
         } else {
-            sb.append("Found **").append(actionableCount).append("** items that need attention.\n\n");
-            sb.append(tableHeaderLine("No.", "Issue"));
+            sb.append("发现 **").append(actionableCount).append("** 个需要关注的问题。\n\n");
+            sb.append(tableHeaderLine("序号", "问题"));
             List<String> titles = actionableTitles != null ? actionableTitles : List.of();
             for (int i = 0; i < Math.min(3, titles.size()); i++) {
                 sb.append("| ").append(i + 1).append(" | ").append(titles.get(i)).append(" |\n");
@@ -234,17 +234,16 @@ public final class OpsReportFormat {
      * 供前端 RemediationPlanCard 解析的处置计划章节（Plan-then-Act）。
      */
     public static String remediationPlanMarkdown(List<String> items) {
+        if (items == null || items.stream().noneMatch(item -> item != null && !item.isBlank())) {
+            return "\n## 处置建议\n\n- 当前未发现需要处置的问题，无需生成执行计划。\n";
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("\n## 处置计划\n\n");
-        if (items == null || items.isEmpty()) {
-            sb.append("- 只读采集后给出建议；写操作默认预览\n");
-        } else {
-            for (String item : items) {
-                if (item == null || item.isBlank()) {
-                    continue;
-                }
-                sb.append("- ").append(item.trim()).append("\n");
+        for (String item : items) {
+            if (item == null || item.isBlank()) {
+                continue;
             }
+            sb.append("- ").append(item.trim()).append("\n");
         }
         sb.append("\n> 以上为**预览/待确认**计划，默认不会真实写入。回复 **「")
                 .append(CONFIRM_EXECUTE_HINT_ZH)
@@ -253,11 +252,11 @@ public final class OpsReportFormat {
     }
 
     public static String executedFooter() {
-        return "> Write actions were executed within policy boundaries. See the trace for the full audit trail.\n";
+        return "> 写操作已在策略允许范围内执行，完整审计记录请查看对应 trace。\n";
     }
 
     public static String readOnlySkippedFooter() {
-        return "- Skipped because the current session is read-only.\n\n";
+        return "- 当前会话为只读模式，未执行写操作。\n\n";
     }
 
     public static String dataBasisFooter(boolean writeConfirmed) {
@@ -291,13 +290,13 @@ public final class OpsReportFormat {
             return null;
         }
         return switch (kind) {
-            case "DISK_PRESSURE" -> "scan hotspots, preview temp or old-log cleanup, then verify disk usage";
-            case "CPU_HIGH" -> "locate hot processes, then assess whether an allowlisted service restart is needed";
-            case "LOG_ANOMALY" -> "inspect abnormal logs, then preview old-log cleanup";
-            case "MEM_HIGH" -> "list top memory consumers, then consider throttling or scaling";
-            case "FAILED_SERVICE" -> "inspect failed service units, then preview an allowlisted restart";
-            case "PORT_DOWN" -> "confirm whether the service should be listening on that port";
-            default -> "validate with the matching MCP tool and handle within policy";
+            case "DISK_PRESSURE" -> "扫描磁盘热点，预览临时文件或旧日志清理，然后验证磁盘占用";
+            case "CPU_HIGH" -> "定位高占用进程，再判断是否需要重启白名单服务";
+            case "LOG_ANOMALY" -> "分析异常日志，再预览旧日志清理";
+            case "MEM_HIGH" -> "列出高内存进程，再评估限流或扩容";
+            case "FAILED_SERVICE" -> "检查失败服务，再预览白名单服务重启";
+            case "PORT_DOWN" -> "确认服务是否应监听该端口";
+            default -> "使用匹配的 MCP 工具核验，并在治理策略内处理";
         };
     }
 }

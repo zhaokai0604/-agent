@@ -180,4 +180,68 @@ class AssistantReplyPlannerTest {
         assertEquals(AssistantIntentCategory.METRICS_QUERY, plan.category());
         assertTrue(plan.useToolAgentPath());
     }
+
+    @ParameterizedTest
+    @CsvSource({
+            "帮我看看目前主机的状态",
+            "看看电脑状态是否正常",
+            "查看当前服务器运行情况"
+    })
+    void hostStatusQueriesAreReadOnlyAndNeverPatrol(String message) {
+        OpsRuntimeService runtime = mock(OpsRuntimeService.class);
+        when(runtime.shouldOrchestrate(anyString())).thenReturn(true);
+
+        var plan = planner.plan(message, null, true, false, true, runtime);
+
+        assertEquals(AssistantReplyMode.TOOL_AGENT, plan.mode());
+        assertEquals(AssistantIntentCategory.HOST_STATUS_QUERY, plan.category());
+        assertTrue(plan.useToolAgentPath());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "不要执行删除",
+            "别执行重启",
+            "不要调用工具"
+    })
+    void negativeWriteLanguageAlwaysWinsOverConfirmation(String message) {
+        var plan = planner.plan(message, null, true, true, true, null);
+
+        assertNotEquals(AssistantIntentCategory.CONFIRM_WRITE, plan.category());
+        assertFalse(plan.useToolAgentPath());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "帮我看看主机状态，然后删除临时文件",
+            "查看服务器运行情况并重启服务"
+    })
+    void mixedStatusAndWriteRequestDoesNotBecomeReadOnly(String message) {
+        var plan = planner.plan(message, null, true, false, false, null);
+
+        assertNotEquals(AssistantIntentCategory.HOST_STATUS_QUERY, plan.category());
+        assertNotEquals(AssistantPermission.READ_ONLY, plan.permission());
+    }
+
+    @Test
+    void routePermissionFollowsIntentCategory() {
+        assertEquals(AssistantPermission.READ_ONLY,
+                planner.plan("帮我看看目前主机的状态", null, true, false, true, null).permission());
+        assertEquals(AssistantPermission.PREVIEW_ONLY,
+                planner.plan("磁盘满了，先预览清理临时文件", null, true, false, true, null).permission());
+        assertEquals(AssistantPermission.WRITE_REQUESTED,
+                planner.plan("确认执行清理临时文件", null, true, false, true, null).permission());
+    }
+
+    @Test
+    void commonPromptContractAndRoutePermissionAreExplicit() {
+        String prompt = AssistantReplyPrompts.systemPrompt(
+                AssistantReplyMode.OPS_ANALYSIS,
+                AssistantIntentCategory.HOST_STATUS_QUERY,
+                "{}");
+        assertTrue(prompt.contains("findings"));
+        assertTrue(prompt.contains("不得猜测"));
+        assertTrue(AssistantReplyPrompts.routePermissionSection(AssistantPermission.READ_ONLY)
+                .contains("READ_ONLY"));
+    }
 }

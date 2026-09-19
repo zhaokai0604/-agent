@@ -25,8 +25,10 @@ class AgentToolPhaseTest {
     void diagnoseDeniesHybridWriteBeans() {
         assertTrue(AgentToolPhase.denyBeanInDiagnosePhase("DockerTool"));
         assertTrue(AgentToolPhase.denyBeanInDiagnosePhase("SystemdTool"));
+        assertTrue(AgentToolPhase.denyBeanInDiagnosePhase("ProcessTool"));
         assertFalse(AgentToolPhase.denyBeanInDiagnosePhase("DiskTool"));
-        assertFalse(AgentToolPhase.denyBeanInDiagnosePhase("ProcessTool"));
+        assertFalse(AgentToolPhase.denyBeanInDiagnosePhase("FirewallTool"));
+        assertFalse(AgentToolPhase.denyBeanInDiagnosePhase("PrivilegeTool"));
     }
 
     @Test

@@ -1,6 +1,17 @@
 ﻿<template>
   <div class="ops-page ops-chat-container ops-chat-container--agent">
     <div class="chat-messages" ref="messagesContainer" @scroll="onMessagesScroll">
+      <div v-if="messages.length > 0" class="agent-session-strip agent-chat-column">
+        <div class="agent-session-strip__main">
+          <span class="agent-session-strip__eyebrow">当前运维会话</span>
+          <strong>{{ currentSession?.title || '新任务' }}</strong>
+        </div>
+        <div class="agent-session-strip__meta">
+          <span>{{ messages.length }} 条消息</span>
+          <span class="agent-session-strip__dot" aria-hidden="true"></span>
+          <span>上下文已绑定</span>
+        </div>
+      </div>
       <div v-if="messages.length === 0" class="agent-chat-column">
         <AgentWelcome
           :patrol-pending="patrolPending?.hasPending"
@@ -13,7 +24,13 @@
       <div class="agent-chat-column messages-inner" v-if="messages.length > 0">
         <section v-for="(turn, ti) in chatTurns" :key="ti" class="chat-turn">
           <div v-if="turn.user" class="chat-turn__user">
-            <div class="chat-turn__user-bubble">{{ turn.user.content }}</div>
+            <div class="chat-turn__user-content">
+              <div class="chat-turn__user-bubble">{{ turn.user.content }}</div>
+              <div class="chat-turn__user-meta">
+                <span>你</span>
+                <time>{{ turn.user.timestamp || '' }}</time>
+              </div>
+            </div>
           </div>
 
           <div
@@ -68,6 +85,10 @@
                 :feedback-recorded="msg.meta?.executionState?.feedbackRecorded ?? msg.streamEvent?.executionState?.feedbackRecorded ?? null"
                 @open-knowledge="openKnowledge"
               />
+              <div v-if="msg.timestamp || msg.traceId" class="assistant-message-meta">
+                <time v-if="msg.timestamp">{{ msg.timestamp }}</time>
+                <span v-if="msg.traceId">追踪 {{ String(msg.traceId).slice(0, 8) }}</span>
+              </div>
               <div v-if="contextUsage(msg)" class="assistant-context-usage">
                 <span class="assistant-context-usage__label">上下文</span>
                 <span>{{ formatContextUsage(contextUsage(msg)) }}</span>
@@ -189,7 +210,7 @@ import {
 } from '../utils/remediationPlan'
 import { handleAssistantSsePayload, securityOutcomeLabel } from '../utils/assistantSseMeta'
 
-const { messages, loadSession, clearSession } = useAgentSession()
+const { messages, sessions, activeSessionId, loadSession, clearSession } = useAgentSession()
 const inputMessage = ref('')
 const routeHint = useComposerRouteHint(inputMessage)
 const loading = ref(false)
@@ -230,6 +251,10 @@ const chatTurns = computed(() => {
   return turns
 })
 
+const currentSession = computed(() =>
+  sessions.value.find(session => session.id === activeSessionId.value) || null
+)
+
 const streamStatusLabel = computed(() => {
   const last = messages.value[messages.value.length - 1]
   const mode = last?.meta?.replyMode || last?.streamEvent?.replyMode
@@ -243,7 +268,9 @@ function pushAssistantNotice (content) {
   messages.value.push({
     role: 'assistant',
     content,
-    timestamp: nowTime()
+    timestamp: nowTime(),
+    sessionId: activeSessionId.value,
+    status: 'completed'
   })
   scrollToBottom()
 }
@@ -548,6 +575,12 @@ function applySseToAssistant (assistantMsg, payload) {
           }
         }
       }
+      const pendingList = event.pendingConfirmations || event.executionState?.pendingConfirmations
+      if (Array.isArray(pendingList)) {
+        msg.pendingConfirmations = pendingList.filter(item => item && item.confirmationId)
+        msg.pendingConfirmation = msg.pendingConfirmations[0] || null
+        msg.pepMeta = msg.pendingConfirmation || msg.pepMeta
+      }
       const pending = event.pendingConfirmation || event.executionState?.pendingConfirmation
       if (pending && typeof pending === 'object' && pending.confirmationId) {
         msg.pepMeta = {
@@ -555,6 +588,9 @@ function applySseToAssistant (assistantMsg, payload) {
           ...pending
         }
         msg.pendingConfirmation = { ...pending }
+        if (!Array.isArray(msg.pendingConfirmations) || !msg.pendingConfirmations.length) {
+          msg.pendingConfirmations = [{ ...pending }]
+        }
       }
       if (event.traceId) msg.traceId = event.traceId
       if (Array.isArray(event.toolsUsed) && event.toolsUsed.length) {
@@ -659,12 +695,10 @@ const confirmPlanFromMessage = async (index) => {
   try {
     await confirmRemediationDialog()
     const prior = messages.value[index]
-    if (prior) {
-      prior.writeConfirmed = true
-      prior.awaitingConfirm = false
-      prior.meta = { ...(prior.meta || {}), writeConfirmed: true, awaitingConfirm: false }
-    }
-    const pep = prior?.pendingConfirmation || prior?.pepMeta
+    const pendingConfirmations = Array.isArray(prior?.pendingConfirmations) && prior.pendingConfirmations.length
+      ? prior.pendingConfirmations
+      : (prior?.pendingConfirmation || prior?.pepMeta ? [prior.pendingConfirmation || prior.pepMeta] : [])
+    const pep = pendingConfirmations[0]
     if (pep?.confirmationId && pep?.capabilityToken && pep?.confirmToken) {
       try {
         const result = await confirmMcpExecute(
@@ -674,11 +708,26 @@ const confirmPlanFromMessage = async (index) => {
           '按上一轮 Agent 预览确认执行',
           pep.confirmationId,
           pep.capabilityToken,
-          pep.confirmToken
+          pep.confirmToken,
+          activeSessionId.value
         )
         const toolName = result?.toolName || pep.toolName || prior?.plannedTools?.[0] || '运维工具'
         const body = result?.body || result
         const success = body?.success === true
+        const remainingConfirmations = success ? pendingConfirmations.slice(1) : pendingConfirmations
+        if (prior && success) {
+          const nextPending = remainingConfirmations[0] || null
+          prior.pendingConfirmations = remainingConfirmations
+          prior.pendingConfirmation = nextPending
+          prior.pepMeta = nextPending || null
+          prior.writeConfirmed = remainingConfirmations.length === 0
+          prior.awaitingConfirm = remainingConfirmations.length > 0
+          prior.meta = {
+            ...(prior.meta || {}),
+            writeConfirmed: prior.writeConfirmed,
+            awaitingConfirm: prior.awaitingConfirm
+          }
+        }
         messages.value.push({
           role: 'assistant',
           content: generateHumanReadableResponse(toolName, body)
@@ -687,19 +736,26 @@ const confirmPlanFromMessage = async (index) => {
           meta: {
             replyMode: 'TOOL_AGENT',
             securityOutcome: success ? 'EXECUTED' : 'FAILED',
-            writeConfirmed: true,
+            writeConfirmed: success && remainingConfirmations.length === 0,
             verifyOutcome: body?.verifyOutcome,
             executionState: {
               remediationClosed: body?.remediationClosed,
               verified: body?.verified,
               verifyOutcome: body?.verifyOutcome,
-              recover: body?.recover
+              recover: body?.recover,
+              awaitingConfirm: success && remainingConfirmations.length > 0,
+              pendingConfirmations: remainingConfirmations
             }
           }
         })
         scrollToBottom()
         return
       } catch (error) {
+        if (prior) {
+          prior.confirmationError = error?.message || String(error)
+          prior.awaitingConfirm = true
+          prior.writeConfirmed = false
+        }
         messages.value.push({
           role: 'assistant',
           content: `确认执行失败：${error?.message || String(error)}`,
@@ -726,13 +782,17 @@ const runNaturalLanguageStream = async (message) => {
   const assistantMsg = {
     role: 'assistant',
     content: '',
-    timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    sessionId: activeSessionId.value,
+    status: 'streaming'
   }
   messages.value.push(assistantMsg)
   const token = generationToken
   loading.value = true
   streaming.value = true
-  streamAbortController = new AbortController()
+  const abortController = new AbortController()
+  let activeReader = null
+  streamAbortController = abortController
 
   try {
     const response = await assistantChatStream(message, history, {
@@ -740,7 +800,8 @@ const runNaturalLanguageStream = async (message) => {
       // 仅真实「确认执行」才开写；勿对每句对话硬编码 true（否则「你好」也会进处置 Tool Agent）
       confirmRemediation: userConfirmedRemediation(message),
       modelProfile: selectedModelProfile.value,
-      signal: streamAbortController.signal
+      sessionId: activeSessionId.value,
+      signal: abortController.signal
     })
     if (isGenerationCancelled(token)) return
     if (!response.ok) {
@@ -777,6 +838,7 @@ const runNaturalLanguageStream = async (message) => {
       return
     }
     streamReader = reader
+    activeReader = reader
     const decoder = new TextDecoder('utf-8')
     let sseBuf = ''
     while (true) {
@@ -804,6 +866,7 @@ const runNaturalLanguageStream = async (message) => {
         assistantMsg.content = '（未返回内容，请检查模型服务）'
       }
       finalizeAssistantMessage(assistantMsg)
+      assistantMsg.status = 'completed'
     }
   } catch (e) {
     if (isGenerationCancelled(token) || e?.name === 'AbortError') return
@@ -814,13 +877,15 @@ const runNaturalLanguageStream = async (message) => {
     assistantMsg.content = existing
       ? existing + errHint
       : '连接助手失败: ' + (e.message || String(e)) + '\n请确认后端服务已启动且模型配置正确。'
+    assistantMsg.status = 'failed'
   } finally {
     if (!isGenerationCancelled(token)) {
       streaming.value = false
       loading.value = false
     }
-    streamAbortController = null
-    streamReader = null
+    // 旧请求结束时不能清理已经属于新请求的控制器/reader。
+    if (streamAbortController === abortController) streamAbortController = null
+    if (streamReader === activeReader) streamReader = null
   }
   scrollToBottom()
 }
@@ -838,7 +903,9 @@ const handleSend = async () => {
   messages.value.push({
     role: 'user',
     content: message,
-    timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    sessionId: activeSessionId.value,
+    status: 'completed'
   })
   scrollToBottom()
 
@@ -959,6 +1026,62 @@ defineExpose({ applyPrefill, clearChat })
   overflow-y: auto;
   padding: 12px 0 20px;
   background: #fff;
+}
+
+.agent-session-strip {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(228, 228, 231, 0.72);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(10px);
+}
+
+.agent-session-strip__main,
+.agent-session-strip__meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.agent-session-strip__main {
+  gap: 10px;
+  color: #27272a;
+}
+
+.agent-session-strip__main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agent-session-strip__eyebrow {
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agent-session-strip__meta {
+  flex-shrink: 0;
+  gap: 7px;
+  color: #a1a1aa;
+  font-size: 11px;
+}
+
+.agent-session-strip__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #14b8a6;
 }
 
 .messages-inner {
@@ -1131,6 +1254,14 @@ defineExpose({ applyPrefill, clearChat })
 
 .agent-model-switcher__select {
   width: 220px;
+}
+
+@media (max-width: 640px) {
+  .agent-session-strip {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
 }
 
 </style>

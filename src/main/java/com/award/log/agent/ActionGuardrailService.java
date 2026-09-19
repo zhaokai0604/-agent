@@ -2,13 +2,12 @@ package com.award.log.agent;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import com.award.log.security.effect.ToolOperationPolicy;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -17,8 +16,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class ActionGuardrailService {
 
-    private static final Set<String> WRITE_TOOLS = AgentSkillPlan.WRITE_TOOLS_VIEW();
-
     private final ConcurrentHashMap<String, TraceState> traces = new ConcurrentHashMap<>();
 
     @Value("${agent.guardrails.max-failures-per-trace:5}")
@@ -26,15 +23,17 @@ public class ActionGuardrailService {
 
     public GuardrailVerdict beforeToolCall(String traceId, String toolName, Map<String, Object> parameters) {
         TraceState state = traces.computeIfAbsent(traceId == null ? "default" : traceId, k -> new TraceState());
+        state.lastParameters.put(toolName == null ? "" : toolName.trim(),
+                parameters == null ? Map.of() : new LinkedHashMap<>(parameters));
         if (state.failures >= maxFailuresPerTrace) {
             return GuardrailVerdict.block("失败预算已用尽，请重新规划或人工介入", nudge("减少工具调用次数，先汇总已有证据"));
         }
-        if (isWriteTool(toolName) && !state.hasSuccessfulObserve) {
+        if (isWriteTool(toolName, parameters) && !state.hasSuccessfulObserve) {
             return GuardrailVerdict.block(
                     "写工具前须先完成只读观测",
                     nudge("先调用 SystemLoadTool、DiskTool 或 ProcessTool 收集证据"));
         }
-        if (isWriteTool(toolName) && state.lastObserveFailed) {
+        if (isWriteTool(toolName, parameters) && state.lastObserveFailed) {
             return GuardrailVerdict.block(
                     "前置观测工具失败，禁止写操作",
                     nudge("修复观测步骤或缩小范围后重试"));
@@ -47,7 +46,9 @@ public class ActionGuardrailService {
         if (!success) {
             state.failures++;
         }
-        if (!isWriteTool(toolName)) {
+        Map<String, Object> parameters = state.lastParameters.getOrDefault(
+                toolName == null ? "" : toolName.trim(), Map.of());
+        if (!isWriteTool(toolName, parameters)) {
             state.hasSuccessfulObserve = state.hasSuccessfulObserve || success;
             state.lastObserveFailed = !success;
             if (success) {
@@ -65,8 +66,8 @@ public class ActionGuardrailService {
         }
     }
 
-    private boolean isWriteTool(String toolName) {
-        return toolName != null && WRITE_TOOLS.contains(toolName.trim());
+    private boolean isWriteTool(String toolName, Map<String, Object> parameters) {
+        return ToolOperationPolicy.isWriteOperation(toolName, parameters);
     }
 
     private static Map<String, Object> nudge(String message) {
@@ -93,5 +94,6 @@ public class ActionGuardrailService {
         final List<String> observeTools = new ArrayList<>();
         final List<String> writeTools = new ArrayList<>();
         final Map<String, String> toolResults = new LinkedHashMap<>();
+        final Map<String, Map<String, Object>> lastParameters = new ConcurrentHashMap<>();
     }
 }

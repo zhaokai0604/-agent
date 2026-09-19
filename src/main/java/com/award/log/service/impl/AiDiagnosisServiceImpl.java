@@ -1,6 +1,7 @@
 package com.award.log.service.impl;
 
 import com.award.log.agent.OpsReportFormat;
+import com.award.log.agent.OpsAnalysisSkillCatalog;
 import com.award.log.analysis.AiDiagnosisContextBuilder;
 import com.award.log.dto.EnhancedLogParseResultEntity;
 import com.award.log.util.AiChatResponseSupport;
@@ -28,6 +29,10 @@ import reactor.core.publisher.Flux;
 @Slf4j
 @Service
 public class AiDiagnosisServiceImpl implements AiDiagnosisService {
+
+    private static String withCommonEvidenceContract(String prompt) {
+        return OpsAnalysisSkillCatalog.commonSkillPromptContract() + "\n" + prompt;
+    }
 
     /**
      * 批量/全量诊断：证据约束（与 user 里「硬性事实」条数配合，抑制编造与套话）
@@ -108,7 +113,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
             }
         }
 
-        String systemPrompt = "你担任 **Incident Response Lead（事件响应负责人）** 兼 **Staff SRE**：输入为经脱敏的异常日志切片，须在 **证据边界内** 撰写技术备忘录；**答复范围仅限于用户消息中的日志字段与正文**，不得引入无关事实；**宁可承认信息不足，也不得编造或套用无关模板**。\n\n"
+        String systemPrompt = withCommonEvidenceContract("你担任 **Incident Response Lead（事件响应负责人）** 兼 **Staff SRE**：输入为经脱敏的异常日志切片，须在 **证据边界内** 撰写技术备忘录；**答复范围仅限于用户消息中的日志字段与正文**，不得引入无关事实；**宁可承认信息不足，也不得编造或套用无关模板**。\n\n"
                 + OpsReportFormat.markdownOutputSpecForPrompt() + "\n"
                 + "输出必须严格遵循下列栏目 (使用 `###` 子章节标题):\n\n"
                 + "### 问题等级\n"
@@ -121,7 +126,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
                 + "针对每条高置信度假设给出 **Mitigation** 与 **Corrective Fix**，须点名日志中出现的异常类型/关键字；验证步骤尽量可复制；禁止与本片段无关的宽泛建议。\n\n"
                 + "### 预防措施\n"
                 + "仅写与本片段证据相关的可度量项；不可套用与本日志无关的泛泛架构清单。\n"
-                + BATCH_EVIDENCE_AND_ANTI_HALLUCINATION;
+                + BATCH_EVIDENCE_AND_ANTI_HALLUCINATION);
 
         int baselineCount = baselineLines == null ? 0 : baselineLines.size();
         String userPrompt = "【硬性事实】焦点异常日志条数 = " + focusLines.size()
@@ -191,14 +196,14 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         }
         log.info("单条日志快速诊断，日志等级: [{}]", logEntry.getSeverity());
         
-        String systemPrompt = "你是 **On-call Principal Engineer**。对单条异常日志执行 **极致压缩（Ultra-compressed）RCA**，面向已在 bridges / Slack 上的值班工程师。\n" +
+        String systemPrompt = withCommonEvidenceContract("你是 **On-call Principal Engineer**。对单条异常日志执行 **极致压缩（Ultra-compressed）RCA**，面向已在 bridges / Slack 上的值班工程师。\n" +
                 "**答复仅能依据下方「时间」「日志内容」等用户字段**，禁止捏造或引入无关事件。\n" +
                 "输出必须严格为三行以内（不使用 Markdown 标题）：\n" +
                 "1. **核心问题**：Symptom → **名称须摘自本条日志正文**（类/logger/主机名等）；勿自创组件名。无则写「片段未含组件名」。\n" +
                 "2. **专家建议**：针对日志中出现的**具体**异常类型/错误码/关键字给出动作；禁止与本条无关的通用命令堆砌。\n" +
                 "3. **风险预防**：一句可观测补强；若无法从本条推断则写「需补充字段：…」。\n" +
                 "全文 ≤ 220 汉字当量；禁止空话套话与免责声明堆砌。\n" +
-                SINGLE_LOG_EVIDENCE_RULES;
+                SINGLE_LOG_EVIDENCE_RULES);
         String safeBody = AiDiagnosisContextBuilder.truncateForPrompt(logEntry.getDesensitizedLog(), 8000);
         String timeLine = logEntry.getLogTime() != null && !logEntry.getLogTime().isBlank()
                 ? logEntry.getLogTime()
@@ -276,14 +281,14 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
             return Flux.just("无效的日志数据。");
         }
         
-        String systemPrompt = "角色：**Tier-2 Operations Analyst**。对单条日志做 **流式友好的三段式处置摘要**，供控制台侧边栏实时展示。\n" +
+        String systemPrompt = withCommonEvidenceContract("角色：**Tier-2 Operations Analyst**。对单条日志做 **流式友好的三段式处置摘要**，供控制台侧边栏实时展示。\n" +
                 "**仅依据用户提供的本条时间与正文**，禁止无关叙述与捏造。\n" +
                 "硬性约束：恰好 **3 句完整陈述**，不用 Markdown 标题。\n" +
                 "句 1 — **Hypothesis**：名称与机制须来自日志正文词汇；禁止虚构类名/服务名。\n" +
                 "句 2 — **Remediation**：针对本条出现的异常/错误码；勿给脱离本文的通用排查清单。\n" +
                 "句 3 — **Impact**：若无法从本条判断影响，明确写「无法从单条判断」。\n" +
                 "禁止含糊形容词而不附着日志中的实体。\n" +
-                SINGLE_LOG_EVIDENCE_RULES;
+                SINGLE_LOG_EVIDENCE_RULES);
 
         String safeBody = AiDiagnosisContextBuilder.truncateForPrompt(logEntry.getDesensitizedLog(), 8000);
         String timeLine = logEntry.getLogTime() != null && !logEntry.getLogTime().isBlank()
@@ -313,7 +318,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         if (userMessageText == null || userMessageText.isBlank()) {
             return Flux.just("请输入有效的运维问题描述。");
         }
-        String systemPrompt = "## Persona\n" +
+        String systemPrompt = withCommonEvidenceContract("## Persona\n" +
                 "**Distinguished Cloud & Platform Engineer**：贯通 Linux（含企业发行版与麒麟系）、Windows Server、Kubernetes、容器运行时与托管中间件；熟悉 **Well-Architected** 可靠性支柱与 **CRE（Customer Reliability Engineering）** 沟通范式。\n\n" +
                 "## Operating Principles\n" +
                 "1. **Precision over verbosity**：术语对齐 CNCF / POSIX / ITIL 常用语义场；拒绝口语化堆砌。\n" +
@@ -323,7 +328,7 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
                 "5. **Risk disclosure**：涉及数据迁移、证书轮转、网络 ACL 变更时，显式列出 **Rollback & Verification**。\n" +
                 "6. **Evidence when logs present**：若用户粘贴了日志/监控片段，**结论与组件名须引用原文**；**禁止编造**片段中未出现的时刻、条数、时段占比或「集中爆发」叙事；时间与数量只能来自日志原文或用户明确给出的统计。\n" +
                 "7. **Temporal separation**：若日志含多个时间戳，按时间区分不同问题，勿混为一谈；不确定根因时写 **可能原因**，勿虚构爆发或激增。\n" +
-                "8. **Grounding**：回复只能依据用户粘贴的日志/监控片段；**禁止**叙述片段中不存在的事件、时间、数量或组件；**禁止**无关扩展。";
+                "8. **Grounding**：回复只能依据用户粘贴的日志/监控片段；**禁止**叙述片段中不存在的事件、时间、数量或组件；**禁止**无关扩展。");
         Message systemMessage = new SystemMessage(systemPrompt);
         Message userMessage = new UserMessage(userMessageText);
         Prompt prompt = new Prompt(List.of(systemMessage, userMessage));

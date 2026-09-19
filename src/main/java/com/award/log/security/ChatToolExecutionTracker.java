@@ -19,7 +19,8 @@ public final class ChatToolExecutionTracker {
     }
 
     private static final ThreadLocal<List<ToolInvocation>> INVOCATIONS = ThreadLocal.withInitial(ArrayList::new);
-    private static final ThreadLocal<Map<String, Object>> PENDING_CONFIRMATION = new ThreadLocal<>();
+    private static final ThreadLocal<List<Map<String, Object>>> PENDING_CONFIRMATIONS =
+            ThreadLocal.withInitial(ArrayList::new);
 
     private ChatToolExecutionTracker() {
     }
@@ -47,7 +48,7 @@ public final class ChatToolExecutionTracker {
 
     public static void clear() {
         INVOCATIONS.remove();
-        PENDING_CONFIRMATION.remove();
+        PENDING_CONFIRMATIONS.remove();
     }
 
     public static void recordPendingConfirmation(Map<String, Object> body) {
@@ -57,12 +58,18 @@ public final class ChatToolExecutionTracker {
                 "dryRunPreviewHash", "expiresAtMs", "toolName", "expectedEffect", "recover")) {
             if (body.containsKey(key)) safe.put(key, body.get(key));
         }
-        if (!safe.isEmpty()) PENDING_CONFIRMATION.set(Map.copyOf(safe));
+        if (!safe.isEmpty()) PENDING_CONFIRMATIONS.get().add(Map.copyOf(safe));
     }
 
+    /** 返回本轮全部待确认任务，顺序与工具提出确认的顺序一致。 */
+    public static List<Map<String, Object>> pendingConfirmations() {
+        return List.copyOf(PENDING_CONFIRMATIONS.get());
+    }
+
+    /** 兼容旧调用方：返回本轮第一条待确认任务。 */
     public static Map<String, Object> pendingConfirmation() {
-        Map<String, Object> value = PENDING_CONFIRMATION.get();
-        return value == null ? Map.of() : Map.copyOf(value);
+        List<Map<String, Object>> values = PENDING_CONFIRMATIONS.get();
+        return values.isEmpty() ? Map.of() : Map.copyOf(values.get(0));
     }
 
     /** @deprecated 使用 {@link #hasSuccessfulRealWrite()} */

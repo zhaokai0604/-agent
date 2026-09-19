@@ -359,6 +359,15 @@ public class OpsAutoRemediationService {
                     "DISABLED", "DISABLED", "自动修复已关闭。");
             return;
         }
+        // 没有发现项就没有处置对象：必须清除上一轮 pending，不能因低阈值
+        // 或临时目录配置生成脱离证据的清理/重启计划。
+        if (findingsCount == 0) {
+            lastRemediationCoverage = List.of();
+            clearPendingProposalAndBroadcast(ts, "NO_FINDINGS");
+            finalizePatrolState(ts, -1.0, 0, 0, 0,
+                    normalizeMode(runMode), "NO_ACTION", "本轮未发现需要处置的问题。");
+            return;
+        }
         if (correlation == null || correlation.isEmpty()) {
             lastRemediationCoverage = List.of();
             clearPendingProposalAndBroadcast(ts, "INVALID_CORRELATION");
@@ -659,6 +668,9 @@ public class OpsAutoRemediationService {
             Set<String> codes,
             double disk, double cpu) {
 
+        if (findings == null || findings.isEmpty()) {
+            return List.of();
+        }
         List<Map<String, Object>> steps = new ArrayList<>();
         Set<String> tempPaths = new LinkedHashSet<>();
 

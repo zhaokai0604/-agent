@@ -45,6 +45,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -396,7 +397,8 @@ public class AutonomousOpsOrchestrator {
     }
 
     private PerceptionSnapshot perceiveAll(List<Map<String, Object>> steps) throws InterruptedException {
-        Map<String, String> raw = new LinkedHashMap<>();
+        // 感知任务并发写入：必须使用线程安全 Map，避免端口/网络等结果偶发丢失。
+        Map<String, String> raw = new ConcurrentHashMap<>();
         List<Callable<Void>> tasks = List.of(
                 () -> putRaw(raw, "load", () -> systemLoadTool.checkSystemLoad(), "SystemLoadTool", steps),
                 () -> putRaw(raw, "disk", () -> diskTool.checkDiskUsage(), "DiskTool", steps),

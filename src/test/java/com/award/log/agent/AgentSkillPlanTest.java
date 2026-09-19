@@ -26,12 +26,42 @@ class AgentSkillPlanTest {
     }
 
     @Test
+    void explicitLogCleanupDoesNotMixTempCleanup() {
+        List<String> tools = AgentSkillPlan.resolveTools(
+                "帮我检查并清理过期日志，先给出方案，暂不执行",
+                "帮我检查并清理过期日志，先给出方案，暂不执行",
+                null,
+                false);
+        assertTrue(tools.contains("LogCleanupTool"));
+        assertFalse(tools.contains("CleanTempTool"));
+    }
+
+    @Test
+    void explicitTempCleanupDoesNotMixLogCleanup() {
+        List<String> tools = AgentSkillPlan.resolveTools(
+                "帮我清理临时文件，先预览",
+                "帮我清理临时文件，先预览",
+                null,
+                false);
+        assertTrue(tools.contains("CleanTempTool"));
+        assertFalse(tools.contains("LogCleanupTool"));
+    }
+
+    @Test
     void genericSystemStatusRequestStaysReadOnlyPatrol() {
         List<String> tools = AgentSkillPlan.forOrchestrate("检查系统状态，发现问题并给出处置计划");
         assertTrue(tools.contains("SystemLoadTool"));
         assertTrue(tools.contains("DiskTool"));
         assertFalse(tools.contains("CleanTempTool"));
         assertFalse(tools.contains("LogCleanupTool"));
+        assertFalse(AgentSkillPlan.hasWriteTools(tools));
+    }
+
+    @Test
+    void statusRequestContainingServiceWordStillStaysReadOnly() {
+        List<String> tools = AgentSkillPlan.forToolAgent("帮我看看系统服务状态");
+        assertTrue(tools.contains("SystemLoadTool"));
+        assertFalse(tools.contains("ServiceRestartTool"));
         assertFalse(AgentSkillPlan.hasWriteTools(tools));
     }
 

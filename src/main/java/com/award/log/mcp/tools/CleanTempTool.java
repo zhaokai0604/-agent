@@ -394,10 +394,10 @@ public class CleanTempTool extends AbstractCommandExecutor {
             String safe = targetPath.replace("'", "''");
             if (isDryRun) {
                 String psPreview = "$p='" + safe + "';"
-                        + "if (-not (Test-Path -LiteralPath $p)) { '{\"exists\":false}' ; exit 0 };"
+                        + "if (-not (Test-Path -LiteralPath $p)) { @{exists=$false} | ConvertTo-Json -Compress; exit 0 };"
                         + "$s=(Get-ChildItem -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum);"
                         + "$c=(Get-ChildItem -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object).Count;"
-                        + "'{\"exists\":true,\"entries\":'+$c+',\"bytes\":'+[int64]$s.Sum+'}'";
+                        + "@{exists=$true; entries=[int]$c; bytes=[int64]$s.Sum} | ConvertTo-Json -Compress";
                 AbstractCommandExecutor.CommandResult preview = minPrivilegeExecutor.executeSafely(
                         List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psPreview),
                         120_000L);
@@ -411,7 +411,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
                     + "if (-not (Test-Path -LiteralPath $p)) { Write-Error 'path not found'; exit 1 };"
                     + "$s=(Get-ChildItem -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum;"
                     + "Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop;"
-                    + "'{\"removed\":true,\"bytes\":'+[int64]$s+'}'";
+                    + "@{removed=$true; bytes=[int64]$s} | ConvertTo-Json -Compress";
             AbstractCommandExecutor.CommandResult del = minPrivilegeExecutor.executeSafely(
                     List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psDelete),
                     120_000L);

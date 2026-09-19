@@ -9,6 +9,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -34,6 +35,8 @@ import static org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE;
 @Tag(name = "AI Diagnosis Stream")
 @RestController
 @RequestMapping("/log/diagnose")
+@Deprecated(since = "delivery-2026-09", forRemoval = false)
+@ConditionalOnProperty(prefix = "app.ai.legacy", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class AiDiagnosisController {
 
     @Autowired

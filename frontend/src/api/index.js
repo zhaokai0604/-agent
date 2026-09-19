@@ -227,6 +227,7 @@ export const getAssistantModels = () => managementRequest.get('/api/assistant/mo
 export const getAssistantStatePreview = (message, history = [], options = {}) =>
   managementRequest.post('/api/assistant/state/preview', {
     message,
+    sessionId: options.sessionId ? String(options.sessionId) : undefined,
     history: Array.isArray(history) ? history : [],
     useToolAgent: options.useToolAgent !== false,
     confirmRemediation: options.confirmRemediation === true
@@ -250,6 +251,7 @@ export const assistantChatStream = (message, history = [], options = {}) =>
     signal: options.signal,
     body: JSON.stringify({
       message,
+      sessionId: options.sessionId ? String(options.sessionId) : undefined,
       history: Array.isArray(history) ? history : [],
       useToolAgent: options.useToolAgent !== false,
       confirmRemediation: options.confirmRemediation === true,
@@ -462,7 +464,8 @@ export const confirmMcpExecute = (
   userMessage = '',
   confirmationId = '',
   capabilityToken = '',
-  confirmToken = ''
+  confirmToken = '',
+  sessionId = ''
 ) => {
   const body = { toolName, parameters, confirmCode }
   const um = typeof userMessage === 'string' ? userMessage.trim() : ''
@@ -473,6 +476,8 @@ export const confirmMcpExecute = (
   if (token) body.capabilityToken = token
   const hmac = typeof confirmToken === 'string' ? confirmToken.trim() : ''
   if (hmac) body.confirmToken = hmac
+  const sid = typeof sessionId === 'string' ? sessionId.trim() : ''
+  if (sid) body.sessionId = sid
   return managementRequest.post('/api/mcp/confirmExecute', body)
 }
 

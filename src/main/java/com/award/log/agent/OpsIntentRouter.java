@@ -51,11 +51,11 @@ public class OpsIntentRouter {
             Pattern.CASE_INSENSITIVE);
 
     private static final Pattern GENERAL_OPS_CHECK = Pattern.compile(
-            "(检查|排查|诊断|体检|巡检|看看|分析).*(系统|服务器|主机|本机|机器|环境|状况)|"
-                    + "(系统|服务器|主机|本机|电脑|环境).*(检查|排查|诊断|体检|健康|状态|怎么样|如何|正常)|"
-                    + "健康检查|运维检查|全面检查|帮我运维|系统状态|检查本机|"
-                    + "(帮我|请).*(检查|排查|诊断|体检|看看|管理|整理|运维).*(电脑|本机|系统)|"
-                    + "(检查|排查|诊断|体检|看看).*(电脑|本机|系统)|"
+            "(全面|整体|综合|完整|一键|自动)?(检查|排查|诊断|体检|巡检).*(系统|服务器|主机|本机|机器|环境|电脑)|"
+                    + "(系统|服务器|主机|本机|电脑|环境).*(全面|整体|综合|完整|一键|自动)?(检查|排查|诊断|体检|巡检)|"
+                    + "健康检查|运维检查|全面检查|帮我运维|检查本机|"
+                    + "(帮我|请).*(检查|排查|诊断|体检|巡检|管理|整理|运维).*(电脑|本机|系统|主机|服务器)|"
+                    + "(电脑|本机|系统|主机|服务器).*(体检|巡检)|"
                     + "运维管家|电脑管家|系统管家|帮我管理电脑|帮我检查电脑|帮我运维",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
@@ -100,6 +100,11 @@ public class OpsIntentRouter {
      * 规则 + 可选语义兜底。对外主入口。
      */
     public Playbook resolve(String userMessage) {
+        // 只读/否定语义不能交给只有写类 Playbook 的 LLM 兜底分类器。
+        if (AssistantIntentSignals.isHostStatusQuery(userMessage)
+                || AssistantIntentSignals.isNegativeRequest(userMessage)) {
+            return Playbook.NONE;
+        }
         Playbook byRule = resolveByRules(userMessage);
         if (byRule != Playbook.NONE) {
             return byRule;
@@ -110,6 +115,11 @@ public class OpsIntentRouter {
     /** 仅规则层（测例 / 对照语义兜底时使用）。 */
     public Playbook resolveByRules(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
+            return Playbook.NONE;
+        }
+        // 只读状态查询不是 Playbook；更不能因为「看看/状态/是否正常」进入巡检。
+        if (AssistantIntentSignals.isHostStatusQuery(userMessage)
+                || AssistantIntentSignals.isNegativeRequest(userMessage)) {
             return Playbook.NONE;
         }
         if (PATROL_CONTINUE.matcher(userMessage).find()) {
@@ -185,7 +195,8 @@ public class OpsIntentRouter {
         if (userMessage == null || userMessage.isBlank()) {
             return false;
         }
-        if (PREVIEW_ONLY.matcher(userMessage).find()) {
+        if (AssistantIntentSignals.isNegativeRequest(userMessage)
+                || PREVIEW_ONLY.matcher(userMessage).find()) {
             return false;
         }
         if (EXECUTE_FOLLOWUP.matcher(userMessage).find()

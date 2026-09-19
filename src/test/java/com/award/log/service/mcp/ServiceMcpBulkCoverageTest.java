@@ -76,4 +76,20 @@ class ServiceMcpBulkCoverageTest {
                 pendingService.take("cid-2", "other-user");
         assertEquals(McpPendingConfirmationService.TakeStatus.REQUESTER_MISMATCH, mismatch.status());
     }
+
+    @Test
+    void pendingConfirmationIsBoundToAgentSessionWhenPresent() {
+        McpPendingConfirmationService.PendingConfirmation pending = pendingService.register(
+                "cid-session", "DiskTool", Map.of(), "hello", "audit", "user-a",
+                null, "fingerprint", null, "preview", "session-a");
+        assertEquals("session-a", pending.sessionId());
+
+        McpPendingConfirmationService.TakeResult mismatch =
+                pendingService.take("cid-session", "user-a", null, "session-b");
+        assertEquals(McpPendingConfirmationService.TakeStatus.SESSION_MISMATCH, mismatch.status());
+
+        McpPendingConfirmationService.TakeResult ok =
+                pendingService.take("cid-session", "user-a", null, "session-a");
+        assertEquals(McpPendingConfirmationService.TakeStatus.OK, ok.status());
+    }
 }

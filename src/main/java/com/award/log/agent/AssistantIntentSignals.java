@@ -90,11 +90,24 @@ public final class AssistantIntentSignals {
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     public static final Pattern CONFIRM_WRITE = Pattern.compile(
-            "确认执行|执行修复|按预览执行|开始清理|执行删除|真实删除|立即执行|执行处置|删掉|删了|直接删除|立即删除|马上删除|确认删除|真实重启|立即重启",
+            "确认执行|执行修复|按预览执行|开始清理|执行删除|真实删除|立即执行|执行处置|直接删除|立即删除|马上删除|确认删除|真实重启|立即重启|执行清理|立即清理|直接清理|马上删",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     public static final Pattern PREVIEW_ONLY = Pattern.compile(
-            "仅预览|只预览|不要删|不要删除|别删|先看看|预览一下|不要执行|dry-?run|演练|模拟",
+            "仅预览|只预览|不要删|不要删除|别删|先看看.*(清理|删除|重启|处置|方案)|预览一下|不要执行|dry-?run|演练|模拟",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** 用户只想查看当前主机状态，不等于全面巡检。 */
+    public static final Pattern HOST_STATUS_QUERY = Pattern.compile(
+            "(帮我|请|麻烦)?\\s*(看|看看|查看|查询|了解|获取|告诉我|汇报)"
+                    + ".*(主机|本机|服务器|电脑|系统|机器)"
+                    + ".*(状态|运行状态|健康状态|情况|状况|怎么样|如何|是否正常|正不正常)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** 状态查询里若明确串入下一步写动作，不能把整句降级成纯只读。 */
+    private static final Pattern DIRECT_WRITE_ACTION = Pattern.compile(
+            "(帮我|请|直接|立即|马上|开始|执行|确认|然后|并且|并|再)\\s*"
+                    + "(清理|删除|重启|停止|终止|杀掉|修改|启用|禁用|修复|处置)",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     public static final Pattern READ_ONLY_VERB = Pattern.compile(
@@ -181,6 +194,9 @@ public final class AssistantIntentSignals {
         if (DECLINE_TOOLS.matcher(trimmed).find()) {
             return false;
         }
+        if (isHostStatusQuery(trimmed)) {
+            return false;
+        }
         if (COMPUTER_MANAGE.matcher(trimmed).find()) {
             return true;
         }
@@ -199,7 +215,33 @@ public final class AssistantIntentSignals {
     public static boolean isMetricsQuery(String msg) {
         return READ_ONLY_VERB.matcher(msg).find()
                 && !STRONG_OPS_ACTION.matcher(msg).find()
-                && !CONFIRM_WRITE.matcher(msg).find();
+                && !isExplicitWriteConfirmation(msg);
+    }
+
+    /** 是否包含否定/只预览语义；否定优先于确认关键词。 */
+    public static boolean isNegativeRequest(String msg) {
+        if (isBlank(msg)) {
+            return false;
+        }
+        return CANCEL.matcher(msg).find()
+                || DECLINE_TOOLS.matcher(msg).find()
+                || PREVIEW_ONLY.matcher(msg).find();
+    }
+
+    /** 只承认未被否定或降级为预览的明确写确认。 */
+    public static boolean isExplicitWriteConfirmation(String msg) {
+        return !isNegativeRequest(msg)
+                && msg != null
+                && CONFIRM_WRITE.matcher(msg).find();
+    }
+
+    /** 只读主机状态查询；不包含检查/巡检/体检等主动巡检动词。 */
+    public static boolean isHostStatusQuery(String msg) {
+        if (isBlank(msg) || isNegativeRequest(msg) || isExplicitWriteConfirmation(msg)
+                || DIRECT_WRITE_ACTION.matcher(msg.trim()).find()) {
+            return false;
+        }
+        return HOST_STATUS_QUERY.matcher(msg.trim()).find();
     }
 
     /** 多指标综合查询交给 Tool Agent，由模型根据首轮结果决定是否继续取数。 */
@@ -255,6 +297,9 @@ public final class AssistantIntentSignals {
             return false;
         }
         String trimmed = msg.trim();
+        if (isNegativeRequest(trimmed) || isExplicitWriteConfirmation(trimmed)) {
+            return false;
+        }
         if (OPS_PROCEED.matcher(trimmed).find()) {
             if (trimmed.length() <= 24) {
                 return hasOpsContext(trimmed, history);

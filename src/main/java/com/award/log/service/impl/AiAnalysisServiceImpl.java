@@ -57,7 +57,8 @@ public class AiAnalysisServiceImpl implements AiAnalysisService {
     @Override
     public String invokeSkill(String skillId, Map<String, Object> input) {
         return OpsAnalysisSkillCatalog.find(skillId)
-                .map(def -> ask(def.systemPrompt(), def.buildUserPrompt(input)))
+                .map(def -> ask(OpsAnalysisSkillCatalog.commonSkillPromptContract() + "\n" + def.systemPrompt(),
+                        def.buildUserPrompt(input)))
                 .orElse("未找到 Skill：" + skillId);
     }
 

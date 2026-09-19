@@ -91,7 +91,10 @@ public class AppCorsProperties {
 
     private static List<String> defaultPatterns() {
         List<String> list = new ArrayList<>();
+        // HTTP 默认端口在浏览器 Origin 中不会带 :80。
+        list.add("http://localhost");
         list.add("http://localhost:*");
+        list.add("http://127.0.0.1");
         list.add("http://127.0.0.1:*");
         return list;
     }

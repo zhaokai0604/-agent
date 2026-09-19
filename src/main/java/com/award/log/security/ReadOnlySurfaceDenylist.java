@@ -1,5 +1,6 @@
 package com.award.log.security;
 
+import com.award.log.security.effect.ToolOperationPolicy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -14,18 +15,8 @@ import java.util.stream.Collectors;
 @Component
 public class ReadOnlySurfaceDenylist {
 
-    private static final Set<String> BASE = Set.of(
-            "CleanTempTool",
-            "LogCleanupTool",
-            "ServiceRestartTool",
-            "PrivilegeTool",
-            "DiskOpsTool",
-            "LogOpsTool",
-            "ServiceOpsTool",
-            "ContainerOpsTool",
-            "ProcessOpsTool",
-            "RecycleBinTool"
-    );
+    /** 只读会话面直接剔除所有可能写入的工具；混合工具也不能仅靠模型选择 operation。 */
+    private static final Set<String> BASE = ToolOperationPolicy.writeCapableTools();
 
     private final Set<String> denied;
 

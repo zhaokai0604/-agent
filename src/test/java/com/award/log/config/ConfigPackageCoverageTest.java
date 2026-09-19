@@ -76,12 +76,12 @@ class ConfigPackageCoverageTest {
         assertEquals(Boolean.FALSE, dryRun.get("global"));
         assertEquals(Boolean.TRUE, auto.get("enabled"));
         assertEquals("HYBRID", auto.get("run-mode"));
-        assertEquals(Boolean.TRUE, auto.get("allow-above-confirm-max-in-pending"));
-        assertEquals(1, asInt(auto.get("propose-temp-clean-disk-min")));
-        assertEquals(1, asInt(auto.get("disk-temp-clean-min-percent")));
-        assertEquals(60_000, asInt(auto.get("cooldown-ms")));
+        assertEquals(Boolean.FALSE, auto.get("allow-above-confirm-max-in-pending"));
+        assertEquals(80, asInt(auto.get("propose-temp-clean-disk-min")));
+        assertEquals(88, asInt(auto.get("disk-temp-clean-min-percent")));
+        assertEquals(3_600_000, asInt(auto.get("cooldown-ms")));
         assertEquals(Boolean.TRUE, patrol.get("enabled"));
-        assertEquals(1, asInt(patrol.get("disk-warn-percent")));
+        assertEquals(80, asInt(patrol.get("disk-warn-percent")));
         assertTrue(String.valueOf(patrol.get("inspect-roots")).contains("C:/Users/Administrator/AppData/Local/Temp"));
         assertTrue(String.valueOf(patrol.get("inspect-roots")).contains("C:/Windows/Temp"));
         assertTrue(listAt(paths, "windows-clean-roots").contains("C:/Windows/Temp"));

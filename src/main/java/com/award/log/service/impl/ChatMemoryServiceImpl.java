@@ -4,6 +4,7 @@ import com.award.log.service.ChatMemoryService;
 import com.award.log.service.ChatMemoryService.MemoryEntry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +23,8 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
+@Deprecated(since = "delivery-2026-09", forRemoval = false)
+@ConditionalOnProperty(prefix = "app.ai.legacy", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class ChatMemoryServiceImpl implements ChatMemoryService {
 
     private final Map<String, List<MemoryEntry>> sessionMemories = new ConcurrentHashMap<>();

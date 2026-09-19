@@ -67,11 +67,15 @@ public class UnifiedAssistantController {
     @PostMapping("/state/preview")
     public Result<Map<String, Object>> statePreview(@RequestBody Map<String, Object> payload) {
         String rawMessage = String.valueOf(payload.getOrDefault("message", "")).trim();
+        String sessionId = parseSessionId(payload.get("sessionId"));
         List<UnifiedAssistantService.ChatTurn> history = parseHistory(payload.get("history"));
         boolean useToolAgent = parseUseToolAgent(payload.get("useToolAgent"));
         boolean confirmRemediation = parseConfirmRemediation(payload.get("confirmRemediation"));
-        return Result.success(unifiedAssistantService.previewAgentState(
-                rawMessage, history, useToolAgent, confirmRemediation));
+        Map<String, Object> preview = sessionId.isBlank()
+                ? unifiedAssistantService.previewAgentState(rawMessage, history, useToolAgent, confirmRemediation)
+                : unifiedAssistantService.previewAgentState(
+                        rawMessage, history, useToolAgent, confirmRemediation, sessionId);
+        return Result.success(preview);
     }
 
     @Operation(summary = "Unified assistant streaming chat")
@@ -90,6 +94,7 @@ public class UnifiedAssistantController {
         // Keep this aligned with the service limit; otherwise long questions and
         // text attachments are silently truncated at the HTTP boundary.
         final String message = rawMessage.length() > 32000 ? rawMessage.substring(0, 32000) : rawMessage;
+        final String sessionId = parseSessionId(payload.get("sessionId"));
         List<UnifiedAssistantService.ChatTurn> history = parseHistory(payload.get("history"));
         boolean useToolAgent = parseUseToolAgent(payload.get("useToolAgent"));
         boolean confirmRemediation = parseConfirmRemediation(payload.get("confirmRemediation"));
@@ -116,8 +121,8 @@ public class UnifiedAssistantController {
                 }
                 try {
                     Flux<String> stream = modelProfile == null
-                            ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, null, currentRequester())
-                            : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile, currentRequester());
+                            ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, null, currentRequester(), sessionId)
+                            : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile, currentRequester(), sessionId);
                     // Keep the controller tolerant of older test doubles/custom
                     // service proxies that only stub the legacy overload.
                     if (stream == null) {
@@ -164,6 +169,21 @@ public class UnifiedAssistantController {
     private String currentRequester() {
         String requester = httpAuditSubject == null ? null : httpAuditSubject.currentOperatorId();
         return requester == null || requester.isBlank() ? "anonymous" : requester;
+    }
+
+    private static String parseSessionId(Object raw) {
+        if (raw == null) {
+            return "";
+        }
+        String value = String.valueOf(raw).trim();
+        if (value.isBlank()) {
+            return "";
+        }
+        // 会话 ID 只用于链路关联，不接受超长或控制字符，避免污染日志与审计字段。
+        if (value.length() > 128) {
+            value = value.substring(0, 128);
+        }
+        return value.replaceAll("[^A-Za-z0-9._:-]", "_");
     }
 
     /**

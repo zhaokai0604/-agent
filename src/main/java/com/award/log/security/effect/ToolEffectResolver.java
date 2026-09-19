@@ -20,9 +20,7 @@ public class ToolEffectResolver {
         return switch (tool) {
             case "CleanTempTool" -> writePath(EffectAction.DELETE, path, "DELETE_PATH");
             case "DiskOpsTool" -> {
-                String op = firstString(parameters, "operation", "op", "action").toLowerCase(Locale.ROOT);
-                if (op.isBlank() || op.equals("df") || op.equals("hotspots") || op.equals("analyze")
-                        || op.equals("usage") || op.equals("inspect") || op.equals("read")) {
+                if (!ToolOperationPolicy.isWriteOperation(tool, parameters)) {
                     yield ToolEffect.observe(path.isBlank() ? "PATH" : "PATH", path.isBlank() ? "local" : path);
                 }
                 yield writePath(EffectAction.DELETE, path, "DELETE_PATH");
@@ -32,32 +30,44 @@ public class ToolEffectResolver {
                     path,
                     "DELETE_PATH");
             case "LogOpsTool" -> {
-                String op = firstString(parameters, "operation", "op", "action").toLowerCase(Locale.ROOT);
-                if (op.isBlank() || op.equals("analyze") || op.equals("read") || op.equals("scan")) {
+                if (!ToolOperationPolicy.isWriteOperation(tool, parameters)) {
                     yield ToolEffect.observe(path.isBlank() ? "PATH" : "PATH", path.isBlank() ? "local" : path);
                 }
                 yield writePath(
                         looksLikeTruncate(parameters) ? EffectAction.TRUNCATE : EffectAction.DELETE,
                         path,
-                        "DELETE_PATH");
+                    "DELETE_PATH");
             }
-            case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" -> new ToolEffect(
-                    EffectAction.RESTART, "SERVICE", service, 7, true, "RESTART_SERVICE");
-            case "ProcessTool" -> new ToolEffect(
-                    EffectAction.KILL, "PROCESS", pid.isBlank() ? firstString(parameters, "name") : pid,
-                    6, true, "KILL_PROCESS");
-            case "DockerTool" -> new ToolEffect(
-                    EffectAction.KILL, "CONTAINER", firstString(parameters, "containerName", "name"),
-                    6, true, "KILL_PROCESS");
-            case "FirewallTool", "ConfigCheckTool", "ConfigDriftTool" -> new ToolEffect(
-                    EffectAction.MUTATE_CONFIG, "CONFIG", path.isBlank() ? service : path,
-                    5, true, "MUTATE_CONFIG");
+            case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" -> {
+                if (!ToolOperationPolicy.isWriteOperation(tool, parameters)) {
+                    yield ToolEffect.observe("SERVICE", service.isBlank() ? "local" : service);
+                }
+                yield new ToolEffect(EffectAction.RESTART, "SERVICE", service, 7, true, "RESTART_SERVICE");
+            }
+            case "ProcessTool", "ProcessOpsTool" -> {
+                String target = pid.isBlank() ? firstString(parameters, "name") : pid;
+                if (!ToolOperationPolicy.isWriteOperation(tool, parameters)) {
+                    yield ToolEffect.observe("PROCESS", target.isBlank() ? "local" : target);
+                }
+                yield new ToolEffect(EffectAction.KILL, "PROCESS", target,
+                        6, true, "KILL_PROCESS");
+            }
+            case "DockerTool", "ContainerOpsTool" -> {
+                String target = firstString(parameters, "containerName", "name");
+                if (!ToolOperationPolicy.isWriteOperation(tool, parameters)) {
+                    yield ToolEffect.observe("CONTAINER", target.isBlank() ? "local" : target);
+                }
+                yield new ToolEffect(EffectAction.KILL, "CONTAINER", target,
+                        6, true, "KILL_PROCESS");
+            }
+            case "FirewallTool", "ConfigCheckTool", "ConfigDriftTool" -> ToolEffect.observe(
+                    "CONFIG", path.isBlank() ? (service.isBlank() ? "local" : service) : path);
             case "DiskTool", "DiskAnalyzeTool", "SystemLoadTool", "PortHealthTool",
                  "LogAnalysisTool", "SslCertTool", "PrivilegeTool", "K8sTool" ->
                     ToolEffect.observe(path.isBlank() ? "HOST" : "PATH", path.isBlank() ? "local" : path);
             case "RecycleBinTool" -> {
                 String op = firstString(parameters, "operation", "op").toLowerCase(Locale.ROOT);
-                if ("restore".equals(op)) {
+                if (ToolOperationPolicy.isWriteOperation(tool, parameters)) {
                     yield writePath(EffectAction.DELETE, firstString(parameters, "handle", "path"), "DELETE_PATH");
                 }
                 yield ToolEffect.observe("RECYCLE", op.isBlank() ? "list" : op);

@@ -194,6 +194,7 @@ public class McpExecuteController {
         String confirmationId = stringField(request, "confirmationId");
         String capabilityToken = stringField(request, "capabilityToken");
         String confirmToken = stringField(request, "confirmToken");
+        String sessionId = stringField(request, "sessionId");
         if (confirmationId.isBlank()) {
             confirmationId = stringField(request, "traceId");
         }
@@ -203,7 +204,7 @@ public class McpExecuteController {
         if (opsPepProperties.isEnabled()) {
             String requester = currentRequester();
             OpsExecutionPipeline.PipelineResult result = opsExecutionPipeline.executeConfirmed(
-                    confirmationId, capabilityToken, confirmToken, confirmCode, requester);
+                    confirmationId, capabilityToken, confirmToken, confirmCode, requester, sessionId);
             String toolName = result.toolName() == null || result.toolName().isBlank()
                     ? stringField(request, "toolName")
                     : result.toolName();
@@ -216,7 +217,7 @@ public class McpExecuteController {
 
         String requester = currentRequester();
         McpPendingConfirmationService.TakeResult takeResult =
-                mcpPendingConfirmationService.take(confirmationId, requester, capabilityToken);
+                mcpPendingConfirmationService.take(confirmationId, requester, capabilityToken, sessionId);
         if (takeResult.status() != McpPendingConfirmationService.TakeStatus.OK || takeResult.pending() == null) {
             return switch (takeResult.status()) {
                 case REQUESTER_MISMATCH -> errorResponse(
@@ -227,6 +228,12 @@ public class McpExecuteController {
                         403);
                 case TOKEN_MISMATCH -> errorResponse(
                         "能力凭证无效或与效果指纹不匹配，请重新预览确认",
+                        confirmationIdOr(traceId, confirmationId),
+                        startTime,
+                        "",
+                        403);
+                case SESSION_MISMATCH -> errorResponse(
+                        "该待确认请求不属于当前会话，请切回原会话后重试",
                         confirmationIdOr(traceId, confirmationId),
                         startTime,
                         "",
@@ -302,6 +309,9 @@ public class McpExecuteController {
         Map<String, Object> execResponse = mcpExecutionService.execute(
                 toolName, parameters, startTime, traceId, userInstruction, true);
         execResponse.put("traceId", traceId);
+        if (!pending.sessionId().isBlank()) {
+            execResponse.put("sessionId", pending.sessionId());
+        }
         attachEffectMeta(execResponse, effect, effectFingerprint, sessionRiskBudgetService.summary(requester));
         if (Boolean.TRUE.equals(execResponse.get("success"))
                 && !Boolean.TRUE.equals(execResponse.get("writeMismatch"))

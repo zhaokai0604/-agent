@@ -1,6 +1,7 @@
 package com.award.log.mcp;
 
 import com.award.log.config.SystemBootstrapSupport;
+import com.award.log.security.effect.ToolOperationPolicy;
 import com.award.log.util.OsRuntime;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
@@ -76,7 +77,11 @@ public class McpToolCatalog {
                     : type.getSimpleName();
             boolean httpAllowed = ann != null ? ann.httpAllowed() : isHttpAllowedByConvention(toolName);
             double risk = ann != null ? ann.defaultRiskScore() : defaultRiskFor(toolName);
-            boolean readOnly = ann != null ? ann.readOnlyObservation() : isReadOnlyByConvention(toolName);
+            // 只读标记由 operation policy 兜底；混合工具不能靠一个 Bean 级 true
+            // 把 restart/kill/cleanup 伪装成观测工具。
+            boolean readOnly = ToolOperationPolicy.isReadOnlyOnlyTool(toolName)
+                    || (ann != null && ann.readOnlyObservation()
+                    && !ToolOperationPolicy.isWriteCapableTool(toolName));
             if ("FirstMcpTools".equals(toolName)) {
                 httpAllowed = false;
             }
@@ -146,22 +151,11 @@ public class McpToolCatalog {
     }
 
     private static boolean isReadOnlyByConvention(String toolName) {
-        return switch (toolName) {
-            case "DiskTool", "DiskAnalyzeTool", "DiskInsightTool", "ProcessTool", "SystemLoadTool",
-                    "LogAnalysisTool", "NetworkTool", "ConfigCheckTool", "PrivilegeTool", "OsInsightTool",
-                    "PortHealthTool", "DockerTool", "CronJobTool", "FirewallTool", "SslCertTool",
-                    "SystemdTool", "ConfigDriftTool", "K8sTool" -> true;
-            default -> false;
-        };
+        return ToolOperationPolicy.isReadOnlyOnlyTool(toolName);
     }
 
     private static boolean isHttpAllowedWriteTool(String toolName) {
-        return switch (toolName) {
-            case "CleanTempTool", "LogCleanupTool", "ServiceRestartTool", "AutonomousOpsTool",
-                    "DiskOpsTool", "LogOpsTool", "ServiceOpsTool", "ContainerOpsTool", "ProcessOpsTool",
-                    "RecycleBinTool" -> true;
-            default -> false;
-        };
+        return ToolOperationPolicy.isWriteCapableTool(toolName);
     }
 
     private static boolean isHttpAllowedByConvention(String toolName) {
@@ -212,6 +206,11 @@ public class McpToolCatalog {
         return readOnlyObservationToolNames.contains(toolName);
     }
 
+    /** 按工具 + operation 判断本次调用是否只读；混合工具不再使用 Bean 级误判。 */
+    public boolean isReadOnlyObservation(String toolName, Map<String, Object> parameters) {
+        return isRegistered(toolName) && !ToolOperationPolicy.isWriteOperation(toolName, parameters);
+    }
+
     /** 工具基线风险分；未标注时按内置约定回退。 */
     public double defaultRiskScore(String toolName) {
         McpToolDescriptor descriptor = descriptors.get(toolName);
@@ -243,7 +242,9 @@ public class McpToolCatalog {
             row.put("readOnly", descriptor.readOnlyObservation());
             row.put("writeAction", !descriptor.readOnlyObservation());
             row.put("defaultRiskScore", descriptor.resolvedRiskScore(defaultRiskFor(descriptor.toolName())));
-            row.put("operations", operationsFor(descriptor.toolName()));
+            List<String> operations = operationsFor(descriptor.toolName());
+            row.put("operations", operations);
+            row.put("operationPermissions", ToolOperationPolicy.operationPermissions(descriptor.toolName(), operations));
             row.put("supportedPlatforms", supportedPlatformsFor(descriptor.toolName()));
             row.put("confirmStrategy", descriptor.readOnlyObservation() ? "none" : "risk-gated");
             row.put("dependencyChecks", dependencyChecksFor(descriptor.toolName(), OsRuntime.isWindows()));

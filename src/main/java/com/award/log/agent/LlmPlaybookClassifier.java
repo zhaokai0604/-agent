@@ -48,7 +48,8 @@ public class LlmPlaybookClassifier {
             1. 有歧义或置信不足时选 NONE（勿强行归类）。
             2. 同时提 CPU 与磁盘且磁盘是主诉 → DISK_CLEANUP。
             3. 破坏性/恶意改写（删整个系统、格式化、rm -rf /）→ NONE。
-            4. confidence 为 0~1 小数。
+            4. “查看/查询/汇报当前主机状态”是只读状态查询，不属于任何 playbook，必须选 NONE；不要把它升级为 PATROL_AUTOMATION。
+            5. confidence 为 0~1 小数。
 
             JSON schema:
             {"playbook":"DISK_CLEANUP|CPU_PRESSURE|PATROL_AUTOMATION|PATROL_CONTINUATION|NONE","confidence":0.0,"reason":"一句中文"}
@@ -152,9 +153,9 @@ public class LlmPlaybookClassifier {
     private static String buildUserPrompt(String userMessage, String contextHint) {
         StringBuilder sb = new StringBuilder();
         if (contextHint != null && !contextHint.isBlank()) {
-            sb.append("近期对话上下文：\n").append(contextHint.trim()).append("\n\n");
+            sb.append("【历史数据开始】\n").append(contextHint.trim()).append("\n【历史数据结束】\n\n");
         }
-        sb.append("当前用户消息：\n").append(userMessage);
+        sb.append("【当前用户消息开始】\n").append(userMessage).append("\n【当前用户消息结束】");
         return sb.toString();
     }
 

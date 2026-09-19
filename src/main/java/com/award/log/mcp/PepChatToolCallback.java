@@ -65,7 +65,8 @@ final class PepChatToolCallback implements ToolCallback {
                     pipelineToolName, params, userMessage, requester);
             OpsExecutionPipeline.PipelineResult proposed = pipeline.propose(
                     pipelineToolName, params, userMessage, requester,
-                    objectMapper.writeValueAsString(preview.body()));
+                    objectMapper.writeValueAsString(preview.body()),
+                    ctx == null ? "" : ctx.getSessionId());
             com.award.log.security.ChatToolExecutionTracker.recordPendingConfirmation(proposed.body());
             return objectMapper.writeValueAsString(proposed.body());
         } catch (JsonProcessingException e) {

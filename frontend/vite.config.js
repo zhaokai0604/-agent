@@ -68,13 +68,18 @@ export default defineConfig(({ mode }) => {
       }
     },
     server: {
-      port: 3000,
-      strictPort: false,
+      // 本地开发直接通过 http://localhost 访问；80 被占用时应明确报错，
+      // 不要静默切换到 3001/其他端口，避免浏览器地址与实际服务不一致。
+      host: '127.0.0.1',
+      port: 80,
+      strictPort: true,
       proxy: apiProxy
     },
-    // `vite preview` also needs the same proxy when the built UI is tested
-    // locally on 4173; otherwise `/award-log/api/*` hits the static server.
+    // `vite preview` 也使用 80，保证构建产物测试时仍可直接访问 http://localhost。
     preview: {
+      host: '127.0.0.1',
+      port: 80,
+      strictPort: true,
       proxy: apiProxy
     }
   }

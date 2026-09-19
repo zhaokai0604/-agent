@@ -30,7 +30,8 @@ public class McpPendingConfirmationService {
             String userMessage,
             String userInstruction,
             String requester) {
-        return register(confirmationId, toolName, parameters, userMessage, userInstruction, requester, null, "", null);
+        return register(confirmationId, toolName, parameters, userMessage, userInstruction, requester,
+                null, "", null, "", "");
     }
 
     public PendingConfirmation register(
@@ -44,7 +45,7 @@ public class McpPendingConfirmationService {
             String effectFingerprint,
             WriteCapabilityToken capabilityToken) {
         return register(confirmationId, toolName, parameters, userMessage, userInstruction, requester,
-                effect, effectFingerprint, capabilityToken, "");
+                effect, effectFingerprint, capabilityToken, "", "");
     }
 
     public PendingConfirmation register(
@@ -58,6 +59,22 @@ public class McpPendingConfirmationService {
             String effectFingerprint,
             WriteCapabilityToken capabilityToken,
             String dryRunPreviewJson) {
+        return register(confirmationId, toolName, parameters, userMessage, userInstruction, requester,
+                effect, effectFingerprint, capabilityToken, dryRunPreviewJson, "");
+    }
+
+    public PendingConfirmation register(
+            String confirmationId,
+            String toolName,
+            Map<String, Object> parameters,
+            String userMessage,
+            String userInstruction,
+            String requester,
+            ToolEffect effect,
+            String effectFingerprint,
+            WriteCapabilityToken capabilityToken,
+            String dryRunPreviewJson,
+            String sessionId) {
         purgeExpired();
         long now = System.currentTimeMillis();
         long ttl = Math.max(MIN_TTL_MS, confirmationTtlMs);
@@ -80,7 +97,8 @@ public class McpPendingConfirmationService {
                 effect,
                 effectFingerprint == null ? "" : effectFingerprint,
                 token,
-                dryRunPreviewJson == null ? "" : dryRunPreviewJson);
+                dryRunPreviewJson == null ? "" : dryRunPreviewJson,
+                normalizeSessionId(sessionId));
         pending.put(confirmationId, value);
         return value;
     }
@@ -93,6 +111,10 @@ public class McpPendingConfirmationService {
      * @param presentedCapabilityToken 客户端回传的能力凭证；为空时仅校验确认快照归属（兼容旧前端）。
      */
     public TakeResult take(String confirmationId, String requester, String presentedCapabilityToken) {
+        return take(confirmationId, requester, presentedCapabilityToken, "");
+    }
+
+    public TakeResult take(String confirmationId, String requester, String presentedCapabilityToken, String sessionId) {
         if (confirmationId == null || confirmationId.isBlank()) {
             return new TakeResult(null, TakeStatus.NOT_FOUND);
         }
@@ -110,6 +132,13 @@ public class McpPendingConfirmationService {
             }
             if (!existing.requester().equals(normalizedRequester)) {
                 holder.status = TakeStatus.REQUESTER_MISMATCH;
+                return existing;
+            }
+            String normalizedSessionId = normalizeSessionId(sessionId);
+            if (!existing.sessionId().isBlank()
+                    && !normalizedSessionId.isBlank()
+                    && !existing.sessionId().equals(normalizedSessionId)) {
+                holder.status = TakeStatus.SESSION_MISMATCH;
                 return existing;
             }
             if (presentedCapabilityToken != null && !presentedCapabilityToken.isBlank()) {
@@ -158,7 +187,8 @@ public class McpPendingConfirmationService {
         NOT_FOUND,
         EXPIRED,
         REQUESTER_MISMATCH,
-        TOKEN_MISMATCH
+        TOKEN_MISMATCH,
+        SESSION_MISMATCH
     }
 
     public record TakeResult(PendingConfirmation pending, TakeStatus status) {
@@ -176,11 +206,20 @@ public class McpPendingConfirmationService {
             ToolEffect effect,
             String effectFingerprint,
             WriteCapabilityToken capabilityToken,
-            String dryRunPreviewJson) {
+            String dryRunPreviewJson,
+            String sessionId) {
 
         boolean isExpired(long nowMs) {
             return nowMs > expiresAtMs;
         }
+    }
+
+    private static String normalizeSessionId(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return "";
+        }
+        String value = sessionId.trim();
+        return value.length() > 128 ? value.substring(0, 128) : value;
     }
 
     private static final class Holder {

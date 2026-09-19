@@ -199,7 +199,7 @@ public class McpToolDispatcher {
         if (ALWAYS_INVALIDATE.contains(toolName)) {
             return true;
         }
-        if (mcpToolCatalog.isReadOnlyObservation(toolName)) {
+        if (mcpToolCatalog.isReadOnlyObservation(toolName, parameters)) {
             return false;
         }
         if (!WriteToolResultSupport.requestedRealWrite(parameters)) {

@@ -2,6 +2,7 @@ package com.award.log.agent;
 
 import com.award.log.agent.awm.OpsWorkflow;
 import com.award.log.agent.awm.OpsWorkflowStep;
+import com.award.log.security.effect.ToolOperationPolicy;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -16,24 +17,8 @@ import java.util.Set;
  */
 public final class AgentSkillPlan {
 
-    private static final Set<String> WRITE_TOOLS = Set.of(
-            "CleanTempTool",
-            "LogCleanupTool",
-            "ServiceRestartTool",
-            "DockerTool",
-            "DiskOpsTool",
-            "LogOpsTool",
-            "ServiceOpsTool",
-            "ContainerOpsTool",
-            "ProcessOpsTool",
-            "SystemdTool",
-            "AutonomousOpsTool",
-            "FirewallTool",
-            "PrivilegeTool"
-    );
-
     public static Set<String> WRITE_TOOLS_VIEW() {
-        return WRITE_TOOLS;
+        return ToolOperationPolicy.writeCapableTools();
     }
 
     private AgentSkillPlan() {
@@ -61,9 +46,6 @@ public final class AgentSkillPlan {
                 || normalized.contains("综合检查")
                 || normalized.contains("系统体检")
                 || normalized.contains("健康检查")
-                || normalized.contains("系统状态")
-                || normalized.contains("主机状态")
-                || normalized.contains("运行状态")
                 || normalized.contains("检查系统")
                 || normalized.contains("排查系统")
                 || normalized.contains("诊断系统")
@@ -73,6 +55,12 @@ public final class AgentSkillPlan {
 
     /** 编排路径的默认工具序（感知 + 对应写工具预览）。 */
     public static List<String> forOrchestrate(String userMessage) {
+        String normalized = normalize(userMessage);
+        // 状态/指标查询只挂载观测工具，绝不能因为默认兜底而追加清理工具。
+        if (AssistantIntentSignals.isHostStatusQuery(normalized)
+                || AssistantIntentSignals.isMetricsQuery(normalized)) {
+            return List.of("SystemLoadTool", "DiskTool", "ProcessTool", "PortHealthTool");
+        }
         String domain = guessDomain(userMessage);
         LinkedHashSet<String> tools = new LinkedHashSet<>();
         if ("cpu".equals(domain)) {
@@ -90,10 +78,12 @@ public final class AgentSkillPlan {
             tools.add("DiskTool");
             tools.add("DiskAnalyzeTool");
             String u = normalize(userMessage);
-            if (u.contains("临时") || u.contains("清理") || u.contains("满") || u.contains("空间")) {
+            boolean explicitTempCleanup = mentionsTempCleanup(u);
+            boolean explicitLogCleanup = mentionsLogCleanup(u);
+            if (explicitTempCleanup || (!explicitLogCleanup && (u.contains("满") || u.contains("空间")))) {
                 tools.add("CleanTempTool");
             }
-            if (u.contains("日志") || u.contains("journal") || u.contains("满") || u.contains("空间")) {
+            if (explicitLogCleanup || (!explicitTempCleanup && (u.contains("满") || u.contains("空间")))) {
                 tools.add("LogCleanupTool");
             }
             if (tools.size() <= 2) {
@@ -108,6 +98,13 @@ public final class AgentSkillPlan {
     public static List<String> forToolAgent(String userMessage) {
         LinkedHashSet<String> tools = new LinkedHashSet<>(forOrchestrate(userMessage));
         String u = normalize(userMessage);
+        // A read-only status/metrics request may contain words such as
+        // “服务” or “重启” in its description. Do not let keyword enrichment
+        // turn that description into a write-capable tool plan.
+        if (AssistantIntentSignals.isHostStatusQuery(u)
+                || AssistantIntentSignals.isMetricsQuery(u)) {
+            return List.copyOf(tools);
+        }
         if (u.contains("端口") || u.contains("监听") || u.contains("连通")) {
             tools.add("PortHealthTool");
         }
@@ -135,11 +132,33 @@ public final class AgentSkillPlan {
         String seed = planningSeed(userMessage, conversationContext);
         List<String> base = orchestrate ? forOrchestrate(seed) : forToolAgent(seed);
         List<String> merged = new ArrayList<>(preferAwm(base, awm));
+        // A broad historical workflow may contain both cleanup tools. For an
+        // explicit scene, keep the plan focused so the Agent does not present
+        // an unrelated write action to the user.
+        String normalizedSeed = normalize(seed);
+        if (mentionsLogCleanup(normalizedSeed) && !mentionsTempCleanup(normalizedSeed)) {
+            merged.remove("CleanTempTool");
+        } else if (mentionsTempCleanup(normalizedSeed) && !mentionsLogCleanup(normalizedSeed)) {
+            merged.remove("LogCleanupTool");
+        }
         if (!OpsAnalysisSkillCatalog.suggestSkillIds(seed).isEmpty()) {
             merged.remove("OpsAnalysisSkillTool");
             merged.add(0, "OpsAnalysisSkillTool");
         }
         return merged;
+    }
+
+    private static boolean mentionsTempCleanup(String normalized) {
+        return normalized.contains("临时")
+                || normalized.contains("缓存")
+                || normalized.contains("垃圾")
+                || normalized.contains("temp");
+    }
+
+    private static boolean mentionsLogCleanup(String normalized) {
+        return normalized.contains("日志")
+                || normalized.contains("journal")
+                || normalized.contains("log");
     }
 
     /** 短确认话术改用对话上下文作规划种子，避免丢掉磁盘/CPU 场景。 */
@@ -160,7 +179,7 @@ public final class AgentSkillPlan {
         if (t.length() > 48) {
             return false;
         }
-        return AssistantIntentSignals.CONFIRM_WRITE.matcher(t).find();
+        return AssistantIntentSignals.isExplicitWriteConfirmation(t);
     }
 
     public static boolean hasWriteTools(List<String> plannedTools) {
@@ -168,7 +187,7 @@ public final class AgentSkillPlan {
             return false;
         }
         for (String tool : plannedTools) {
-            if (tool != null && WRITE_TOOLS.contains(tool.trim())) {
+            if (tool != null && ToolOperationPolicy.isPlannedWriteTool(tool.trim())) {
                 return true;
             }
         }
@@ -274,7 +293,7 @@ public final class AgentSkillPlan {
         }
         List<String> out = new ArrayList<>();
         for (String tool : plannedTools) {
-            if (tool != null && !WRITE_TOOLS.contains(tool.trim())) {
+            if (tool != null && !ToolOperationPolicy.isPlannedWriteTool(tool.trim())) {
                 out.add(tool.trim());
             }
         }
@@ -287,7 +306,7 @@ public final class AgentSkillPlan {
         }
         List<String> out = new ArrayList<>();
         for (String tool : plannedTools) {
-            if (tool != null && WRITE_TOOLS.contains(tool.trim())) {
+            if (tool != null && ToolOperationPolicy.isPlannedWriteTool(tool.trim())) {
                 out.add(tool.trim());
             }
         }

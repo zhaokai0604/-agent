@@ -59,6 +59,9 @@ public enum AssistantIntentCategory {
     /** 查一下 CPU/内存（只读指标） */
     METRICS_QUERY,
 
+    /** 查看本机/主机当前状态（只读，不自动巡检或处置） */
+    HOST_STATUS_QUERY,
+
     /** 磁盘满、CPU 高等具体运维问题 */
     OPS_DIAGNOSIS,
 

@@ -20,8 +20,10 @@ const RE_CAPABILITY = /^(你是谁|你叫什么|你能做什么|你能干嘛|你
 const RE_PUNCT_ONLY = /^[?？!！。…~～.]+$/
 const RE_CANCEL = /^(取消|不要了|算了|停止|别做了|不用了|先不|暂停)[\s!！?？。,，~～…]*$|不要执行|别执行|停止生成/i
 // 「帮我清理」仅表达意图，不算确认；须命中下列明确写意图词才为 CONFIRM_WRITE
-const RE_CONFIRM_WRITE = /确认执行|执行修复|按预览执行|开始清理|执行删除|真实删除|立即执行|执行处置|删掉|删了|直接删除|立即删除|马上删除|确认删除|真实重启|立即重启|执行清理|立即清理|直接清理|马上删/i
-const RE_PREVIEW_ONLY = /仅预览|只预览|不要删|不要删除|别删|先看看|预览一下|不要执行|dry-?run|演练|模拟/i
+const RE_CONFIRM_WRITE = /确认执行|执行修复|按预览执行|开始清理|执行删除|真实删除|立即执行|执行处置|直接删除|立即删除|马上删除|确认删除|真实重启|立即重启|执行清理|立即清理|直接清理|马上删/i
+const RE_PREVIEW_ONLY = /仅预览|只预览|不要删|不要删除|别删|先看看.*(清理|删除|重启|处置|方案)|预览一下|不要执行|dry-?run|演练|模拟/i
+const RE_HOST_STATUS = /(帮我|请|麻烦)?\s*(看|看看|查看|查询|了解|获取|告诉我|汇报).*?(主机|本机|服务器|电脑|系统|机器).*?(状态|运行状态|健康状态|情况|状况|怎么样|如何|是否正常|正不正常)/i
+const RE_DIRECT_WRITE_ACTION = /(帮我|请|直接|立即|马上|开始|执行|确认|然后|并且|并|再)\s*(清理|删除|重启|停止|终止|杀掉|修改|启用|禁用|修复|处置)/i
 const RE_USAGE_HELP = /怎么用|如何使用|怎么开始|从哪里开始|使用说明|操作步骤|帮助文档|新手引导|入门/
 const RE_FOLLOW_UP = /刚才|之前|上面|上一个|那条|这个|那个|接着|然后呢|还有呢|继续说说|再详细|展开说/
 const RE_EXPLAIN = /[？?]|为什么|怎么回事|什么原因|怎么(会|回事)|如何理解|含义|说明一下|是什么意思|是否|能否|有没有/
@@ -53,7 +55,8 @@ export function isCancelIntent(text) {
 }
 
 export function isConfirmWriteIntent(text) {
-  return RE_CONFIRM_WRITE.test((text || '').trim())
+  const t = (text || '').trim()
+  return !isCancelIntent(t) && !userDeclinesTools(t) && !isPreviewOnlyIntent(t) && RE_CONFIRM_WRITE.test(t)
 }
 
 export function isPreviewOnlyIntent(text) {
@@ -62,7 +65,7 @@ export function isPreviewOnlyIntent(text) {
 
 export function isMetricsQueryIntent(text) {
   const t = (text || '').trim()
-  return RE_METRICS_QUERY.test(t) && !RE_CONFIRM_WRITE.test(t)
+  return RE_METRICS_QUERY.test(t) && !isConfirmWriteIntent(t)
 }
 
 /** 运维管家 / 本机管理 — 与后端 isComputerManagementIntent 对齐 */
@@ -70,6 +73,7 @@ export function isComputerManagementIntent(text, priorMessages = []) {
   const t = (text || '').trim()
   if (!t || userDeclinesTools(t)) return false
   if (isGreetingOrChitchat(t)) return false
+  if (RE_HOST_STATUS.test(t) && !RE_DIRECT_WRITE_ACTION.test(t)) return false
   if (RE_COMPUTER_MANAGE.test(t)) return true
   if (RE_OPS_KEYWORDS.test(t)) {
     if (isMetricsQueryIntent(t) && !/清理|删除|扫描|满了|空间不够|照片|图片|文件/.test(t)) return false
@@ -101,14 +105,15 @@ export function isConversationIntent(text, hasHistory = false) {
 /** 一句话自主运维 / 全面检查 */
 export function isOpsMissionIntent(text) {
   const t = (text || '').trim()
-  if (!t || userDeclinesTools(t)) return false
+  if (!t || userDeclinesTools(t) || isCancelIntent(t) || isPreviewOnlyIntent(t)
+    || (RE_HOST_STATUS.test(t) && !RE_DIRECT_WRITE_ACTION.test(t))) return false
   return RE_PATROL.test(t) || RE_PATROL_CONTINUE.test(t)
 }
 
 /** 续办 / 直接扫描 — 与后端 isOpsProceed 对齐 */
 export function isOpsProceedIntent(text, priorMessages = []) {
   const t = (text || '').trim()
-  if (!t || userDeclinesTools(t)) return false
+  if (!t || userDeclinesTools(t) || isCancelIntent(t) || isPreviewOnlyIntent(t) || isConfirmWriteIntent(t)) return false
   if (RE_OPS_PROCEED.test(t)) {
     if (t.length <= 24) {
       return RE_OPS_CONTEXT.test(t) || recentMessagesHaveOpsContext(priorMessages)
@@ -151,22 +156,23 @@ export function shouldUseNaturalLanguageAssistant(text, hasHistory = false) {
 export function inferIntentCategory(text, hasHistory = false) {
   const t = (text || '').trim()
   if (!t) return 'EMPTY'
-  if (userConfirmedRemediation(t)) return 'CONFIRM_WRITE'
   if (isCancelIntent(t)) return 'CANCEL'
   if (userDeclinesTools(t)) return 'DECLINE_TOOLS'
+  if (isPreviewOnlyIntent(t)) return 'PREVIEW_ONLY'
+  if (userConfirmedRemediation(t)) return 'CONFIRM_WRITE'
   if (RE_GREETING.test(t)) return 'GREETING'
   if (RE_FAREWELL.test(t)) return 'FAREWELL'
   if (RE_GRATITUDE.test(t)) return 'GRATITUDE'
   if (RE_ACK.test(t)) return 'ACKNOWLEDGMENT'
   if (RE_CAPABILITY.test(t)) return 'CAPABILITY_INQUIRY'
   if (RE_USAGE_HELP.test(t)) return 'USAGE_HELP'
+  if (RE_HOST_STATUS.test(t) && !RE_DIRECT_WRITE_ACTION.test(t)) return 'HOST_STATUS_QUERY'
   if (RE_PUNCT_ONLY.test(t)) return hasHistory ? 'CLARIFICATION' : 'CLARIFICATION'
   if (RE_CORRECTION.test(t)) return 'CORRECTION'
   if (RE_FOLLOW_UP.test(t)) return 'FOLLOW_UP'
   if (RE_EXPLAIN.test(t)) return 'EXPLANATION'
   if (RE_SUMMARIZE.test(t)) return 'SUMMARIZATION'
   if (RE_COMPARE.test(t)) return 'COMPARISON'
-  if (isPreviewOnlyIntent(t)) return 'PREVIEW_ONLY'
   if (isMetricsQueryIntent(t)) return 'METRICS_QUERY'
   if (isOpsMissionIntent(t)) return 'PATROL_ORCHESTRATE'
   if (RE_OPS_KEYWORDS.test(t)) return 'OPS_DIAGNOSIS'

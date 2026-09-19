@@ -38,8 +38,16 @@ public final class OpsSecurityContext {
     public static void openChatAgent(String traceId, String userMessage, McpToolSurface toolSurface,
                                      boolean userConfirmedWrite, boolean openToolPermissions,
                                      String requester) {
+        openChatAgent(traceId, userMessage, toolSurface, userConfirmedWrite,
+                openToolPermissions, requester, "");
+    }
+
+    public static void openChatAgent(String traceId, String userMessage, McpToolSurface toolSurface,
+                                     boolean userConfirmedWrite, boolean openToolPermissions,
+                                     String requester, String sessionId) {
         boolean effectiveWrite = userConfirmedWrite || openToolPermissions;
-        open(traceId, userMessage, false, toolSurface, true, effectiveWrite, openToolPermissions, requester);
+        open(traceId, userMessage, false, toolSurface, true, effectiveWrite,
+                openToolPermissions, requester, sessionId);
     }
 
     public static void open(String traceId, String userMessage, boolean skipPerToolCheck,
@@ -57,6 +65,13 @@ public final class OpsSecurityContext {
     public static void open(String traceId, String userMessage, boolean skipPerToolCheck,
                             McpToolSurface toolSurface, boolean chatAgentPath, boolean userConfirmedWrite,
                             boolean openToolPermissions, String requester) {
+        open(traceId, userMessage, skipPerToolCheck, toolSurface, chatAgentPath,
+                userConfirmedWrite, openToolPermissions, requester, "");
+    }
+
+    public static void open(String traceId, String userMessage, boolean skipPerToolCheck,
+                            McpToolSurface toolSurface, boolean chatAgentPath, boolean userConfirmedWrite,
+                            boolean openToolPermissions, String requester, String sessionId) {
         HOLDER.set(Ctx.builder()
                 .traceId(traceId)
                 .userMessage(userMessage)
@@ -66,6 +81,7 @@ public final class OpsSecurityContext {
                 .userConfirmedWrite(userConfirmedWrite || openToolPermissions)
                 .openToolPermissions(openToolPermissions)
                 .requester(requester)
+                .sessionId(sessionId == null ? "" : sessionId)
                 .build());
     }
 
@@ -97,5 +113,8 @@ public final class OpsSecurityContext {
         private boolean openToolPermissions = false;
         @Builder.Default
         private String requester = "anonymous";
+        /** 前端 Agent 会话标识，用于把预览、确认和审计链路绑定到同一会话。 */
+        @Builder.Default
+        private String sessionId = "";
     }
 }

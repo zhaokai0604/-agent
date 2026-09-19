@@ -42,6 +42,7 @@ import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -236,6 +237,41 @@ class AutonomousOpsOrchestratorDeepTest {
                 orchestrator, "buildAwmVariables", "service", "restart cache", false, noFailedPerception);
         assertFalse(noneVars.containsKey("service-name"));
         assertEquals(Boolean.TRUE, noneVars.get("dryRun"));
+    }
+
+    @Test
+    void perceptionSnapshotParsesRawSignalsAndRendersSummary() throws Exception {
+        Class<?> type = Class.forName("com.award.log.agent.AutonomousOpsOrchestrator$PerceptionSnapshot");
+        var fromRaw = type.getDeclaredMethod("fromRaw", Map.class, ObjectMapper.class, boolean.class);
+        fromRaw.setAccessible(true);
+        Map<String, String> raw = new LinkedHashMap<>();
+        raw.put("disk", "{\"data\":\"[{\\\"usage\\\":\\\"92%\\\"}]\"}");
+        raw.put("load", "{\"data\":\"{\\\"cpuUsagePercent\\\":91,\\\"memUsagePercent\\\":89}\"}");
+        raw.put("systemdFailed", "{\"success\":true,\"data\":{\"output\":\"nginx.service loaded failed failed\"}}");
+        raw.put("network", "{\"data\":{\"packetLossPercent\":4}}");
+        raw.put("port_8080", "{\"data\":\"{\\\"reachable\\\":false}\"}");
+        raw.put("journal", "ERROR while starting service");
+        raw.put("docker", "container restarting");
+        raw.put("process", "pid 7 zombie");
+
+        Object snapshot = fromRaw.invoke(null, raw, new ObjectMapper(), false);
+        assertEquals(92.0, ReflectionTestUtils.invokeMethod(snapshot, "maxDiskUsePercent"));
+        assertEquals(91.0, ReflectionTestUtils.invokeMethod(snapshot, "cpuUsagePercent"));
+        assertEquals(89.0, ReflectionTestUtils.invokeMethod(snapshot, "memUsagePercent"));
+        assertTrue((Boolean) ReflectionTestUtils.invokeMethod(snapshot, "hasFailedUnits"));
+        assertEquals(List.of("nginx"), ReflectionTestUtils.invokeMethod(snapshot, "failedUnitNames"));
+        assertEquals(List.of(8080), ReflectionTestUtils.invokeMethod(snapshot, "unreachablePorts"));
+        assertEquals(4.0, ReflectionTestUtils.invokeMethod(snapshot, "networkPacketLossPercent"));
+        assertTrue((Boolean) ReflectionTestUtils.invokeMethod(snapshot, "logAnomalyHint"));
+        assertTrue((Boolean) ReflectionTestUtils.invokeMethod(snapshot, "dockerIssueHint"));
+        assertTrue((Boolean) ReflectionTestUtils.invokeMethod(snapshot, "zombieProcessHint"));
+        assertTrue(((Map<?, ?>) ReflectionTestUtils.invokeMethod(snapshot, "toMap")).containsKey("toolsInvoked"));
+        assertTrue(((String) ReflectionTestUtils.invokeMethod(snapshot, "toMarkdownSummary")).contains("CPU"));
+
+        Map<String, String> malformed = new LinkedHashMap<>();
+        malformed.put("disk", "not-json");
+        Object defaults = fromRaw.invoke(null, malformed, new ObjectMapper(), true);
+        assertEquals(0.0, ReflectionTestUtils.invokeMethod(defaults, "maxDiskUsePercent"));
     }
 
     @Test

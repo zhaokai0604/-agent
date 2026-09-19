@@ -1,6 +1,7 @@
 package com.award.log.agent;
 
 import com.award.log.security.McpToolSurface;
+import com.award.log.security.effect.ToolOperationPolicy;
 
 import java.util.Locale;
 import java.util.Set;
@@ -14,13 +15,7 @@ public final class AgentToolPhase {
      * 诊断阶段额外剔除的 Bean（含混合读写 Bean，避免模型在未确认时调用写方法）。
      * 与 {@link com.award.log.security.ReadOnlySurfaceDenylist} 叠加。
      */
-    private static final Set<String> DIAGNOSE_EXTRA_DENIED = Set.of(
-            "DockerTool",
-            "SystemdTool",
-            "AutonomousOpsTool",
-            "FirewallTool",
-            "PrivilegeTool"
-    );
+    private static final Set<String> DIAGNOSE_EXTRA_DENIED = Set.of("AutonomousOpsTool");
 
     private AgentToolPhase() {
     }
@@ -42,7 +37,9 @@ public final class AgentToolPhase {
         if (beanSimpleName == null || beanSimpleName.isBlank()) {
             return false;
         }
-        return DIAGNOSE_EXTRA_DENIED.contains(beanSimpleName.trim());
+        String normalized = beanSimpleName.trim();
+        return DIAGNOSE_EXTRA_DENIED.contains(normalized)
+                || ToolOperationPolicy.isWriteCapableTool(normalized);
     }
 
     public static boolean writeToolsMounted(boolean allowWrite, McpToolSurface effective) {

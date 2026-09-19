@@ -44,8 +44,14 @@ class OpsIntentRouterTest {
         assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("检查一下本机环境是否正常"));
         assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("帮我检查电脑"));
         assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("电脑体检一下"));
-        assertEquals(OpsIntentRouter.Playbook.PATROL_AUTOMATION, router.resolve("看看电脑状态是否正常"));
+        assertEquals(OpsIntentRouter.Playbook.NONE, router.resolve("看看电脑状态是否正常"));
         assertTrue(router.shouldOrchestrate("健康检查"));
+    }
+
+    @Test
+    void hostStatusQueryDoesNotEnterPlaybookOrLlmFallback() {
+        assertEquals(OpsIntentRouter.Playbook.NONE, router.resolve("帮我看看目前主机的状态"));
+        assertEquals(OpsIntentRouter.Playbook.NONE, router.resolveByRules("查看当前服务器运行情况"));
     }
 
     @Test
@@ -100,6 +106,13 @@ class OpsIntentRouterTest {
     void forceRemediateFalseWhenPreviewOnly() {
         assertFalse(router.forceRemediate("仅预览清理临时文件"));
         assertFalse(router.forceRemediate("帮我看看磁盘怎么样"));
+    }
+
+    @Test
+    void negativeWritePhrasesCannotEscalateToRealWrite() {
+        assertFalse(router.forceRemediate("不要执行删除"));
+        assertFalse(router.forceRemediate("别执行重启"));
+        assertFalse(router.forceRemediate("不要删除 C:\\Temp\\demo"));
     }
 
     @Test

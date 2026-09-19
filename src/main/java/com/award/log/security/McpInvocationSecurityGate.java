@@ -4,6 +4,7 @@ import com.award.log.governance.GovernanceAdmissionVerdict;
 import com.award.log.governance.OpsGovernanceService;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.mcp.WriteToolResultSupport;
+import com.award.log.security.effect.ToolOperationPolicy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -197,16 +198,11 @@ public class McpInvocationSecurityGate {
             }
         }
 
-        // 写工具预览：显式 dryRun=true 不因评分/中等意图强制确认。
-        // 服务重启缺省视为真实写（除非显式 dryRun=true），避免 LLM 省略 dryRun 旁路确认。
-        boolean explicitDryRun = Boolean.TRUE.equals(coerceBoolParam(parameters, "dryRun"));
-        boolean previewOnlyWrite;
-        if (isServiceRestartToolName(toolName)) {
-            previewOnlyWrite = explicitDryRun;
-        } else {
-            previewOnlyWrite = isWriteToolName(toolName)
-                    && !WriteToolResultSupport.requestedRealWrite(parameters);
-        }
+        // 写工具预览：权限先按 tool + operation 判断，不能把混合工具整个 Bean
+        // 当成写工具，也不能把混合工具整个 Bean 当成只读工具。
+        boolean writeOperation = ToolOperationPolicy.isWriteOperation(toolName, parameters);
+        boolean previewOnlyWrite = writeOperation
+                && !WriteToolResultSupport.requestedRealWrite(parameters);
         boolean needByScore = !previewOnlyWrite
                 && (profile == McpSecurityProfile.INITIAL_REQUEST
                 || profile == McpSecurityProfile.CHAT_AGENT_TOOL)
@@ -316,48 +312,6 @@ public class McpInvocationSecurityGate {
         }
         Map<String, Object> params = parameters != null ? parameters : Map.of();
         return evaluate(toolBeanName, params, instr, userMsg, McpSecurityProfile.CHAT_AGENT_TOOL);
-    }
-
-    private static boolean isServiceRestartToolName(String toolName) {
-        if (toolName == null || toolName.isBlank()) {
-            return false;
-        }
-        return switch (toolName.trim()) {
-            case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" -> true;
-            default -> false;
-        };
-    }
-
-    private static boolean isWriteToolName(String toolName) {
-        if (toolName == null || toolName.isBlank()) {
-            return false;
-        }
-        return switch (toolName.trim()) {
-            case "CleanTempTool", "LogCleanupTool", "ServiceRestartTool",
-                 "DiskOpsTool", "LogOpsTool", "ServiceOpsTool", "SystemdTool" -> true;
-            default -> false;
-        };
-    }
-
-    private static Boolean coerceBoolParam(Map<String, Object> parameters, String key) {
-        if (parameters == null || key == null) {
-            return null;
-        }
-        Object v = parameters.get(key);
-        if (v == null) {
-            return null;
-        }
-        if (v instanceof Boolean b) {
-            return b;
-        }
-        String s = String.valueOf(v).trim().toLowerCase(Locale.ROOT);
-        if ("true".equals(s) || "1".equals(s) || "yes".equals(s)) {
-            return true;
-        }
-        if ("false".equals(s) || "0".equals(s) || "no".equals(s)) {
-            return false;
-        }
-        return null;
     }
 
     private static String mergeRiskUtterance(String userUtterance, String instruction) {

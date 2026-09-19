@@ -1,6 +1,7 @@
 package com.award.log.service.impl;
 
 import com.award.log.agent.OpsReportFormat;
+import com.award.log.agent.OpsAnalysisSkillCatalog;
 import com.award.log.agent.awm.FailureInsightService;
 import com.award.log.security.IntentRiskFilter;
 import com.award.log.security.McpInvocationSecurityGate;
@@ -17,6 +18,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -39,6 +41,8 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Service
+@Deprecated(since = "delivery-2026-09", forRemoval = false)
+@ConditionalOnProperty(prefix = "app.ai.legacy", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class ChatAnalysisServiceImpl implements ChatAnalysisService {
 
     @Autowired
@@ -291,14 +295,14 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
 
         String userPrompt;
         if (analysisContext != null && !analysisContext.isEmpty()) {
-            userPrompt = "用户问题：「" + userMessage + "」" + memoryContext + "\n\n" +
-                        "工具执行结果：\n" + analysisContext + "\n\n" +
-                        "请基于上述工具执行结果和专业背景知识，用专业但友好的语气回答用户的问题。\n" +
+            userPrompt = "【当前用户问题开始】\n" + userMessage + "\n【当前用户问题结束】" + memoryContext + "\n\n" +
+                        "【工具结果开始】\n" + analysisContext + "\n【工具结果结束】\n\n" +
+                        "请基于上述工具结果和已明确证据，用专业但友好的语气回答；专业知识只能用于解释，不能填补缺失事实。\n" +
                         "如果工具结果中包含日志详情，请引用关键信息并给出分析。\n" +
                         "严格遵循系统提示中的 Markdown 输出格式规范.";
         } else {
-            userPrompt = "用户问题：「" + userMessage + "」" + memoryContext + "\n\n" +
-                        "请根据你的专业知识，帮助用户解答问题。\n" +
+            userPrompt = "【当前用户问题开始】\n" + userMessage + "\n【当前用户问题结束】" + memoryContext + "\n\n" +
+                        "请先区分已知事实与待补充信息，再帮助用户解答；不要把缺失数据写成已验证结果。\n" +
                         "严格遵循系统提示中的 Markdown 输出格式规范.";
         }
 
@@ -349,6 +353,7 @@ public class ChatAnalysisServiceImpl implements ChatAnalysisService {
 
     private String buildEnhancedSystemPrompt() {
         StringBuilder prompt = new StringBuilder();
+        prompt.append(OpsAnalysisSkillCatalog.commonSkillPromptContract()).append("\n");
         prompt.append("## 角色定义\n");
         prompt.append("你是 **日志情报分析官（Log Intelligence Analyst）**，任职于企业 SOC/NOC 与 SRE 的交叉职能：熟练 syslog、结构化日志、分布式链路语义；能将原始日志事件映射到 **服务等级目标（SLO）** 与 **错误预算（Error Budget）** 语境。\n\n");
 

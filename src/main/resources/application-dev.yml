@@ -30,18 +30,19 @@ ops:
     enabled: true
     run-mode: HYBRID
     risk-patrol-auto-max: 6.0
-    allow-above-confirm-max-in-pending: true
-    propose-temp-clean-disk-min: 1
-    propose-log-clean-disk-min: 1
-    disk-temp-clean-min-percent: 1
-    disk-log-clean-min-percent: 1
-    cooldown-ms: 60000
+    allow-above-confirm-max-in-pending: false
+    # 开发环境也使用接近生产的阈值，避免轻微波动生成清理/重启计划
+    propose-temp-clean-disk-min: 80
+    propose-log-clean-disk-min: 85
+    disk-temp-clean-min-percent: 88
+    disk-log-clean-min-percent: 93
+    cooldown-ms: 3600000
     on-log-anomaly-propose-log-clean: true
     on-alarm-severity-propose-log-clean: true
   patrol:
     enabled: true
-    disk-warn-percent: 1
-    cpu-warn-percent: 1
+    disk-warn-percent: 80
+    cpu-warn-percent: 85
     inspect-roots: ${OPS_PATROL_INSPECT_ROOTS:C:/Users/Administrator/AppData/Local/Temp,C:/Windows/Temp}
 
 # 本地 Windows / 无 sudo 用户时可改为 false，避免 sudo -u 失败
@@ -77,8 +78,8 @@ agent:
       enabled: true
   autonomous:
     enabled: true
-    disk-pressure-percent: 1
-    cpu-warn-percent: 1
+    disk-pressure-percent: 80
+    cpu-warn-percent: 85
   min-privilege:
     enabled: false
 

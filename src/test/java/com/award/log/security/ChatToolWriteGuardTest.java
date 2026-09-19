@@ -20,9 +20,9 @@ class ChatToolWriteGuardTest {
     void forceRemediateRequestsMutation() {
         Map<String, Object> params = new HashMap<>();
         params.put("forceRemediate", true);
-        assertTrue(ChatToolWriteGuard.requestsRealMutation("DiskTool", params));
+        assertTrue(ChatToolWriteGuard.requestsRealMutation("CleanTempTool", params));
         params.put("forceRemediate", "yes");
-        assertTrue(ChatToolWriteGuard.requestsRealMutation("DiskTool", params));
+        assertTrue(ChatToolWriteGuard.requestsRealMutation("CleanTempTool", params));
     }
 
     @Test
@@ -48,8 +48,9 @@ class ChatToolWriteGuardTest {
 
     @Test
     void readOnlyParametersAreSafe() {
-        assertFalse(ChatToolWriteGuard.requestsRealMutation("t", Map.of("dryRun", true)));
-        assertFalse(ChatToolWriteGuard.requestsRealMutation("t", Map.of("operation", "status")));
+        assertFalse(ChatToolWriteGuard.requestsRealMutation("DiskTool", Map.of("dryRun", true)));
+        assertFalse(ChatToolWriteGuard.requestsRealMutation("ServiceOpsTool", Map.of("operation", "status")));
+        assertFalse(ChatToolWriteGuard.requestsRealMutation("DiskTool", Map.of("operation", "status")));
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.award.log.service.impl;
 
 import com.award.log.agent.AssistantIntentCategory;
 import com.award.log.agent.AssistantIntentSignals;
+import com.award.log.agent.AssistantPermission;
 import com.award.log.agent.AssistantReplyMode;
 import com.award.log.agent.AssistantReplyPlanner;
 import com.award.log.agent.AssistantReplyPrompts;
@@ -340,7 +341,7 @@ public class UnifiedAssistantService {
                                    boolean confirmRemediation,
                                    String requestedModelProfile) {
         return chatStream(userMessage, history, useToolAgent, confirmRemediation,
-                requestedModelProfile, "anonymous");
+                requestedModelProfile, "anonymous", "");
     }
 
     public Flux<String> chatStream(String userMessage,
@@ -349,6 +350,17 @@ public class UnifiedAssistantService {
                                    boolean confirmRemediation,
                                    String requestedModelProfile,
                                    String requester) {
+        return chatStream(userMessage, history, useToolAgent, confirmRemediation,
+                requestedModelProfile, requester, "");
+    }
+
+    public Flux<String> chatStream(String userMessage,
+                                   List<ChatTurn> history,
+                                   boolean useToolAgent,
+                                   boolean confirmRemediation,
+                                   String requestedModelProfile,
+                                   String requester,
+                                   String sessionId) {
         String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
                 userMessage == null ? "" : userMessage.trim(), 32_000);
         if (safe.isBlank()) {
@@ -361,7 +373,8 @@ public class UnifiedAssistantService {
         log.info("assistant route mode={} category={} toolAgent={} confirmWrite={} msgLen={}",
                 plan.mode(), plan.category(), plan.useToolAgentPath(), confirmRemediation, safe.length());
         if (plan.useToolAgentPath()) {
-            return chatStreamWithToolAgent(safe, history, confirmRemediation, plan, requestedModelProfile, requester);
+            return chatStreamWithToolAgent(safe, history, confirmRemediation, plan,
+                    requestedModelProfile, requester, sessionId);
         }
         return chatStreamPlain(safe, history, plan, requestedModelProfile);
     }
@@ -373,6 +386,14 @@ public class UnifiedAssistantService {
                                                  List<ChatTurn> history,
                                                  boolean useToolAgent,
                                                  boolean confirmRemediation) {
+        return previewAgentState(userMessage, history, useToolAgent, confirmRemediation, "");
+    }
+
+    public Map<String, Object> previewAgentState(String userMessage,
+                                                 List<ChatTurn> history,
+                                                 boolean useToolAgent,
+                                                 boolean confirmRemediation,
+                                                 String sessionId) {
         String safe = McpInvocationSecurityGate.enforceChatMessageLimit(
                 userMessage == null ? "" : userMessage.trim(), 32_000);
         history = trimHistory(history);
@@ -388,8 +409,11 @@ public class UnifiedAssistantService {
 
         Map<String, Object> preview = new LinkedHashMap<>();
         preview.put("message", safe);
+        preview.put("sessionId", sessionId == null ? "" : sessionId);
         preview.put("replyMode", plan.mode().name());
         preview.put("intentCategory", plan.category().name());
+        preview.put("assistantPermission", plan.permission().name());
+        preview.put("readOnlyRoute", plan.readOnly());
         preview.put("useToolAgentPath", plan.useToolAgentPath());
         preview.put("planPhase", planPhase);
         preview.put("writeConfirmed", allowWrite);
@@ -540,7 +564,8 @@ public class UnifiedAssistantService {
                                                  boolean confirmRemediation,
                                                  AssistantReplyPlanner.ReplyPlan plan,
                                                  String requestedModelProfile,
-                                                 String requester) {
+                                                 String requester,
+                                                 String sessionId) {
         if (promptInjectionGuard != null && promptInjectionGuard.isInjection(userMessage)) {
             captureStreamReject(userMessage, "INJECTION", null, "prompt injection detected");
             return Flux.just("检测到疑似注入内容，本轮已拦截，请换一种说法描述您的运维需求。");
@@ -559,8 +584,11 @@ public class UnifiedAssistantService {
         boolean allowWrite = resolveAllowWrite(confirmRemediation, userMessage);
         // writeConfirmed 仅表示用户意图确认；是否落地由结束时 securityOutcome / Tracker 再定
         Map<String, Object> metaExtras = new LinkedHashMap<>();
+        metaExtras.put("sessionId", sessionId == null ? "" : sessionId);
         metaExtras.put("userIntentConfirmed", allowWrite);
         metaExtras.put("writeConfirmed", allowWrite);
+        metaExtras.put("assistantPermission", plan.permission().name());
+        metaExtras.put("readOnlyRoute", plan.readOnly());
         metaExtras.put("openToolPermissions", openToolPermissions);
         metaExtras.putAll(routingMeta(resolveModel(
                 userMessage, AiUsageSupport.estimateTokens(userMessage), true, requestedModelProfile)));
@@ -649,7 +677,8 @@ public class UnifiedAssistantService {
                             ? "正在按确认计划执行本机观测与处置编排…"
                             : "正在按计划执行本机观测与处置编排，请稍候…"),
                     Mono.fromCallable(() -> {
-                                    OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions, requester);
+                                    OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite,
+                                            openToolPermissions, requester, sessionId);
                                 try {
                                     return opsRuntimeService.runPlaybook(
                                             playbook, userMessage, surface, intentRisk);
@@ -665,12 +694,12 @@ public class UnifiedAssistantService {
                                             result.report() != null
                                                     ? result.report().get("softFallbackReason")
                                                     : "PLAYBOOK_NONE");
-                                    return Flux.concat(
+                                            return Flux.concat(
                                             progressEventFlux("route", "未命中固定剧本，改走工具增强诊断"),
                                             streamToolAgentBody(
                                                     userMessage, history, confirmRemediation, plan,
                                                     allowWrite, metaExtras, plannedTools, planPhase,
-                                                    awaitingConfirm, awmHit, requestedModelProfile, requester));
+                                                    awaitingConfirm, awmHit, requestedModelProfile, requester, sessionId));
                                 }
                                 Flux<String> event = Flux.empty();
                                 String encoded = AssistantStreamEvents.encode(result.report());
@@ -703,7 +732,7 @@ public class UnifiedAssistantService {
                 streamToolAgentBody(
                         userMessage, history, confirmRemediation, plan,
                         allowWrite, metaExtras, plannedTools, planPhase,
-                        awaitingConfirm, awmHit, requestedModelProfile, requester),
+                        awaitingConfirm, awmHit, requestedModelProfile, requester, sessionId),
                 userMessage, metaExtras, plan);
     }
 
@@ -719,7 +748,8 @@ public class UnifiedAssistantService {
             boolean awaitingConfirm,
             OpsWorkflow awmHit,
             String requestedModelProfile,
-            String requester) {
+            String requester,
+            String sessionId) {
         boolean writeMounted = allowWrite;
         metaExtras.put("writeToolsMounted", writeMounted);
         String toolHint = plan.statusHintZh().isBlank()
@@ -750,7 +780,7 @@ public class UnifiedAssistantService {
                 progressEventFlux("run", runHint),
                 Mono.fromCallable(() -> runBlockingToolAugmentedCompletion(
                                 userMessage, history, confirmRemediation, plan,
-                                toolsForRun, planPhase, awmForRun, requestedModelProfile, requester))
+                                toolsForRun, planPhase, awmForRun, requestedModelProfile, requester, sessionId))
                         .subscribeOn(Schedulers.boundedElastic())
                         .timeout(Duration.ofMinutes(4))
                         .flatMapMany(completion -> Flux.concat(
@@ -785,10 +815,14 @@ public class UnifiedAssistantService {
                                                                    String planPhase,
                                                                    OpsWorkflow awmHit,
                                                                    String requestedModelProfile,
-                                                                   String requester) {
+                                                                   String requester,
+                                                                   String sessionId) {
         Map<String, Object> context = getAssistantContext(userMessage);
         augmentContextWithSessionSecurity(userMessage, context);
         context.put("assistantToolLoop", Boolean.TRUE);
+        context.put("sessionId", sessionId == null ? "" : sessionId);
+        context.put("assistantPermission", plan.permission().name());
+        context.put("intentCategory", plan.category().name());
 
         boolean allowWrite = resolveAllowWrite(confirmRemediation, userMessage);
         context.put("userConfirmedWrite", allowWrite);
@@ -827,7 +861,8 @@ public class UnifiedAssistantService {
         String traceId = UUID.randomUUID().toString();
         long startedAt = System.currentTimeMillis();
         ChatToolExecutionTracker.clear();
-        OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite, openToolPermissions, requester);
+        OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite,
+                openToolPermissions, requester, sessionId);
         try {
             AiModelRouter.ResolvedModel resolvedModel = resolveModel(
                     userMessage, AiUsageSupport.estimateTokens(contextToJson(context)), true,
@@ -856,7 +891,9 @@ public class UnifiedAssistantService {
                         allowWrite,
                         plannedTools == null ? List.of() : plannedTools,
                         writeMounted,
-                        openToolPermissions);
+                        openToolPermissions)
+                        + AssistantReplyPrompts.commonGroundingRules()
+                        + AssistantReplyPrompts.routePermissionSection(plan.permission());
                 String bundledUser = bundleHistoryAndUser(history, userMessage);
                 var promptSpec = client.prompt()
                         .system(systemPrompt)
@@ -949,6 +986,7 @@ public class UnifiedAssistantService {
                     toolAgentOutcome,
                     awmHit);
             executionState.put("toolsUsed", List.copyOf(toolsUsed));
+            executionState.put("sessionId", sessionId == null ? "" : sessionId);
             executionState.put("realWriteOk", realWriteOk);
             boolean anyTool = ChatToolExecutionTracker.hasAnyToolInvocation();
             executionState.put("anyTool", anyTool);
@@ -962,9 +1000,11 @@ public class UnifiedAssistantService {
                     realWriteOk,
                     cleaned);
             executionState.put("feedbackRecorded", feedbackRecorded);
-            Map<String, Object> pendingConfirmation = ChatToolExecutionTracker.pendingConfirmation();
-            if (!pendingConfirmation.isEmpty()) {
-                executionState.put("pendingConfirmation", pendingConfirmation);
+            List<Map<String, Object>> pendingConfirmations = ChatToolExecutionTracker.pendingConfirmations();
+            if (!pendingConfirmations.isEmpty()) {
+                executionState.put("pendingConfirmations", pendingConfirmations);
+                // 保留单数结构，兼容现有前端与旧版演示数据。
+                executionState.put("pendingConfirmation", pendingConfirmations.get(0));
             }
             return new ToolAgentCompletion(
                     appendChatAntiHallucinationFooter(cleaned, allowWrite),
@@ -1114,7 +1154,8 @@ public class UnifiedAssistantService {
         String ctxJson = (plan.injectMetrics() || plan.injectFullContext())
                 ? contextToJson(context)
                 : "{}";
-        return AssistantReplyPrompts.systemPrompt(plan.mode(), plan.category(), ctxJson);
+        return AssistantReplyPrompts.systemPrompt(plan.mode(), plan.category(), ctxJson)
+                + AssistantReplyPrompts.routePermissionSection(plan.permission());
     }
 
     private String buildSystemPromptForMode(AssistantReplyMode mode, Map<String, Object> context) {
@@ -1316,6 +1357,8 @@ public class UnifiedAssistantService {
             if (plan != null) {
                 merged.put("replyMode", plan.mode().name());
                 merged.put("intentCategory", plan.category().name());
+                merged.put("assistantPermission", plan.permission().name());
+                merged.put("readOnlyRoute", plan.readOnly());
             }
             String json = objectMapper.writeValueAsString(buildChatMeta(userMessage, merged));
             return Flux.concat(Flux.just(ASSISTANT_META_PREFIX + json), body);
@@ -1382,7 +1425,18 @@ public class UnifiedAssistantService {
     }
 
     private String buildSystemPrompt(Map<String, Object> context) {
-        return AssistantReplyPrompts.toolAgentSystemPrompt(contextToJson(context), toolAugmentedSection(context));
+        AssistantPermission permission = AssistantPermission.READ_ONLY;
+        Object rawPermission = context == null ? null : context.get("assistantPermission");
+        if (rawPermission != null) {
+            try {
+                permission = AssistantPermission.valueOf(String.valueOf(rawPermission));
+            } catch (IllegalArgumentException ignored) {
+                // fail closed for an unknown route permission
+            }
+        }
+        return AssistantReplyPrompts.commonGroundingRules()
+                + AssistantReplyPrompts.toolAgentSystemPrompt(contextToJson(context), toolAugmentedSection(context))
+                + AssistantReplyPrompts.routePermissionSection(permission);
     }
 
     private List<Map<String, String>> buildRunbookSuggestions(Map<String, Object> performance,

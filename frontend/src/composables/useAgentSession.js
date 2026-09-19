@@ -8,12 +8,51 @@ const STORAGE_KEY = 'threshcore-agent-sessions-v2'
 const MAX_SESSIONS = 24
 const MAX_MESSAGES = 80
 const PERSIST_DEBOUNCE_MS = 800
+const SESSION_SCHEMA_VERSION = 2
 
 const sessions = ref([])
 const activeSessionId = ref('')
 const messages = ref([])
 let storeLoaded = false
 let persistTimer = null
+
+function createSessionId() {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return `s-${uuid || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`}`
+}
+
+function normalizeMessage(message, sessionId, index) {
+  if (!message || typeof message !== 'object') return null
+  const role = ['user', 'assistant', 'system'].includes(message.role) ? message.role : 'assistant'
+  const content = message.content == null ? '' : String(message.content)
+  return {
+    ...message,
+    id: String(message.id || `m-${sessionId}-${index}-${Date.now()}`),
+    role,
+    content,
+    timestamp: message.timestamp || new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    status: message.status || 'completed'
+  }
+}
+
+function normalizeSession(raw) {
+  const id = String(raw?.id || createSessionId())
+  const sourceMessages = Array.isArray(raw?.messages) ? raw.messages : []
+  const normalizedMessages = sourceMessages
+    .map((message, index) => normalizeMessage(message, id, index))
+    .filter(Boolean)
+    .slice(-MAX_MESSAGES)
+  return {
+    ...raw,
+    id,
+    title: raw?.title || deriveTitle(normalizedMessages),
+    kind: raw?.kind || 'OPS_AGENT',
+    schemaVersion: SESSION_SCHEMA_VERSION,
+    createdAt: raw?.createdAt || raw?.updatedAt || Date.now(),
+    updatedAt: raw?.updatedAt || Date.now(),
+    messages: normalizedMessages
+  }
+}
 
 function deriveTitle(msgs) {
   const first = (msgs || []).find(m => m.role === 'user' && m.content)
@@ -34,6 +73,7 @@ function persistNow() {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
+        schemaVersion: SESSION_SCHEMA_VERSION,
         activeId: activeSessionId.value,
         sessions: sessions.value.slice(0, MAX_SESSIONS).map(s => {
           trimSessionMessages(s)
@@ -89,12 +129,7 @@ function loadFromStorage() {
     if (!raw) return false
     const data = JSON.parse(raw)
     if (!Array.isArray(data?.sessions) || data.sessions.length === 0) return false
-    sessions.value = data.sessions.map(s => ({
-      id: s.id || `s-${Date.now()}`,
-      title: s.title || '新任务',
-      updatedAt: s.updatedAt || Date.now(),
-      messages: Array.isArray(s.messages) ? s.messages.slice(-MAX_MESSAGES) : []
-    }))
+    sessions.value = data.sessions.map(normalizeSession)
     activeSessionId.value = data.activeId || sessions.value[0].id
     syncMessagesFromActive()
     return true
@@ -105,8 +140,16 @@ function loadFromStorage() {
 
 function ensureDefaultSession() {
   if (sessions.value.length === 0) {
-    const id = `s-${Date.now()}`
-    const session = { id, title: '新任务', updatedAt: Date.now(), messages: [] }
+    const id = createSessionId()
+    const session = {
+      id,
+      title: '新任务',
+      kind: 'OPS_AGENT',
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: []
+    }
     sessions.value = [session]
     activeSessionId.value = id
     messages.value = session.messages
@@ -144,10 +187,13 @@ export function useAgentSession() {
   }
 
   function createSession() {
-    const id = `s-${Date.now()}`
+    const id = createSessionId()
     const session = {
       id,
       title: '新任务',
+      kind: 'OPS_AGENT',
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
       messages: []
     }

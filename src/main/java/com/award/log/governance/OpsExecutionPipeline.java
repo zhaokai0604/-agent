@@ -96,6 +96,16 @@ public class OpsExecutionPipeline {
             String userMessage,
             String requester,
             String dryRunPreviewJson) {
+        return propose(toolName, parameters, userMessage, requester, dryRunPreviewJson, "");
+    }
+
+    public PipelineResult propose(
+            String toolName,
+            Map<String, Object> parameters,
+            String userMessage,
+            String requester,
+            String dryRunPreviewJson,
+            String sessionId) {
         long start = System.currentTimeMillis();
         String traceId = newTraceId();
         Validation validation = validateTool(toolName, traceId, start);
@@ -119,7 +129,7 @@ public class OpsExecutionPipeline {
                 opsPepProperties.getConfirmHmacKey(), params);
         McpPendingConfirmationService.PendingConfirmation pending = mcpPendingConfirmationService.register(
                 traceId, toolName, params, userMessage, instruction, requester,
-                effect, fingerprint, token, dryRunPreviewJson);
+                effect, fingerprint, token, dryRunPreviewJson, sessionId);
 
         WriteRemediationContract contract = RemediationContractFactory.build(toolName, params, effect, requester);
         Map<String, Object> body = mcpSecurityService.buildNeedConfirmResponse(
@@ -131,6 +141,9 @@ public class OpsExecutionPipeline {
         body.put("confirmToken", token.confirmTokenHmac());
         body.put("dryRunPreviewHash", token.dryRunPreviewHash());
         body.put("needConfirm", true);
+        if (sessionId != null && !sessionId.isBlank()) {
+            body.put("sessionId", sessionId);
+        }
         body.put("remediationContract", contract.toMap());
         body.put("expectedEffect", contract.expectedEffect().toMap());
         body.put("recover", contract.recover().toMap());
@@ -148,12 +161,22 @@ public class OpsExecutionPipeline {
             String confirmToken,
             String confirmCode,
             String requester) {
+        return executeConfirmed(confirmationId, capabilityToken, confirmToken, confirmCode, requester, "");
+    }
+
+    public PipelineResult executeConfirmed(
+            String confirmationId,
+            String capabilityToken,
+            String confirmToken,
+            String confirmCode,
+            String requester,
+            String sessionId) {
         long start = System.currentTimeMillis();
         if (!"确认执行".equals(confirmCode)) {
             return PipelineResult.error("确认码不正确，请输入 '确认执行'", confirmationId, start);
         }
         McpPendingConfirmationService.TakeResult take = mcpPendingConfirmationService.take(
-                confirmationId, requester, capabilityToken);
+                confirmationId, requester, capabilityToken, sessionId);
         if (take.status() != McpPendingConfirmationService.TakeStatus.OK || take.pending() == null) {
             return PipelineResult.error(mapTakeStatus(take.status()), confirmationId, start);
         }
@@ -203,6 +226,9 @@ public class OpsExecutionPipeline {
                 toolName, parameters, start, traceId, pending.userInstruction(), true);
         exec.put("phase", "execute");
         exec.put("traceId", traceId);
+        if (!pending.sessionId().isBlank()) {
+            exec.put("sessionId", pending.sessionId());
+        }
         if (Boolean.TRUE.equals(exec.get("success"))
                 && WriteToolResultSupport.requestedRealWrite(parameters)) {
             sessionRiskBudgetService.consume(requester, effect);
@@ -275,7 +301,7 @@ public class OpsExecutionPipeline {
             Map<String, Object> dryParams = dryRunParams(toolName, parameters);
             Map<String, Object> dryExec = mcpExecutionService.execute(toolName, dryParams, start, traceId, instruction);
             String previewJson = serializePreview(dryExec);
-            return propose(toolName, parameters, userMessage, requester, previewJson);
+            return propose(toolName, parameters, userMessage, requester, previewJson, "");
         }
 
         SessionRiskBudgetService.BudgetDecision budget = sessionRiskBudgetService.check(requester, effect);
@@ -434,6 +460,7 @@ public class OpsExecutionPipeline {
         return switch (status) {
             case REQUESTER_MISMATCH -> "该待确认请求不属于当前用户";
             case TOKEN_MISMATCH -> "能力凭证无效或与效果指纹不匹配，请重新预览确认";
+            case SESSION_MISMATCH -> "待确认请求不属于当前会话，请切回原会话后重试";
             case EXPIRED -> "待确认请求已过期，请重新发起预览";
             default -> "未找到对应的待确认请求，请重新预览";
         };

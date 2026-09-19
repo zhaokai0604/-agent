@@ -1,5 +1,7 @@
 package com.award.log.security;
 
+import com.award.log.security.effect.ToolOperationPolicy;
+
 import java.util.Locale;
 import java.util.Map;
 
@@ -15,7 +17,8 @@ public final class ChatToolWriteGuard {
         if (parameters == null || parameters.isEmpty()) {
             return false;
         }
-        if (Boolean.TRUE.equals(coerceBool(parameters.get("forceRemediate")))) {
+        if (Boolean.TRUE.equals(coerceBool(parameters.get("forceRemediate")))
+                && ToolOperationPolicy.isWriteCapableTool(toolBeanName)) {
             return true;
         }
         if (Boolean.TRUE.equals(coerceBool(parameters.get("confirmDelete")))
@@ -28,7 +31,9 @@ public final class ChatToolWriteGuard {
             return true;
         }
         String op = stringVal(parameters.get("operation"));
-        if (!op.isEmpty() && isWriteOperation(op) && !Boolean.TRUE.equals(coerceBool(parameters.get("dryRun")))) {
+        if (!op.isEmpty()
+                && ToolOperationPolicy.isWriteOperation(toolBeanName, parameters)
+                && !Boolean.TRUE.equals(coerceBool(parameters.get("dryRun")))) {
             return true;
         }
         return false;
@@ -37,12 +42,6 @@ public final class ChatToolWriteGuard {
     public static String blockMessage(String toolBeanName) {
         return "对话入口不支持真实写操作（" + toolBeanName
                 + "）。请使用侧栏「工具箱」执行，并在界面二次确认后再落地；对话内仅允许预览/只读观测。";
-    }
-
-    private static boolean isWriteOperation(String operation) {
-        String o = operation.toLowerCase(Locale.ROOT);
-        return o.contains("clean") || o.contains("delete") || o.contains("restart")
-                || o.contains("stop") || o.contains("kill") || o.contains("remediat");
     }
 
     private static Boolean coerceBool(Object v) {

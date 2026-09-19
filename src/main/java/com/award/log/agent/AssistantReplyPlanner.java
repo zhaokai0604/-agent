@@ -33,8 +33,16 @@ public class AssistantReplyPlanner {
             AssistantReplyMode mode,
             AssistantIntentCategory category,
             boolean useToolAgentPath,
-            String statusHintZh
+            String statusHintZh,
+            AssistantPermission permission
     ) {
+        public ReplyPlan(AssistantReplyMode mode,
+                         AssistantIntentCategory category,
+                         boolean useToolAgentPath,
+                         String statusHintZh) {
+            this(mode, category, useToolAgentPath, statusHintZh, permissionFor(category));
+        }
+
         public boolean injectMetrics() {
             return mode == AssistantReplyMode.OPS_ANALYSIS
                     || mode == AssistantReplyMode.TOOL_AGENT
@@ -43,6 +51,23 @@ public class AssistantReplyPlanner {
 
         public boolean injectFullContext() {
             return mode == AssistantReplyMode.TOOL_AGENT || mode == AssistantReplyMode.ORCHESTRATE;
+        }
+
+        public boolean readOnly() {
+            return permission == AssistantPermission.READ_ONLY;
+        }
+
+        private static AssistantPermission permissionFor(AssistantIntentCategory category) {
+            if (category == AssistantIntentCategory.CONFIRM_WRITE) {
+                return AssistantPermission.WRITE_REQUESTED;
+            }
+            if (category == AssistantIntentCategory.PREVIEW_ONLY
+                    || category == AssistantIntentCategory.OPS_DIAGNOSIS
+                    || category == AssistantIntentCategory.PATROL_ORCHESTRATE
+                    || category == AssistantIntentCategory.PATROL_CONTINUATION) {
+                return AssistantPermission.PREVIEW_ONLY;
+            }
+            return AssistantPermission.READ_ONLY;
         }
     }
 
@@ -62,9 +87,23 @@ public class AssistantReplyPlanner {
             return plan(AssistantReplyMode.CHITCHAT, AssistantIntentCategory.EMPTY, false, "");
         }
 
+        // 否定、纠错和仅预览必须先于确认关键词；否则「不要执行删除」会被误判为写确认。
+        if (AssistantIntentSignals.CANCEL.matcher(msg).find()) {
+            return plan(AssistantReplyMode.CONVERSATION, AssistantIntentCategory.CANCEL, false, "");
+        }
+        if (AssistantIntentSignals.CORRECTION.matcher(msg).find()) {
+            return plan(AssistantReplyMode.CONVERSATION, AssistantIntentCategory.CORRECTION, false, "");
+        }
+        if (AssistantIntentSignals.DECLINE_TOOLS.matcher(msg).find()) {
+            return plan(AssistantReplyMode.CONVERSATION, AssistantIntentCategory.DECLINE_TOOLS, false, "");
+        }
+        if (AssistantIntentSignals.isPreviewOnly(msg)) {
+            return plan(AssistantReplyMode.OPS_ANALYSIS, AssistantIntentCategory.PREVIEW_ONLY, false, "");
+        }
+
         // P1：显式确认话术；或上游 confirmRemediation=true 且本句不是纯寒暄/社交
         // （防止前端误传 confirmRemediation 时把「你好」打成写处置）
-        boolean confirmUtterance = AssistantIntentSignals.CONFIRM_WRITE.matcher(msg).find();
+        boolean confirmUtterance = AssistantIntentSignals.isExplicitWriteConfirmation(msg);
         if (confirmUtterance
                 || (confirmRemediation && AssistantIntentSignals.classifySocial(msg) == null)) {
             return plan(AssistantReplyMode.TOOL_AGENT, AssistantIntentCategory.CONFIRM_WRITE, true,
@@ -82,19 +121,6 @@ public class AssistantReplyPlanner {
                     AssistantReplyPrompts.toolAgentAutonomousHint());
         }
 
-        // P2
-        if (AssistantIntentSignals.CANCEL.matcher(msg).find()) {
-            return plan(AssistantReplyMode.CONVERSATION, AssistantIntentCategory.CANCEL, false, "");
-        }
-        if (AssistantIntentSignals.CORRECTION.matcher(msg).find()) {
-            return plan(AssistantReplyMode.CONVERSATION, AssistantIntentCategory.CORRECTION, false, "");
-        }
-
-        // P3
-        if (AssistantIntentSignals.DECLINE_TOOLS.matcher(msg).find()) {
-            return plan(AssistantReplyMode.CONVERSATION, AssistantIntentCategory.DECLINE_TOOLS, false, "");
-        }
-
         // P4 社交 / 元信息
         AssistantIntentCategory social = AssistantIntentSignals.classifySocial(msg);
         if (social != null) {
@@ -102,6 +128,15 @@ public class AssistantReplyPlanner {
         }
         if (AssistantIntentSignals.USAGE_HELP.matcher(msg).find()) {
             return plan(AssistantReplyMode.CONVERSATION, AssistantIntentCategory.USAGE_HELP, false, "");
+        }
+
+        // P4.5 当前主机状态查询：优先于「是否正常」等对话关键词，也不能进入固定巡检。
+        if (AssistantIntentSignals.isHostStatusQuery(msg)) {
+            if (useToolAgentRequested) {
+                return plan(AssistantReplyMode.TOOL_AGENT, AssistantIntentCategory.HOST_STATUS_QUERY, true,
+                        AssistantReplyPrompts.toolAgentStatusHint());
+            }
+            return plan(AssistantReplyMode.OPS_ANALYSIS, AssistantIntentCategory.HOST_STATUS_QUERY, false, "");
         }
 
         // P5 澄清
@@ -118,11 +153,6 @@ public class AssistantReplyPlanner {
         if (AssistantIntentSignals.isConversationalIntent(msg, history)) {
             AssistantIntentCategory cat = conversationCategory(msg);
             return plan(AssistantReplyMode.CONVERSATION, cat, false, "");
-        }
-
-        // P7 仅预览
-        if (AssistantIntentSignals.isPreviewOnly(msg)) {
-            return plan(AssistantReplyMode.OPS_ANALYSIS, AssistantIntentCategory.PREVIEW_ONLY, false, "");
         }
 
         // P8 编排

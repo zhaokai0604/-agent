@@ -16,6 +16,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.List;
+import reactor.core.publisher.Flux;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -94,5 +95,46 @@ class AiDiagnosisServiceImplTest {
     void generateDiagnosisStreamShouldEmitFallbackForEmptyInput() {
         String text = service.generateDiagnosisStream(List.of()).blockFirst();
         assertTrue(text.contains("未在日志中发现明显异常"));
+    }
+
+    @Test
+    void fullContextAndAllStreamVariantsShouldUseModelAndFallbackOnStreamError() {
+        EnhancedLogParseResultEntity error = new EnhancedLogParseResultEntity("ERROR connection refused");
+        error.setSeverity(LogSeverityLevel.ERROR_LEVEL);
+        error.setLogTime("2024-01-01 10:00:00");
+        EnhancedLogParseResultEntity normal = new EnhancedLogParseResultEntity("INFO request completed");
+        normal.setSeverity(LogSeverityLevel.INFO_LEVEL);
+        normal.setLogTime("2024-01-01 10:01:00");
+
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(
+                new Generation(new AssistantMessage("grounded full diagnosis")))));
+        assertEquals("grounded full diagnosis", service.generateDiagnosisFromFullResult(List.of(error, normal)));
+
+        ChatResponse streamed = new ChatResponse(List.of(new Generation(new AssistantMessage("streamed"))));
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(streamed));
+        assertEquals("streamed", service.generateDiagnosisStream(List.of(error)).blockFirst());
+        assertEquals("streamed", service.generateDiagnosisStreamFromFullResult(List.of(error, normal)).blockFirst());
+        assertEquals("streamed", service.generateSingleLogDiagnosisStream(error).blockFirst());
+        assertEquals("streamed", service.chatStream("请分析这条日志").blockFirst());
+
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.error(new IllegalStateException("stream down")));
+        assertTrue(service.generateDiagnosisStream(List.of(error)).blockFirst().contains("诊断服务中断"));
+        assertTrue(service.generateDiagnosisStreamFromFullResult(List.of(error, normal)).blockFirst().contains("诊断服务中断"));
+        assertTrue(service.generateSingleLogDiagnosisStream(error).blockFirst().contains("AI 诊断暂时不可用"));
+        assertTrue(service.chatStream("请分析这条日志").blockFirst().contains("服务异常"));
+    }
+
+    @Test
+    void diagnosisMethodsHandleModelExceptionsAndEmptyFocus() {
+        EnhancedLogParseResultEntity normal = new EnhancedLogParseResultEntity("INFO all good");
+        normal.setSeverity(LogSeverityLevel.INFO_LEVEL);
+        when(chatModel.call(any(Prompt.class))).thenThrow(new IllegalStateException("provider down"));
+        assertTrue(service.generateDiagnosis(List.of(normal)).contains("诊断服务暂时不可用"));
+        assertTrue(service.generateDiagnosisFromFullResult(List.of(normal)).contains("未在日志中发现明显异常"));
+        assertTrue(service.diagnoseSingleLog(normal).contains("诊断失败"));
+
+        when(chatModel.stream(any(Prompt.class))).thenThrow(new IllegalStateException("stream init down"));
+        assertTrue(service.generateSingleLogDiagnosisStream(normal).blockFirst().contains("请求失败"));
+        assertTrue(service.chatStream("hello").blockFirst().contains("请求失败"));
     }
 }

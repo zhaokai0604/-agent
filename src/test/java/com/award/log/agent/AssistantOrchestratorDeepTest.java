@@ -280,6 +280,27 @@ class AssistantOrchestratorDeepTest {
     }
 
     @Test
+    void appendLogCleanupSectionExecutesAndVerifiesRealDeletion() throws Exception {
+        when(opsRemediationGate.decideLogCleanup(eq("/var/log"), eq(30), eq(true), anyString()))
+                .thenReturn(new OpsRemediationGate.RemediationDecision(
+                        OpsRemediationGate.WriteDecision.EXECUTE,
+                        GovernanceAdmissionVerdict.ALLOW_AUTO,
+                        OpsTrustTier.AUTO,
+                        "execute logs"));
+        when(logCleanupTool.cleanupOldLogs("/var/log", 30, true, false))
+                .thenReturn("{\"success\":true,\"data\":{\"filesFound\":2,\"protectedSkipped\":1}}");
+        when(logCleanupTool.cleanupOldLogs("/var/log", 30, false, true))
+                .thenReturn("{\"success\":true,\"data\":{\"filesDeleted\":2,\"bytesFreed\":2048,\"protectedFilesPreserved\":true,\"businessEffect\":\"DELETED\"}}");
+
+        StringBuilder md = new StringBuilder();
+        boolean executed = ReflectionTestUtils.invokeMethod(
+                orchestrator, "appendLogCleanupSection", md, new ArrayList<Map<String, Object>>(), true);
+
+        assertTrue(executed);
+        assertTrue(md.toString().contains("已执行删除") && md.toString().contains("verifyOutcome=VERIFIED"));
+    }
+
+    @Test
     void cpuRunReturnsErrorWhenSystemLoadProbeFails() throws Exception {
         when(opsIntentRouter.resolve("cpu overload")).thenReturn(OpsIntentRouter.Playbook.CPU_PRESSURE);
         when(systemLoadTool.checkSystemLoad()).thenThrow(new RuntimeException("load failed"));
@@ -289,6 +310,44 @@ class AssistantOrchestratorDeepTest {
         assertTrue(result.markdown().contains("load failed"));
         verify(auditRecorder).record(eq("trace-assistant-deep"), eq("cpu overload"), eq("MEDIUM"),
                 eq("ERROR"), eq("CpuPressure"), eq(false), eq("load failed"), anyList(), anyLong());
+    }
+
+    @Test
+    void cpuRunExecutesVerifiedRestartAndBlocksForbiddenRestart() throws Exception {
+        when(opsIntentRouter.resolve("restart nginx cpu")).thenReturn(OpsIntentRouter.Playbook.CPU_PRESSURE);
+        when(opsIntentRouter.forceRemediate("restart nginx cpu")).thenReturn(true);
+        when(serviceRestartCandidateResolver.pickFromUserMessage("restart nginx cpu")).thenReturn("nginx");
+        when(systemLoadTool.checkSystemLoad()).thenReturn(
+                "{\"success\":true,\"data\":{\"cpuUsagePercent\":91,\"memUsagePercent\":60,\"loadAverage1m\":5.0}}");
+        when(processTool.listProcesses(5.0, 5.0)).thenReturn(
+                "{\"success\":true,\"data\":[{\"command\":\"worker\",\"pid\":\"7\",\"cpu\":\"35\",\"memPct\":\"8\",\"state\":\"RUNNING\"}]}");
+        when(opsRemediationGate.decideServiceRestart(eq("nginx"), eq(true), anyString()))
+                .thenReturn(new OpsRemediationGate.RemediationDecision(
+                        OpsRemediationGate.WriteDecision.EXECUTE,
+                        GovernanceAdmissionVerdict.ALLOW_AUTO,
+                        OpsTrustTier.AUTO,
+                        "execute restart"));
+        when(serviceRestartTool.restartService("nginx", true, false)).thenReturn(
+                "{\"success\":true,\"data\":{\"mode\":\"DRY-RUN\",\"service\":\"nginx\"}}");
+        when(serviceRestartTool.restartService("nginx", false, true)).thenReturn(
+                "{\"success\":true,\"data\":{\"service\":\"nginx\",\"afterState\":\"active\",\"businessEffect\":\"RESTARTED\"}}");
+
+        AssistantOrchestrator.RunResult executed = orchestrator.run(
+                "restart nginx cpu", McpToolSurface.FULL, RiskLevel.HIGH);
+        assertTrue(executed.markdown().contains("已执行重启"), executed.markdown());
+
+        when(opsIntentRouter.resolve("restart nginx cpu blocked")).thenReturn(OpsIntentRouter.Playbook.CPU_PRESSURE);
+        when(opsIntentRouter.forceRemediate("restart nginx cpu blocked")).thenReturn(true);
+        when(serviceRestartCandidateResolver.pickFromUserMessage("restart nginx cpu blocked")).thenReturn("nginx");
+        when(opsRemediationGate.decideServiceRestart(eq("nginx"), eq(true), anyString()))
+                .thenReturn(new OpsRemediationGate.RemediationDecision(
+                        OpsRemediationGate.WriteDecision.FORBIDDEN,
+                        GovernanceAdmissionVerdict.FORBIDDEN,
+                        OpsTrustTier.BLOCK,
+                        "forbidden by policy"));
+        AssistantOrchestrator.RunResult blocked = orchestrator.run(
+                "restart nginx cpu blocked", McpToolSurface.FULL, RiskLevel.HIGH);
+        assertTrue(blocked.markdown().contains("已拒绝"));
     }
 
     @Test

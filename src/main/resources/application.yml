@@ -19,7 +19,7 @@ award:
 app:
   cors:
     # 生产经 Nginx 使用正式域名时必须显式加入；多个来源用英文逗号分隔。
-    allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
+    allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost,http://localhost:*,http://127.0.0.1,http://127.0.0.1:*}
     allow-credentials: true
   management:
     # 单端口 8088：管理/业务接口同口
@@ -28,6 +28,10 @@ app:
   # 执行审计（/admin/audit/ai/recent）：true 时任意已登录用户可读；生产务必 false（仅管理员）
   security:
     ai-audit-relaxed-read: ${APP_AI_AUDIT_RELAXED_READ:false}
+  ai:
+    legacy:
+      # 旧 /log/diagnose 与 /api/v1/llm 仅保留测试/迁移开关，不作为默认回复链
+      enabled: ${APP_AI_LEGACY_ENABLED:false}
 
 spring:
   application:
