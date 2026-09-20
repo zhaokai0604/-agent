@@ -105,7 +105,7 @@ frontend/src/
 
 - JDK 17
 - Maven 3.8+
-- Node.js 18+
+- Node.js 20.19+（或 Node.js 22.12+）
 - MySQL 8 或 MariaDB 10.11+
 - 可选：Docker Desktop、Qdrant、Elasticsearch、Kafka、Redis
 
