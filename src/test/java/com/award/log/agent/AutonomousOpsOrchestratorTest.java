@@ -128,6 +128,7 @@ class AutonomousOpsOrchestratorTest {
                 new TestTimeSource(2_000L),
                 new TestTraceIdGenerator("trace-auto-1"));
 
+        com.award.log.governance.GovernedPipelineFixture.install(orchestrator, cleanTempTool, logCleanupTool, serviceRestartTool);
         ReflectionTestUtils.setField(orchestrator, "enabled", true);
         ReflectionTestUtils.setField(orchestrator, "diskPressurePercent", 80.0);
         ReflectionTestUtils.setField(orchestrator, "cpuWarnPercent", 85.0);

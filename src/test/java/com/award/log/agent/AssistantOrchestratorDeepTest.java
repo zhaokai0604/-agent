@@ -95,6 +95,7 @@ class AssistantOrchestratorDeepTest {
                 new TestTraceIdGenerator("trace-assistant-deep"),
                 new DiagnosisConfidenceGate(),
                 new SkillRoutingAdvisor(new SkillCatalogLoader()));
+        com.award.log.governance.GovernedPipelineFixture.install(orchestrator, cleanTempTool, logCleanupTool, serviceRestartTool);
         ReflectionTestUtils.setField(orchestrator, "logCleanDays", 30);
         ReflectionTestUtils.setField(orchestrator, "tempCleanDays", 7);
         ReflectionTestUtils.setField(orchestrator, "diskPressurePercent", 80.0);

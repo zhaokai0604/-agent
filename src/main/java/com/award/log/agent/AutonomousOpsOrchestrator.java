@@ -225,6 +225,7 @@ public class AutonomousOpsOrchestrator {
         }
         try {
             List<Map<String, Object>> steps = auditRecorder.newSteps();
+        if (skillRoutingAdvisor != null) auditRecorder.addStructuredStep(steps, "skill_release", skillRoutingAdvisor.catalogStatus());
             PerceptionSnapshot perception = perceiveAll(steps);
             List<Finding> findings = diagnose(perception);
             Map<String, Object> view = new LinkedHashMap<>();
@@ -256,13 +257,23 @@ public class AutonomousOpsOrchestrator {
         return runInternal("[scheduled-autonomous-ops]", surface, RiskLevel.LOW, forceRemediate);
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.award.log.agent.skill.SkillRoutingAdvisor skillRoutingAdvisor;
+
     private RunResult runInternal(String userMessage,
                                   McpToolSurface surface,
                                   RiskLevel intentRisk,
                                   boolean forceRemediate) {
+        String traceId=traceIdGenerator.nextId();
+        try(var ignored=skillRoutingAdvisor==null?null:skillRoutingAdvisor.pinForRun(traceId)) {
+            return runPinned(userMessage,surface,intentRisk,forceRemediate,traceId);
+        }
+    }
+
+    private RunResult runPinned(String userMessage,McpToolSurface surface,RiskLevel intentRisk,boolean forceRemediate,String traceId) {
         long startedAt = timeSource.currentTimeMillis();
-        String traceId = traceIdGenerator.nextId();
         List<Map<String, Object>> steps = auditRecorder.newSteps();
+        if (skillRoutingAdvisor != null) auditRecorder.addStructuredStep(steps, "skill_release", skillRoutingAdvisor.catalogStatus());
         auditRecorder.addCot(steps, 1, "receive", userMessage);
         List<String> plannedTools = AgentSkillPlan.forOrchestrate(userMessage);
         String planPhase = AgentSkillPlan.planPhase(forceRemediate, plannedTools);
@@ -914,7 +925,7 @@ public class AutonomousOpsOrchestrator {
     private String previewWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
         if (opsExecutionPipeline != null) {
             return objectMapper.writeValueAsString(opsExecutionPipeline.preview(
-                    toolName, params, instruction, "autonomous").body());
+                    toolName, params, instruction, RemediationClosureSupport.executionRequester("autonomous")).body());
         }
         return switch (toolName) {
             case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
@@ -929,18 +940,10 @@ public class AutonomousOpsOrchestrator {
 
     private String executeWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
         if (opsExecutionPipeline != null) {
-            return objectMapper.writeValueAsString(opsExecutionPipeline.executeDirect(
-                    toolName, params, instruction, "autonomous").body());
+            return RemediationClosureSupport.pipelineJson(objectMapper, opsExecutionPipeline.executeDirect(
+                    toolName, params, instruction, RemediationClosureSupport.executionRequester("autonomous")));
         }
-        return switch (toolName) {
-            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
-                    String.valueOf(params.get("path")), asInt(params.get("days"), logCleanDays), false, true);
-            case "ServiceRestartTool" -> serviceRestartTool.restartService(
-                    String.valueOf(params.get("serviceName")), false, true);
-            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(
-                    String.valueOf(params.get("path")), asInt(params.get("days"), tempCleanDays), false, true);
-            default -> throw new IllegalArgumentException("不支持的自动修复写工具: " + toolName);
-        };
+        throw new IllegalStateException("统一执行管线不可用，已拒绝真实写操作");
     }
 
     private Map<String, Object> writeParams(String toolName, String target, int days) {

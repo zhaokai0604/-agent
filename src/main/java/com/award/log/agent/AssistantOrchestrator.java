@@ -160,16 +160,23 @@ public class AssistantOrchestrator {
 
     /** 按意图路由分发到磁盘闭环、CPU 闭环或巡检待办确认。 */
     public RunResult run(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
+        String traceId=traceIdGenerator.nextId();
+        try (var ignored=skillRoutingAdvisor==null?null:skillRoutingAdvisor.pinForRun(traceId)) {
+            return runPinned(userMessage,surface,intentRisk,traceId);
+        }
+    }
+
+    private RunResult runPinned(String userMessage, McpToolSurface surface, RiskLevel intentRisk, String traceId) {
         OpsIntentRouter.Playbook playbook = opsIntentRouter.resolve(userMessage);
         if (playbook == OpsIntentRouter.Playbook.PATROL_CONTINUATION) {
-            return runPatrolContinuation(userMessage, surface, intentRisk);
+            return runPatrolContinuation(userMessage, surface, intentRisk,traceId);
         }
         if (playbook == OpsIntentRouter.Playbook.CPU_PRESSURE) {
-            return runCpuPressure(userMessage, surface, intentRisk);
+            return runCpuPressure(userMessage, surface, intentRisk,traceId);
         }
         long t0 = timeSource.currentTimeMillis();
-        String traceId = traceIdGenerator.nextId();
         List<Map<String, Object>> steps = auditRecorder.newSteps();
+        if (skillRoutingAdvisor != null) auditRecorder.addStructuredStep(steps, "skill_release", skillRoutingAdvisor.catalogStatus());
         auditRecorder.addCot(steps, 1, "接收", userMessage);
 
         if (surface == McpToolSurface.READ_ONLY) {
@@ -651,10 +658,10 @@ public class AssistantOrchestrator {
         return anyExecuted;
     }
 
-    private RunResult runPatrolContinuation(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
+    private RunResult runPatrolContinuation(String userMessage, McpToolSurface surface, RiskLevel intentRisk,String traceId) {
         long t0 = timeSource.currentTimeMillis();
-        String traceId = traceIdGenerator.nextId();
         List<Map<String, Object>> steps = auditRecorder.newSteps();
+        if (skillRoutingAdvisor != null) auditRecorder.addStructuredStep(steps, "skill_release", skillRoutingAdvisor.catalogStatus());
         auditRecorder.addCot(steps, 1, "接收", userMessage);
 
         if (surface == McpToolSurface.READ_ONLY) {
@@ -822,10 +829,10 @@ public class AssistantOrchestrator {
         };
     }
 
-    private RunResult runCpuPressure(String userMessage, McpToolSurface surface, RiskLevel intentRisk) {
+    private RunResult runCpuPressure(String userMessage, McpToolSurface surface, RiskLevel intentRisk,String traceId) {
         long t0 = timeSource.currentTimeMillis();
-        String traceId = traceIdGenerator.nextId();
         List<Map<String, Object>> steps = auditRecorder.newSteps();
+        if (skillRoutingAdvisor != null) auditRecorder.addStructuredStep(steps, "skill_release", skillRoutingAdvisor.catalogStatus());
         auditRecorder.addCot(steps, 1, "接收", userMessage);
 
         if (surface == McpToolSurface.READ_ONLY) {
@@ -1143,7 +1150,7 @@ public class AssistantOrchestrator {
     private String previewWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
         if (opsExecutionPipeline != null) {
             return objectMapper.writeValueAsString(opsExecutionPipeline.preview(
-                    toolName, params, instruction, "assistant").body());
+                    toolName, params, instruction, RemediationClosureSupport.executionRequester("assistant")).body());
         }
         return switch (toolName) {
             case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
@@ -1160,19 +1167,10 @@ public class AssistantOrchestrator {
     /** 统一真实写入口；管线返回的 verify/metrics 会随原始 JSON 一并进入审计与展示。 */
     private String executeWrite(String toolName, Map<String, Object> params, String instruction) throws Exception {
         if (opsExecutionPipeline != null) {
-            return objectMapper.writeValueAsString(opsExecutionPipeline.executeDirect(
-                    toolName, params, instruction, "assistant").body());
+            return RemediationClosureSupport.pipelineJson(objectMapper, opsExecutionPipeline.executeDirect(
+                    toolName, params, instruction, RemediationClosureSupport.executionRequester("assistant")));
         }
-        return switch (toolName) {
-            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(
-                    String.valueOf(params.get("path")), asInt(params.get("days"), logCleanDays), false, true);
-            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(
-                    String.valueOf(params.get("path")), asInt(params.get("days"), tempCleanDays), false, true,
-                    Boolean.TRUE.equals(params.get("removeDirectory")));
-            case "ServiceRestartTool" -> serviceRestartTool.restartService(
-                    String.valueOf(params.get("serviceName")), false, true);
-            default -> throw new IllegalArgumentException("不支持的 Agent 写工具: " + toolName);
-        };
+        throw new IllegalStateException("统一执行管线不可用，已拒绝真实写操作");
     }
 
     private Map<String, Object> writeParams(String toolName, String target, int days) {

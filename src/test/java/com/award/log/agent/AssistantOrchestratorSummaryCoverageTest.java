@@ -78,6 +78,7 @@ class AssistantOrchestratorSummaryCoverageTest {
                 workflowExecutionService, workflowInductionService, new TestRuntimePlatform(false),
                 new TestTimeSource(1_500L), new TestTraceIdGenerator("trace-summary"),
                 new DiagnosisConfidenceGate(), new SkillRoutingAdvisor(new SkillCatalogLoader()));
+        com.award.log.governance.GovernedPipelineFixture.install(orchestrator, cleanTempTool, logCleanupTool, serviceRestartTool);
         ReflectionTestUtils.setField(orchestrator, "logCleanDays", 30);
         ReflectionTestUtils.setField(orchestrator, "tempCleanDays", 7);
         ReflectionTestUtils.setField(orchestrator, "diskPressurePercent", 80.0);
@@ -256,7 +257,7 @@ class AssistantOrchestratorSummaryCoverageTest {
 
         ReflectionTestUtils.setField(orchestrator, "opsAutoRemediationService", null);
         AssistantOrchestrator.RunResult noAuto = call("runPatrolContinuation", "继续处理",
-                McpToolSurface.FULL, RiskLevel.LOW);
+                McpToolSurface.FULL, RiskLevel.LOW,"unavailable-trace");
         assertEquals("自动修复服务未启用。", noAuto.markdown());
         assertEquals("服务重启", callStaticString("actionLabel", "ServiceRestartTool"));
         assertEquals("临时文件清理", callStaticString("actionLabel", "CleanTempTool"));
@@ -417,18 +418,18 @@ class AssistantOrchestratorSummaryCoverageTest {
 
         AssistantOrchestrator.RunResult preview = (AssistantOrchestrator.RunResult)
                 ReflectionTestUtils.invokeMethod(orchestrator, "runPatrolContinuation",
-                        "继续处理", McpToolSurface.FULL, RiskLevel.MEDIUM);
+                        "继续处理", McpToolSurface.FULL, RiskLevel.MEDIUM,"patrol-summary-trace");
         assertTrue(preview.markdown().contains("待确认方案"));
 
         AssistantOrchestrator.RunResult executed = (AssistantOrchestrator.RunResult)
                 ReflectionTestUtils.invokeMethod(orchestrator, "runPatrolContinuation",
-                        "确认执行", McpToolSurface.FULL, RiskLevel.MEDIUM);
+                        "确认执行", McpToolSurface.FULL, RiskLevel.MEDIUM,"patrol-summary-trace");
         assertTrue(executed.markdown().contains("执行完成且验证通过"));
         assertTrue(executed.markdown().contains("步骤验证"));
 
         AssistantOrchestrator.RunResult failed = (AssistantOrchestrator.RunResult)
                 ReflectionTestUtils.invokeMethod(orchestrator, "runPatrolContinuation",
-                        "确认执行", McpToolSurface.FULL, RiskLevel.MEDIUM);
+                        "确认执行", McpToolSurface.FULL, RiskLevel.MEDIUM,"patrol-summary-trace");
         assertTrue(failed.markdown().contains("未完全闭环"));
         assertTrue(failed.markdown().contains("验证未通过"));
     }
