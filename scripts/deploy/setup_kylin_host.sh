@@ -24,7 +24,6 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 AGENT_USER="${AGENT_USER:-award-agent}"
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/threshcore}"
 SKIP_MARIADB="${SKIP_MARIADB:-${SKIP_MYSQL:-0}}"
-SCHEMA="${ROOT}/src/main/resources/schema.sql"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "请使用 root 或 sudo 执行本脚本" >&2
@@ -77,10 +76,6 @@ if [[ "$SKIP_MARIADB" != "1" ]]; then
     read -rsp "请输入数据库用户 ${DB_USER} 的密码: " DB_PASSWORD
     echo ""
   fi
-  if [[ ! -f "$SCHEMA" ]]; then
-    echo "错误: 未找到 $SCHEMA" >&2
-    exit 1
-  fi
   if [[ "$DB_USER" == "root" ]]; then
     db_cli -u root -p"$DB_PASSWORD" <<SQL
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -93,8 +88,8 @@ GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 SQL
   fi
-  db_cli -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$SCHEMA"
-  echo "[MariaDB] 库 ${DB_NAME} 与 schema 已就绪"
+  echo "[MariaDB] 库 ${DB_NAME} 已就绪；应用首次启动由 Flyway 建表，不导入旧 schema.sql"
+  echo "[MariaDB] 已有业务库先备份，并按 docs/deployment/版本迁移与任务恢复.md 显式接管"
 else
   echo "[MariaDB] 跳过（SKIP_MARIADB=1）"
 fi

@@ -238,7 +238,7 @@ if command -v mariadb >/dev/null 2>&1; then
   if mariadb -u"${DB_USER}" -p"${DB_PASSWORD}" -e "USE ${DB_NAME}; SHOW TABLES;" >/dev/null 2>&1; then
     echo "MariaDB 连接正常"
   else
-    echo "警告：无法连接或 USE ${DB_NAME} 失败。请先建库并导入 schema.sql"
+    echo "警告：无法连接或 USE ${DB_NAME} 失败。请先建库并核对权限；应用启动由 Flyway 迁移，旧库先按迁移文档备份并显式接管"
   fi
 else
   echo "未找到 mariadb 命令，跳过数据库连接检查"

@@ -138,7 +138,7 @@ if [[ "$SKIP_DB_CHECK" != "1" ]]; then
   if [[ -n "$DB_CLI" ]]; then
     systemctl enable --now mariadb 2>/dev/null || systemctl enable --now mysql 2>/dev/null || systemctl enable --now mysqld 2>/dev/null || true
     if ! "$DB_CLI" -u "$DB_USER" -p"$DB_PASSWORD" -e "USE ${DB_NAME}; SELECT 1;" >/dev/null 2>&1; then
-      echo "[警告] 无法连接 MariaDB (${DB_USER}@${DB_NAME})，请确认库已创建且 schema.sql 已导入" >&2
+      echo "[警告] 无法连接 MariaDB (${DB_USER}@${DB_NAME})，请确认库和权限；应用启动由 Flyway 迁移，旧库需先备份并显式接管" >&2
     else
       echo "[OK] MariaDB 连通正常"
     fi
