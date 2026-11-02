@@ -109,6 +109,9 @@ public final class McpToolParamReader {
             return;
         }
         switch (toolName) {
+            case "RecycleBinTool" -> {
+                if (operationIs(parameters, "restore", "purge")) parameters.put("dryRun", false);
+            }
             case "CleanTempTool" -> {
                 parameters.put("dryRun", false);
                 parameters.put("confirmDelete", true);

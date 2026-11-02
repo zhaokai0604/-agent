@@ -32,11 +32,12 @@ public final class ConfirmTokenHmac {
             String toolName,
             MapLikeParams params,
             String dryRunPreviewJson) {
-        if (presentedToken == null || presentedToken.isBlank()) {
+        if (!isUsableKey(hmacKey) || presentedToken == null || presentedToken.isBlank()) {
             return false;
         }
         String expected = issue(hmacKey, toolName, params, dryRunPreviewJson);
-        return expected.equals(presentedToken.trim());
+        return MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
+                presentedToken.trim().getBytes(StandardCharsets.UTF_8));
     }
 
     static String buildPayload(String toolName, MapLikeParams params, String dryRunPreviewJson) {
@@ -55,13 +56,13 @@ public final class ConfirmTokenHmac {
             byte[] hash = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hash);
         } catch (Exception e) {
-            return Integer.toHexString(raw.hashCode());
+            throw new IllegalStateException("SHA-256 不可用，拒绝签发确认凭证", e);
         }
     }
 
     private static String hmacSha256Hex(String key, String payload) {
-        if (key == null || key.isBlank()) {
-            return sha256Hex("fallback:" + payload);
+        if (!isUsableKey(key)) {
+            throw new IllegalStateException("未配置有效的确认签名密钥，拒绝签发确认凭证");
         }
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -69,8 +70,13 @@ public final class ConfirmTokenHmac {
             byte[] hash = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hash);
         } catch (Exception e) {
-            return sha256Hex("hmac-fallback:" + payload);
+            throw new IllegalStateException("确认签名失败，拒绝签发确认凭证", e);
         }
+    }
+
+    public static boolean isUsableKey(String key) {
+        return key != null && !key.isBlank()
+                && !key.trim().toUpperCase(java.util.Locale.ROOT).startsWith("CHANGE_ME");
     }
 
     /**

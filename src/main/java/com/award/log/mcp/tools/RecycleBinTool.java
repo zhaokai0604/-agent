@@ -32,11 +32,22 @@ public class RecycleBinTool {
     @Tool(name = "recycleBinOps", description = "回收站操作：list 列出、restore 按 handle 恢复、purge 清理过期")
     public String recycleBinOps(
             @ToolParam(description = "操作 list|restore|purge", required = true) String operation,
-            @ToolParam(description = "恢复句柄 handle", required = false) String handle) throws JsonProcessingException {
+            @ToolParam(description = "恢复句柄 handle", required = false) String handle,
+            @ToolParam(description = "预览，默认 true；确认后才能传 false", required = false) Boolean dryRun) throws JsonProcessingException {
         long start = System.currentTimeMillis();
         try {
             Map<String, Object> data = new LinkedHashMap<>();
             String op = operation == null ? "" : operation.trim().toLowerCase();
+            data.put("mode", "list".equals(op) ? "READ" : Boolean.FALSE.equals(dryRun) ? "EXECUTED" : "DRY-RUN");
+            if (!"list".equals(op) && !Boolean.FALSE.equals(dryRun)) {
+                if (!"restore".equals(op) && !"purge".equals(op)) {
+                    return McpToolResponses.error(objectMapper, "不支持的操作: " + operation, start);
+                }
+                data.put("operation", op);
+                data.put("handle", handle == null ? "" : handle);
+                data.put("entries", recycleBinService.listEntries());
+                return McpToolResponses.success(objectMapper, objectMapper.writeValueAsString(data), System.currentTimeMillis() - start);
+            }
             if ("list".equals(op)) {
                 data.put("entries", recycleBinService.listEntries());
             } else if ("restore".equals(op)) {
@@ -46,6 +57,7 @@ public class RecycleBinTool {
                         .findFirst()
                         .orElse("");
                 boolean ok = recycleBinService.restore(handle);
+                if (!ok) return McpToolResponses.error(objectMapper, "恢复失败：句柄无效、原路径已存在或文件不可用，未覆盖原路径", start);
                 data.put("restored", ok);
                 data.put("handle", handle);
                 data.put("originalPath", originalPath);
@@ -63,5 +75,10 @@ public class RecycleBinTool {
             log.warn("RecycleBinTool failed: {}", e.getMessage());
             return McpToolResponses.error(objectMapper, e.getMessage(), start);
         }
+    }
+
+    /** 兼容已有内部调用；工具注册和分发必须使用显式 dryRun 参数。 */
+    public String recycleBinOps(String operation, String handle) throws JsonProcessingException {
+        return recycleBinOps(operation, handle, true);
     }
 }

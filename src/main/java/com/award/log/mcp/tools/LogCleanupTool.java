@@ -85,6 +85,9 @@ public class LogCleanupTool extends AbstractCommandExecutor {
         log.info("[LogCleanup] path={} days={} dryRun={}", targetPath, targetDays, isDryRun);
 
         try {
+            if (!isDryRun && minPrivilegeExecutor.isGlobalDryRun()) {
+                return buildErrorResponse("全局演练模式已启用，未执行真实回收", startTime);
+            }
             if (!opsPathPolicy.isAllowedLogCleanupPath(targetPath)) {
                 return buildErrorResponse(opsPathPolicy.rejectReason("日志清理路径不在白名单"), startTime);
             }
@@ -116,8 +119,11 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                             "-name", "*.gz", "-o", "-name", "*.xz", "-o", "-name", "*.bz2", ")", "-mtime",
                             "+" + targetDays, "-print"),
                     120_000L);
+            var frozenCandidates=com.award.log.security.effect.FileApprovalScope.frozenCandidates();
+            if(frozenCandidates!=null) result=new AbstractCommandExecutor.CommandResult(true,String.join("\n",frozenCandidates),null,0,false);
 
             if (result.output() == null || result.output().isBlank()) {
+                com.award.log.security.effect.FileApprovalScope.candidates(List.of());
                 String data = String.format(
                         "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"message\":\"没有符合条件的陈旧日志文件\"}",
                         isDryRun ? "DRY-RUN" : "NOOP", jsonEscape(targetPath), targetDays);
@@ -131,8 +137,10 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                 }
             }
 
+            fileList.removeIf(file -> safeDeleteSupport != null && safeDeleteSupport.isRecyclePath(Path.of(file)));
             LogSafetyClassifier.FilterResult filtered = logSafetyClassifier.filterDeletable(fileList);
             List<String> deletable = filtered.allowed();
+            com.award.log.security.effect.FileApprovalScope.candidates(deletable.stream().map(Path::of).toList());
             int protectedSkipped = fileList.size() - deletable.size();
 
             int filesDeleted = 0;
@@ -181,7 +189,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                             "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
                 }
                 data = String.format(
-                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"protectedSamples\":%s,\"protectedFilesPreserved\":%s,\"maxScanDepth\":%d}",
+                        "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesRecycled\":%d,\"bytesFreed\":0,\"bytesFreedMeasured\":false,\"recycledCount\":%d,\"recycleHandles\":%s,\"protectedSamples\":%s,\"protectedFilesPreserved\":%s,\"maxScanDepth\":%d}",
                         jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
                         filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles),
                         toJsonArray(truncateDenied(filtered.deniedReasons(), 8)),
@@ -198,7 +206,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
     }
 
     private String cleanupLogsWindows(String targetPath, int targetDays, boolean isDryRun, long startTime)
-            throws JsonProcessingException {
+            throws java.io.IOException {
         String safe = targetPath.replace("'", "''");
         int maxDepth = Math.max(1, remediationProperties.getMaxScanDepth());
         String ps = "$p='" + safe + "';$d=" + targetDays
@@ -223,7 +231,11 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                 log.warn("解析 Windows 日志清理列表失败: {}", e.getMessage());
             }
         }
+        var approvedCandidates=com.award.log.security.effect.FileApprovalScope.frozenCandidates();
+        if(approvedCandidates!=null) fileList=new ArrayList<>(approvedCandidates);
+        fileList.removeIf(file -> safeDeleteSupport != null && safeDeleteSupport.isRecyclePath(Path.of(file)));
         if (fileList.isEmpty()) {
+            com.award.log.security.effect.FileApprovalScope.candidates(List.of());
             String data = String.format(
                     "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"maxScanDepth\":%d,\"platform\":\"windows\"}",
                     isDryRun ? "DRY-RUN" : "NOOP", jsonEscape(targetPath), targetDays, maxDepth);
@@ -231,6 +243,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
         }
         LogSafetyClassifier.FilterResult filtered = logSafetyClassifier.filterDeletable(fileList);
         List<String> deletable = filtered.allowed();
+            com.award.log.security.effect.FileApprovalScope.candidates(deletable.stream().map(Path::of).toList());
         int protectedSkipped = fileList.size() - deletable.size();
 
         int filesDeleted = 0;
@@ -275,7 +288,7 @@ public class LogCleanupTool extends AbstractCommandExecutor {
                         "未删除任何日志文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);
             }
             data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesFreed\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"protectedSamples\":%s,\"protectedFilesPreserved\":%s,\"maxScanDepth\":%d,\"platform\":\"windows\"}",
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"deletableCount\":%d,\"protectedSkipped\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"bytesRecycled\":%d,\"bytesFreed\":0,\"bytesFreedMeasured\":false,\"recycledCount\":%d,\"recycleHandles\":%s,\"protectedSamples\":%s,\"protectedFilesPreserved\":%s,\"maxScanDepth\":%d,\"platform\":\"windows\"}",
                     jsonEscape(targetPath), targetDays, fileList.size(), deletable.size(), protectedSkipped,
                     filesDeleted, lockedSkipped, bytesFreed, recycleHandles.size(), toJsonArray(recycleHandles),
                     toJsonArray(truncateDenied(filtered.deniedReasons(), 8)),

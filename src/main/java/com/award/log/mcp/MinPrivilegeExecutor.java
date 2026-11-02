@@ -120,6 +120,10 @@ public class MinPrivilegeExecutor extends AbstractCommandExecutor {
         return minPrivilegeEnabled;
     }
 
+    public boolean isGlobalDryRun() {
+        return opsDryRunProperties != null && opsDryRunProperties.isGlobalDryRun();
+    }
+
     private CommandResult tryGlobalDryRun(List<String> command) {
         if (opsDryRunProperties == null || !opsDryRunProperties.isGlobalDryRun()) {
             return null;

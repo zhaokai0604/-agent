@@ -55,7 +55,7 @@ public final class ChatToolExecutionTracker {
         if (body == null || body.isEmpty()) return;
         Map<String, Object> safe = new java.util.LinkedHashMap<>();
         for (String key : List.of("confirmationId", "capabilityToken", "confirmToken",
-                "dryRunPreviewHash", "expiresAtMs", "toolName", "expectedEffect", "recover")) {
+                "dryRunPreviewHash", "expiresAtMs", "toolName", "expectedEffect", "recover", "approvalObjects", "approvedTargets")) {
             if (body.containsKey(key)) safe.put(key, body.get(key));
         }
         if (!safe.isEmpty()) PENDING_CONFIRMATIONS.get().add(Map.copyOf(safe));

@@ -26,6 +26,9 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import com.award.log.security.effect.FileApprovalManifest;
+import com.award.log.security.effect.FileApprovalScope;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * PEP 执行管线：Plan/Preview → Approval → Execute → Verify → Recover 句柄。
@@ -46,6 +49,49 @@ public class OpsExecutionPipeline {
     private final OpsPepProperties opsPepProperties;
     private final ObjectMapper objectMapper;
 
+    private final Map<String,BoundFiles> filePreviews = new ConcurrentHashMap<>();
+    private final Map<String,BoundFiles> fileApprovals = new ConcurrentHashMap<>();
+    private static final int MAX_OBJECTS=2000;
+    private static final long MAX_HASH_BYTES=256L*1024*1024;
+    private record BoundFiles(String tool,String owner,String params,FileApprovalManifest manifest,long expires) { }
+    private boolean bindsFiles(String tool,Map<String,Object> params) {
+        if(!opsPepProperties.isEnabled()) return false;
+        ToolEffect effect=toolEffectResolver.resolve(tool,params);
+        return "PATH".equals(effect.targetType()) && (effect.action()==com.award.log.security.effect.EffectAction.DELETE
+                || effect.action()==com.award.log.security.effect.EffectAction.TRUNCATE);
+    }
+    private void purgeFileSnapshots() {
+        long now=System.currentTimeMillis();
+        filePreviews.values().removeIf(value->value.expires()<now);
+        fileApprovals.values().removeIf(value->value.expires()<now);
+    }
+    private String previewKey(String json) {
+        try {
+            var node=objectMapper.readTree(json);
+            if(node!=null && node.has("dryRunPreview")) return ConfirmTokenHmac.hashPreview(node.path("dryRunPreview").asText());
+        } catch(Exception ignored) { }
+        return ConfirmTokenHmac.hashPreview(json);
+    }
+    private Map<String,Object> executeFileBound(String tool,Map<String,Object> params,long start,String trace,
+            String instruction,boolean confirmed,FileApprovalManifest manifest) {
+        try(var scope=manifest==null?null:FileApprovalScope.execute(manifest,MAX_OBJECTS,MAX_HASH_BYTES)) {
+            Map<String,Object> result=confirmed
+                    ?mcpExecutionService.execute(tool,params,start,trace,instruction,true)
+                    :mcpExecutionService.execute(tool,params,start,trace,instruction);
+            if(scope!=null && !scope.selected() && Boolean.TRUE.equals(result.get("success")))
+                return new LinkedHashMap<>(Map.of("success",false,"securityCode","APPROVED_OBJECTS_NOT_CHECKED","error","工具未复核审批对象，拒绝记录成功"));
+            if(scope!=null && !scope.failure().isBlank()) {
+                result=new LinkedHashMap<>(result); result.put("success",false);
+                result.put("securityCode","APPROVED_OBJECT_EXECUTION_INCOMPLETE");
+                result.put("error",scope.failure()); result.put("partialExecution",true);
+            }
+            if(manifest!=null) result.put("approvalObjects",manifest.summary());
+            return result;
+        } catch(java.io.IOException e) {
+            return new LinkedHashMap<>(Map.of("success",false,"securityCode","APPROVED_OBJECTS_CHANGED","error",e.getMessage()));
+        }
+    }
+
     public PipelineResult preview(String toolName, Map<String, Object> parameters, String userMessage, String requester) {
         Map<String, Object> params = dryRunParams(toolName, parameters);
         long start = System.currentTimeMillis();
@@ -64,8 +110,28 @@ public class OpsExecutionPipeline {
             return PipelineResult.blocked(decision, traceId, start, toolName, effect, fingerprint);
         }
 
-        Map<String, Object> exec = mcpExecutionService.execute(toolName, params, start, traceId, instruction);
+        Map<String, Object> exec;
+        boolean bind=bindsFiles(toolName,params);
+        FileApprovalManifest manifest=null;
+        try(var capture=bind?FileApprovalScope.capture(MAX_OBJECTS,MAX_HASH_BYTES):null) {
+            exec=mcpExecutionService.execute(toolName,params,start,traceId,instruction);
+            if(capture!=null) manifest=capture.manifest();
+        }
+        if(bind && Boolean.TRUE.equals(exec.get("success")) && manifest==null)
+            return PipelineResult.error("预览未产生完整审批对象清单，请使用支持对象绑定的清理工具",traceId,start);
+        if(manifest!=null) {
+            exec=new LinkedHashMap<>(exec);
+            exec.put("approvalObjects",manifest.summary()); exec.put("previewObjectId",newTraceId());
+        }
         String previewJson = serializePreview(exec);
+        if(manifest!=null && Boolean.TRUE.equals(exec.get("success"))) {
+            synchronized(filePreviews) {
+                purgeFileSnapshots();
+                if(filePreviews.size()+fileApprovals.size()>=128) return PipelineResult.error("待确认对象快照已达上限，请稍后重试",traceId,start);
+                filePreviews.put(ConfirmTokenHmac.hashPreview(previewJson),new BoundFiles(toolName,requester,
+                        EffectFingerprint.canonicalParams(params),manifest,System.currentTimeMillis()+opsPepProperties.getConfirmTtlMs()));
+            }
+        }
         WriteRemediationContract contract = RemediationContractFactory.build(toolName, parameters, effect, requester);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", Boolean.TRUE.equals(exec.get("success")));
@@ -82,6 +148,7 @@ public class OpsExecutionPipeline {
         body.put("approval", contract.approval().toMap());
         body.put("duration", System.currentTimeMillis() - start);
         body.put("data", exec.get("data"));
+        if(manifest!=null) body.put("approvalObjects",manifest.summary());
         body.put("metricsBefore", RemediationMetricsCollector.fromResponse(
                 objectMapper, toolName, exec, "preview"));
         if (!Boolean.TRUE.equals(exec.get("success"))) {
@@ -123,6 +190,18 @@ public class OpsExecutionPipeline {
             return PipelineResult.blocked(decision, traceId, start, toolName, effect, fingerprint);
         }
 
+        BoundFiles bound=null;
+        if(bindsFiles(toolName,params)) {
+            synchronized(filePreviews) {
+            purgeFileSnapshots();
+            String key=previewKey(dryRunPreviewJson);
+            bound=filePreviews.get(key);
+            if(bound==null || !bound.tool().equals(toolName) || !java.util.Objects.equals(bound.owner(),requester)
+                    || !bound.params().equals(EffectFingerprint.canonicalParams(params)) || !filePreviews.remove(key,bound))
+                return PipelineResult.error("缺少与当前账户及参数绑定的对象预览，请重新预览",traceId,start);
+            fileApprovals.put(traceId,bound);
+            }
+        }
         long ttl = opsPepProperties.getConfirmTtlMs();
         WriteCapabilityToken token = WriteCapabilityToken.issue(
                 fingerprint, toolName, requester, ttl, dryRunPreviewJson,
@@ -141,6 +220,8 @@ public class OpsExecutionPipeline {
         body.put("confirmToken", token.confirmTokenHmac());
         body.put("dryRunPreviewHash", token.dryRunPreviewHash());
         body.put("needConfirm", true);
+        if(bound!=null) { body.put("approvalObjects",bound.manifest().summary());
+            body.put("approvedTargets",bound.manifest().targets().keySet().stream().sorted().toList()); }
         if (sessionId != null && !sessionId.isBlank()) {
             body.put("sessionId", sessionId);
         }
@@ -181,6 +262,7 @@ public class OpsExecutionPipeline {
             return PipelineResult.error(mapTakeStatus(take.status()), confirmationId, start);
         }
         McpPendingConfirmationService.PendingConfirmation pending = take.pending();
+        BoundFiles bound=fileApprovals.remove(pending.confirmationId());
         String traceId = pending.confirmationId();
         String toolName = pending.toolName();
         Map<String, Object> parameters = new HashMap<>(pending.parameters());
@@ -198,32 +280,39 @@ public class OpsExecutionPipeline {
                 toolName,
                 () -> EffectFingerprint.canonicalParams(parameters),
                 dryRunPreview)) {
-            return PipelineResult.error("HMAC 确认令牌无效或预览已变更，请重新预览", traceId, start);
+            return PipelineResult.error("HMAC 确认令牌无效或预览已变更，请重新预览", traceId, start).consumed();
         }
 
         String recomputed = EffectFingerprint.of(toolName, parameters, effect);
         if (!recomputed.equals(fingerprint)) {
-            return PipelineResult.error("效果指纹校验失败，请重新预览确认", traceId, start);
+            return PipelineResult.error("效果指纹校验失败，请重新预览确认", traceId, start).consumed();
         }
 
-        SessionRiskBudgetService.BudgetDecision budget = sessionRiskBudgetService.check(requester, effect);
+        if(bindsFiles(toolName,parameters) && (bound==null || bound.expires()<System.currentTimeMillis()))
+            return PipelineResult.error("审批对象快照已失效，请重新预览",traceId,start).consumed();
+        McpToolParamReader.forceConfirmedWriteToolParams(toolName, parameters);
+        SessionRiskBudgetService.BudgetDecision budget = (WriteToolResultSupport.requestedRealWrite(parameters)
+                ? sessionRiskBudgetService.reserve(requester, effect)
+                : sessionRiskBudgetService.check(requester, effect));
         if (!budget.allowed()) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("success", false);
             body.put("error", budget.message());
             body.put("securityCode", budget.code());
-            return new PipelineResult(body, traceId, start, toolName, effect, fingerprint, dryRunPreview);
+            return new PipelineResult(body, traceId, start, toolName, effect, fingerprint, dryRunPreview).consumed();
         }
 
         McpToolParamReader.forceConfirmedWriteToolParams(toolName, parameters);
         GateDecision decision = mcpSecurityService.evaluatePostConfirm(
                 toolName, parameters, pending.userMessage());
         if (decision.getType() == GateDecision.Type.BLOCK) {
-            return PipelineResult.blocked(decision, traceId, start, toolName, effect, fingerprint);
+            return PipelineResult.blocked(decision, traceId, start, toolName, effect, fingerprint).consumed();
         }
 
-        Map<String, Object> exec = mcpExecutionService.execute(
-                toolName, parameters, start, traceId, pending.userInstruction(), true);
+        PipelineResult auditFailure = requireWriteAudit(toolName, parameters, effect, fingerprint, requester, decision, traceId, start);
+        if (auditFailure != null) return auditFailure.consumed();
+        Map<String, Object> exec = executeFileBound(toolName,parameters,start,traceId,pending.userInstruction(),true,
+                bound==null?null:bound.manifest());
         exec.put("phase", "execute");
         exec.put("traceId", traceId);
         if (!pending.sessionId().isBlank()) {
@@ -231,7 +320,6 @@ public class OpsExecutionPipeline {
         }
         if (Boolean.TRUE.equals(exec.get("success"))
                 && WriteToolResultSupport.requestedRealWrite(parameters)) {
-            sessionRiskBudgetService.consume(requester, effect);
             exec.put("riskBudget", sessionRiskBudgetService.summary(requester));
         }
         WriteRemediationContract contract = RemediationContractFactory.build(
@@ -247,7 +335,7 @@ public class OpsExecutionPipeline {
         exec.put("recover", verifyReport.getOrDefault("recover", contract.recover().toMap()));
         applyRemediationSuccessGate(exec, verifyReport, parameters);
         mcpAuditService.persistSuccess(traceId, pending.userInstruction(), decision, toolName, exec, start, parameters);
-        return new PipelineResult(exec, traceId, start, toolName, effect, fingerprint, dryRunPreview);
+        return new PipelineResult(exec, traceId, start, toolName, effect, fingerprint, dryRunPreview).consumed();
     }
 
     /**
@@ -298,13 +386,16 @@ public class OpsExecutionPipeline {
             return PipelineResult.blocked(decision, traceId, start, toolName, effect, fingerprint);
         }
         if (decision.getType() == GateDecision.Type.NEED_CONFIRM) {
-            Map<String, Object> dryParams = dryRunParams(toolName, parameters);
-            Map<String, Object> dryExec = mcpExecutionService.execute(toolName, dryParams, start, traceId, instruction);
-            String previewJson = serializePreview(dryExec);
-            return propose(toolName, parameters, userMessage, requester, previewJson, "");
+            PipelineResult candidatePreview=preview(toolName,parameters,userMessage,requester);
+            if(!Boolean.TRUE.equals(candidatePreview.body().get("success"))) return candidatePreview;
+            String previewJson=candidatePreview.dryRunPreviewJson();
+            var context = com.award.log.security.OpsSecurityContext.get();
+            return propose(toolName, parameters, userMessage, requester, previewJson, context == null ? "" : context.getSessionId());
         }
 
-        SessionRiskBudgetService.BudgetDecision budget = sessionRiskBudgetService.check(requester, effect);
+        SessionRiskBudgetService.BudgetDecision budget = (WriteToolResultSupport.requestedRealWrite(parameters)
+                ? sessionRiskBudgetService.reserve(requester, effect)
+                : sessionRiskBudgetService.check(requester, effect));
         if (!budget.allowed()) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("success", false);
@@ -314,18 +405,28 @@ public class OpsExecutionPipeline {
         }
 
         String beforePreviewJson = "";
+        FileApprovalManifest directManifest=null;
         if (WriteToolResultSupport.requestedRealWrite(parameters)) {
-            Map<String, Object> beforePreview = mcpExecutionService.execute(
-                    toolName, dryRunParams(toolName, parameters), start, traceId,
-                    instruction + " | pre-execution metrics");
-            beforePreviewJson = serializePreview(beforePreview);
+            if(bindsFiles(toolName,parameters)) {
+                PipelineResult before=preview(toolName,parameters,userMessage,requester);
+                if(!Boolean.TRUE.equals(before.body().get("success"))) return before;
+                beforePreviewJson=before.dryRunPreviewJson();
+                BoundFiles captured=filePreviews.remove(previewKey(beforePreviewJson));
+                if(captured==null) return PipelineResult.error("自动执行缺少对象快照",traceId,start);
+                directManifest=captured.manifest();
+            } else {
+                Map<String, Object> beforePreview = mcpExecutionService.execute(
+                        toolName, dryRunParams(toolName, parameters), start, traceId,instruction + " | pre-execution metrics");
+                beforePreviewJson = serializePreview(beforePreview);
+            }
         }
-        Map<String, Object> exec = mcpExecutionService.execute(toolName, parameters, start, traceId, instruction);
+        PipelineResult auditFailure = requireWriteAudit(toolName, parameters, effect, fingerprint, requester, decision, traceId, start);
+        if (auditFailure != null) return auditFailure;
+        Map<String, Object> exec = executeFileBound(toolName,parameters,start,traceId,instruction,false,directManifest);
         exec.put("traceId", traceId);
         exec.put("phase", "execute");
         if (Boolean.TRUE.equals(exec.get("success"))
                 && WriteToolResultSupport.requestedRealWrite(parameters)) {
-            sessionRiskBudgetService.consume(requester, effect);
             exec.put("riskBudget", sessionRiskBudgetService.summary(requester));
         }
         WriteRemediationContract contract = RemediationContractFactory.build(
@@ -373,6 +474,21 @@ public class OpsExecutionPipeline {
         }
     }
 
+    private PipelineResult requireWriteAudit(String toolName, Map<String, Object> parameters, ToolEffect effect,
+            String fingerprint, String requester, GateDecision decision, String traceId, long start) {
+        if (!effect.writeEffect() || !WriteToolResultSupport.requestedRealWrite(parameters)) return null;
+        try {
+            mcpAuditService.persistWriteIntent(traceId, toolName, parameters, fingerprint, requester, decision);
+            return null;
+        } catch (RuntimeException unavailable) {
+            Map<String,Object> body = new LinkedHashMap<>();
+            body.put("success", false); body.put("traceId", traceId); body.put("phase", "audit");
+            body.put("securityCode", "AUDIT_UNAVAILABLE"); body.put("writeStarted", false);
+            body.put("error", "执行前审计未能持久保存，未调用写工具；恢复审计后请重新预览确认");
+            return new PipelineResult(body, traceId, start, toolName, effect, fingerprint, "");
+        }
+    }
+
     private Map<String, Object> dryRunParams(String toolName, Map<String, Object> parameters) {
         Map<String, Object> params = new HashMap<>(parameters == null ? Map.of() : parameters);
         params.put("dryRun", true);
@@ -409,6 +525,10 @@ public class OpsExecutionPipeline {
         } catch (Exception e) {
             log.warn("执行后指标复测失败 tool={} traceId={}: {}", toolName, traceId, e.getMessage());
             afterResponse = Map.of("success", false, "error", e.getMessage());
+        }
+        if (Boolean.TRUE.equals(parameters.get("removeDirectory")) && parameters.get("path") != null
+                && java.nio.file.Files.notExists(java.nio.file.Path.of(String.valueOf(parameters.get("path"))), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            afterResponse = Map.of("success", true, "data", Map.of("mode", "DRY-RUN", "filesFound", 0, "deletableCount", 0));
         }
         Map<String, Object> after = RemediationMetricsCollector.fromResponse(
                 objectMapper, toolName, afterResponse, "post-execution-probe");
@@ -481,6 +601,11 @@ public class OpsExecutionPipeline {
             ToolEffect effect,
             String effectFingerprint,
             String dryRunPreviewJson) {
+
+        PipelineResult consumed() {
+            body.put("confirmationConsumed", true);
+            return this;
+        }
 
         static PipelineResult error(String message, String traceId, long start) {
             Map<String, Object> body = new LinkedHashMap<>();

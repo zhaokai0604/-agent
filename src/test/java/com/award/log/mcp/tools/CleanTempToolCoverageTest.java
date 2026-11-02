@@ -104,41 +104,18 @@ class CleanTempToolCoverageTest {
     }
 
     @Test
-    void directoryTreePreviewDeleteAndSimulationAreExplicit(@TempDir Path root) throws Exception {
+    void directoryTreePreviewAndUnavailableRecycleAreExplicit(@TempDir Path root) throws Exception {
         Path child = Files.createDirectories(root.resolve("child"));
         Files.writeString(child.resolve("one.tmp"), "one");
         MinPrivilegeExecutor min = mock(MinPrivilegeExecutor.class);
         CleanTempTool tool = tool(root, min, null);
-        when(min.executeSafely(anyList(), anyLong())).thenReturn(command(true,
-                "{\"exists\":true,\"entries\":1,\"bytes\":3}"));
         JsonNode preview = mapper().readTree(tool.cleanTempFiles(child.toString(), 0, true, false, true));
         assertTrue(preview.path("success").asBoolean(false));
-        assertEquals(1, mapper().readTree(preview.path("data").asText()).path("preview").path("entries").asInt());
-
-        Path simulated = Files.createDirectories(root.resolve("simulated"));
-        when(min.executeSafely(anyList(), anyLong())).thenAnswer(invocation -> {
-            String joined = String.join(" ", invocation.<List<String>>getArgument(0));
-            if (joined.contains("New-Item")) {
-                return command(true, "OK");
-            }
-            return command(true, "[DRY-RUN]");
-        });
-        JsonNode simulatedResponse = mapper().readTree(
-                tool.cleanTempFiles(simulated.toString(), 0, false, true, true));
-        assertFalse(simulatedResponse.path("success").asBoolean(true));
-        assertTrue(simulatedResponse.path("error").asText().contains("演练"));
-
-        Path missing = root.resolve("missing");
-        when(min.executeSafely(anyList(), anyLong())).thenAnswer(invocation -> {
-            String joined = String.join(" ", invocation.<List<String>>getArgument(0));
-            if (joined.contains("New-Item")) {
-                return command(true, "OK");
-            }
-            return command(false, "", "not found");
-        });
-        JsonNode failed = mapper().readTree(tool.cleanTempFiles(missing.toString(), 0, false, true, true));
-        assertTrue(failed.path("success").asBoolean(false));
-        assertEquals("WARN", failed.path("status").asText());
+        assertEquals(1, mapper().readTree(preview.path("data").asText()).path("filesInDirectory").asInt());
+        when(min.executeSafely(anyList(), anyLong())).thenReturn(command(true, "OK"));
+        JsonNode result = mapper().readTree(tool.cleanTempFiles(child.toString(), 0, false, true, true));
+        assertFalse(result.path("success").asBoolean(true));
+        assertTrue(Files.exists(child.resolve("one.tmp")));
     }
 
     @Test

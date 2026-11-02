@@ -184,7 +184,7 @@ public abstract class AbstractCommandExecutor {
             attempts++;
             try {
                 CommandResult result = doExecute(command, perAttemptTimeout);
-                if (result.success() || attempts > MAX_RETRIES) {
+                if (result.success() || result.timeout() || !isRetryableRead(command) || attempts > MAX_RETRIES) {
                     return result;
                 }
                 log.warn("命令执行失败，重试 {}/{}: {}", attempts, MAX_RETRIES, command);
@@ -195,6 +195,15 @@ public abstract class AbstractCommandExecutor {
             }
         }
         return new CommandResult(false, null, "max retries exceeded", -1, false);
+    }
+
+    /** 仅明确只读命令允许重试；写命令和结果不明的超时均只执行一次。 */
+    static boolean isRetryableRead(List<String> command) {
+        if (command == null || command.isEmpty()) return false;
+        String executable = command.get(0);
+        if (java.util.Set.of("df", "du", "cat", "tail", "head", "uptime", "free", "ps", "whoami", "uname").contains(executable)) return true;
+        return "systemctl".equals(executable) && command.size() > 1
+                && java.util.Set.of("status", "show", "is-active", "is-enabled").contains(command.get(1));
     }
 
     private CommandResult doExecute(List<String> command, long timeoutMillis) {
@@ -223,6 +232,9 @@ public abstract class AbstractCommandExecutor {
             } else {
                 boolean finished = process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS);
                 if (!finished) {
+                    process.descendants().forEach(child -> {
+                        try { child.destroyForcibly(); } catch (RuntimeException ignored) { }
+                    });
                     process.destroyForcibly();
                     awaitDrain(stdoutFuture, stderrFuture);
                     log.warn("命令执行超时 ({} ms): {}", timeoutMillis, command);

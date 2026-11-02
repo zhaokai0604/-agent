@@ -68,7 +68,8 @@ public class ToolEffectResolver {
             case "RecycleBinTool" -> {
                 String op = firstString(parameters, "operation", "op").toLowerCase(Locale.ROOT);
                 if (ToolOperationPolicy.isWriteOperation(tool, parameters)) {
-                    yield writePath(EffectAction.DELETE, firstString(parameters, "handle", "path"), "DELETE_PATH");
+                    yield new ToolEffect(EffectAction.UNKNOWN_WRITE, "RECYCLE", firstString(parameters, "handle", "path"),
+                            "restore".equals(op) ? 3 : 9, true, "restore".equals(op) ? "RESTORE_PATH" : "PURGE_RECYCLE");
                 }
                 yield ToolEffect.observe("RECYCLE", op.isBlank() ? "list" : op);
             }

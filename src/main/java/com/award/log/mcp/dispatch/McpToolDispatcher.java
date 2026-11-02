@@ -175,7 +175,8 @@ public class McpToolDispatcher {
                         getString(parameters, "namespace")));
                 case "RecycleBinTool" -> McpToolDispatchResult.ok(recycleBinTool.recycleBinOps(
                         getString(parameters, "operation"),
-                        getString(parameters, "handle")));
+                        getString(parameters, "handle"),
+                        getBoolean(parameters, "dryRun")));
                 default -> {
                     log.warn("未知的 MCP 工具: {}", toolName);
                     yield McpToolDispatchResult.fail("未知的工具: " + toolName);

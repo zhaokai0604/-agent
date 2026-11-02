@@ -136,7 +136,6 @@ public class McpPendingConfirmationService {
             }
             String normalizedSessionId = normalizeSessionId(sessionId);
             if (!existing.sessionId().isBlank()
-                    && !normalizedSessionId.isBlank()
                     && !existing.sessionId().equals(normalizedSessionId)) {
                 holder.status = TakeStatus.SESSION_MISMATCH;
                 return existing;

@@ -3,6 +3,7 @@ package com.award.log.service.impl;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.mcp.WriteToolResultSupport;
 import com.award.log.mcp.dispatch.McpToolParamReader;
+import com.award.log.governance.OpsExecutionPipeline;
 import com.award.log.security.McpInvocationSecurityGate.GateDecision;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.service.OpsAuditTraceService;
@@ -30,10 +31,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
- * Runbook 审批流：提交 → 批准/拒绝 → 经 MCP 安全门执行写工具。
+ * Runbook 审批流：提交 → 对象预览与批准 → 统一管线执行与验证。
  * <p>
  * 持久化到 {@code ops_runbook_approval}，进程内 cache 加速列表；
- * 执行前会 {@code forceConfirmedWrite} 并走二次安全评估，BLOCK 则不落地。
+ * 批准凭证仅在当前进程有效；数据库领取执行权后才可调用管线，回执丢失不重放。
  */
 @Slf4j
 @Service
@@ -56,6 +57,55 @@ public class RunbookApprovalService {
     private final OpsAuditTraceService opsAuditTraceService;
     private final OpsPathPolicy opsPathPolicy;
     private final JdbcTemplate jdbcTemplate;
+    /** Production runbooks must use the same governed pipeline as HTTP/MCP/AgentTeams. */
+    private final OpsExecutionPipeline executionPipeline;
+    private record ApprovalTicket(String actor, String confirmationId, String capabilityToken,
+                                  String confirmToken, String parameters, long expiresAt) {}
+    private final Map<Long, ApprovalTicket> approvalTickets = new ConcurrentHashMap<>();
+
+    /** Administrative review never grants another execution capability. */
+    public synchronized Map<String, Object> reconcile(long id, String expectedTraceId, String outcome,
+            String evidence, String confirmCode, boolean externalEffectsReviewed, Object reviewer) {
+        if (!"核对结案".equals(confirmCode) || !externalEffectsReviewed) {
+            throw new IllegalArgumentException("必须核对外部影响并输入核对结案");
+        }
+        if (!java.util.Set.of("EFFECT_CONFIRMED", "RECOVERED", "NO_EFFECT", "UNKNOWN").contains(outcome == null ? "" : outcome)) {
+            throw new IllegalArgumentException("Unsupported manual review outcome");
+        }
+        if (evidence == null || evidence.isBlank()) throw new IllegalArgumentException("核对证据不能为空");
+        var privacy = new com.award.log.agent.team.TeamDataPolicy(objectMapper);
+        privacy.bounded(evidence, 8000);
+        if ("unknown".equals(asActor(reviewer)) || asActor(reviewer).isBlank()) {
+            throw new IllegalArgumentException("Reviewer identity is required");
+        }
+        Map<String, Object> item = loadForMutation(id);
+        ensureStatus(item, "EXECUTING", "Only unresolved executions can be manually closed");
+        if (expectedTraceId == null || !expectedTraceId.equals(item.get("traceId"))) {
+            throw new IllegalStateException("Execution trace changed; reload before reviewing");
+        }
+        Map<String, Object> review = new LinkedHashMap<>();
+        review.put("reviewer", asActor(reviewer));
+        review.put("reviewedAt", System.currentTimeMillis());
+        review.put("executionTraceId", expectedTraceId);
+        review.put("outcome", outcome);
+        review.put("evidence", privacy.redact(evidence));
+        review.put("source", "HUMAN_REVIEW");
+        review.put("automaticVerification", false);
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (item.get("mcpResult") != null) result.put("previousResult", item.get("mcpResult"));
+        result.put("manualReview", review);
+        String json = privacy.safe(result);
+        // Evidence and the terminal state commit in the same SQL statement.
+        int changed = jdbcTemplate.update("UPDATE ops_runbook_approval SET status='MANUALLY_CLOSED', "
+                        + "result_code='MANUAL_REVIEW',mcp_result_json=?,execution_message=? "
+                        + "WHERE id=? AND status='EXECUTING' AND trace_id=?",
+                json, "人工核对结案；该记录不授予重放权限，也不证明原工作线程已停止", id, expectedTraceId);
+        if (changed != 1) throw new IllegalStateException("Runbook state changed; reload before reviewing");
+        approvalTickets.remove(id);
+        var closed = loadForMutation(id);
+        cache.put(id, mutableCopy(closed));
+        return snapshot(closed);
+    }
 
     public RunbookApprovalService(
             McpExecutionService mcpExecutionService,
@@ -65,6 +115,20 @@ public class RunbookApprovalService {
             OpsAuditTraceService opsAuditTraceService,
             OpsPathPolicy opsPathPolicy,
             JdbcTemplate jdbcTemplate) {
+        this(mcpExecutionService, mcpSecurityService, mcpToolCatalog, objectMapper,
+                opsAuditTraceService, opsPathPolicy, jdbcTemplate, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RunbookApprovalService(
+            McpExecutionService mcpExecutionService,
+            McpSecurityService mcpSecurityService,
+            McpToolCatalog mcpToolCatalog,
+            ObjectMapper objectMapper,
+            OpsAuditTraceService opsAuditTraceService,
+            OpsPathPolicy opsPathPolicy,
+            JdbcTemplate jdbcTemplate,
+            OpsExecutionPipeline executionPipeline) {
         this.mcpExecutionService = mcpExecutionService;
         this.mcpSecurityService = mcpSecurityService;
         this.mcpToolCatalog = mcpToolCatalog;
@@ -72,11 +136,11 @@ public class RunbookApprovalService {
         this.opsAuditTraceService = opsAuditTraceService;
         this.opsPathPolicy = opsPathPolicy;
         this.jdbcTemplate = jdbcTemplate;
+        this.executionPipeline = executionPipeline;
     }
 
     @PostConstruct
     void init() {
-        ensureTable();
         initializeSequence();
         warmCache();
     }
@@ -128,21 +192,45 @@ public class RunbookApprovalService {
         return snapshot(item);
     }
 
-    /** 仅 PENDING 可批准；不立刻执行。 */
-    public Map<String, Object> approve(long id, Object approver) {
-        Map<String, Object> item = mutableCopy(getById(id));
-        ensureStatus(item, STATUS_PENDING, "Only pending runbooks can be approved");
+    /** 未执行的工单可批准或重新批准；固定当前对象预览，不立刻执行。 */
+    public synchronized Map<String, Object> approve(long id, Object approver) {
+        Map<String, Object> item = loadForMutation(id);
+        String status = String.valueOf(item.get("status"));
+        if (!STATUS_PENDING.equals(status) && !STATUS_APPROVED.equals(status)) {
+            throw new IllegalStateException("Only pending or unexecuted approved runbooks can be approved");
+        }
+        if (executionPipeline == null) throw new IllegalStateException("Governed execution pipeline is required");
+        String actor = asActor(approver);
+        String tool = String.valueOf(item.getOrDefault("toolName", ""));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> params = new LinkedHashMap<>((Map<String, Object>) item.get("parameters"));
+        McpToolParamReader.forceConfirmedWriteToolParams(tool, params);
+        String message = "[RUNBOOK] " + item.get("title");
+        var preview = executionPipeline.preview(tool, params, message, actor);
+        if (preview.body() == null || !Boolean.TRUE.equals(preview.body().get("success"))) {
+            throw new IllegalStateException("Runbook preview failed; approval was not granted");
+        }
+        var proposal = executionPipeline.propose(tool, params, message, actor, preview.dryRunPreviewJson());
+        if (proposal.body() == null || !Boolean.TRUE.equals(proposal.body().get("needConfirm"))) {
+            throw new IllegalStateException("Runbook approval ticket was not issued");
+        }
+        var body = proposal.body();
+        ApprovalTicket ticket = new ApprovalTicket(actor, String.valueOf(body.get("confirmationId")),
+                String.valueOf(body.get("capabilityToken")), String.valueOf(body.get("confirmToken")),
+                toJson(params), ((Number) body.get("expiresAtMs")).longValue());
         item.put("status", STATUS_APPROVED);
         item.put("approver", asActor(approver));
         item.put("approvedAt", System.currentTimeMillis());
+        item.put("traceId", ticket.confirmationId());
         persistExisting(item);
         cache.put(id, mutableCopy(item));
+        approvalTickets.put(id, ticket);
         return snapshot(item);
     }
 
     /** PENDING 或 APPROVED 可拒绝。 */
-    public Map<String, Object> reject(long id, Object approver, String reason) {
-        Map<String, Object> item = mutableCopy(getById(id));
+    public synchronized Map<String, Object> reject(long id, Object approver, String reason) {
+        Map<String, Object> item = loadForMutation(id);
         String status = String.valueOf(item.get("status"));
         if (!STATUS_PENDING.equals(status) && !STATUS_APPROVED.equals(status)) {
             throw new IllegalStateException("Only pending or approved runbooks can be rejected");
@@ -154,15 +242,16 @@ public class RunbookApprovalService {
         item.put("approvedAt", System.currentTimeMillis());
         persistExisting(item);
         cache.put(id, mutableCopy(item));
+        approvalTickets.remove(id);
         return snapshot(item);
     }
 
     /**
-     * 仅 APPROVED 可执行：强制确认写参 → 安全门 → MCP 调用。
+     * 仅 APPROVED 可执行：领取执行权 → 安全门 → 消费批准时固定的管线凭证。
      * 安全门 BLOCK 时记 EXECUTION_FAILED，不真正调工具。
      */
-    public Map<String, Object> execute(long id, Object operator) {
-        Map<String, Object> item = mutableCopy(getById(id));
+    public synchronized Map<String, Object> execute(long id, Object operator) {
+        Map<String, Object> item = loadForMutation(id);
         ensureStatus(item, STATUS_APPROVED, "Only approved runbooks can be executed");
 
         String toolName = String.valueOf(item.getOrDefault("toolName", "")).trim();
@@ -180,6 +269,21 @@ public class RunbookApprovalService {
 
         String userMessage = "[RUNBOOK] " + item.get("title");
         McpToolParamReader.forceConfirmedWriteToolParams(toolName, parameters);
+        if (executionPipeline == null) throw new IllegalStateException("Governed execution pipeline is required");
+        ApprovalTicket ticket = approvalTickets.get(id);
+        if (ticket == null || ticket.expiresAt() <= System.currentTimeMillis()
+                || !ticket.actor().equals(asActor(operator)) || !ticket.parameters().equals(toJson(parameters))) {
+            throw new IllegalStateException("Approval expired, belongs to another operator, or changed; approve again");
+        }
+        // Persist ownership before any external side effect.  A lost receipt
+        // leaves EXECUTING for manual reconciliation and can never be replayed.
+        int claimed = jdbcTemplate.update(
+                "UPDATE ops_runbook_approval SET status='EXECUTING', operator=?, executed_at=? WHERE id=? AND status='APPROVED' AND trace_id=?",
+                asActor(operator), new Timestamp(System.currentTimeMillis()), id, ticket.confirmationId());
+        if (claimed != 1) throw new IllegalStateException("Runbook is already executing or its approval changed");
+        approvalTickets.remove(id);
+        item.put("status", "EXECUTING");
+        cache.put(id, mutableCopy(item));
         GateDecision decision = mcpSecurityService.evaluatePostConfirm(toolName, parameters, userMessage);
 
         long startTime = System.currentTimeMillis();
@@ -200,36 +304,44 @@ public class RunbookApprovalService {
             return snapshot(item);
         }
 
-        String instruction = userMessage + " | " + mcpSecurityService.buildInstruction(toolName, parameters);
-        Map<String, Object> execResponse = mcpExecutionService.execute(
-                toolName, parameters, startTime, traceId, instruction, true);
-
-        boolean success = Boolean.TRUE.equals(execResponse.get("success"));
-        item.put("status", success ? STATUS_EXECUTED : STATUS_EXECUTION_FAILED);
-        item.put("mcpResult", execResponse);
-        item.put("mcpSuccess", success);
-        item.put("executionImplemented", true);
-        if (execResponse.get("writeMismatch") != null) {
-            item.put("writeMismatch", execResponse.get("writeMismatch"));
-        }
-        if (WriteToolResultSupport.requestedRealWrite(parameters)) {
-            String mode = WriteToolResultSupport.extractMode(
-                    execResponse.get("data") != null ? String.valueOf(execResponse.get("data")) : "");
-            if (!mode.isBlank()) {
-                item.put("writeMode", mode);
+        {
+            // Consume the exact ticket created at approval; never generate a
+            // fresh preview here, which could silently broaden approved objects.
+            OpsExecutionPipeline.PipelineResult governed = executionPipeline.executeConfirmed(
+                    ticket.confirmationId(), ticket.capabilityToken(), ticket.confirmToken(), "确认执行", asActor(operator));
+            Map<String, Object> execResponse = governed.body() == null
+                    ? new LinkedHashMap<>()
+                    : new LinkedHashMap<>(governed.body());
+            boolean success = Boolean.TRUE.equals(execResponse.get("success"));
+            item.put("status", success ? STATUS_EXECUTED : STATUS_EXECUTION_FAILED);
+            item.put("mcpResult", execResponse);
+            item.put("mcpSuccess", success);
+            item.put("executionImplemented", true);
+            item.put("traceId", governed.traceId());
+            item.put("executedAt", startTime);
+            item.put("executionMessage", success
+                    ? "Executed through governed OpsExecutionPipeline: " + toolName
+                    : String.valueOf(execResponse.getOrDefault("error", "EXECUTION_FAILED")));
+            item.put("result", success
+                    ? "EXECUTED"
+                    : String.valueOf(execResponse.getOrDefault("error", "EXECUTION_FAILED")));
+            if (execResponse.get("writeMismatch") != null) {
+                item.put("writeMismatch", execResponse.get("writeMismatch"));
             }
+            if (WriteToolResultSupport.requestedRealWrite(parameters)) {
+                String mode = WriteToolResultSupport.extractMode(
+                        execResponse.get("data") != null ? String.valueOf(execResponse.get("data")) : "");
+                if (!mode.isBlank()) {
+                    item.put("writeMode", mode);
+                }
+            }
+            persistAudit(id, governed.traceId(), userMessage, toolName, parameters,
+                    decision, execResponse, success, startTime, asActor(operator));
+            persistExisting(item);
+            cache.put(id, mutableCopy(item));
+            return snapshot(item);
         }
-        item.put("result", success
-                ? "EXECUTED"
-                : String.valueOf(execResponse.getOrDefault("error", "EXECUTION_FAILED")));
-        item.put("executionMessage", success
-                ? "Executed through MCP security gate: " + toolName
-                : String.valueOf(execResponse.getOrDefault("error", "MCP execution failed")));
 
-        persistAudit(id, traceId, userMessage, toolName, parameters, decision, execResponse, success, startTime, asActor(operator));
-        persistExisting(item);
-        cache.put(id, mutableCopy(item));
-        return snapshot(item);
     }
 
     /** 列表：管理员看全部，否则按 requester 过滤；DB 不可用时回退内存 cache。 */
@@ -252,39 +364,6 @@ public class RunbookApprovalService {
         return items.stream().map(this::snapshot).collect(Collectors.toCollection(ArrayList::new));
     }
 
-    private void ensureTable() {
-        jdbcTemplate.execute(
-                """
-                CREATE TABLE IF NOT EXISTS ops_runbook_approval (
-                  id BIGINT NOT NULL,
-                  title VARCHAR(255) NOT NULL,
-                  action_name VARCHAR(255) DEFAULT NULL,
-                  command_text TEXT,
-                  tool_name VARCHAR(128) DEFAULT NULL,
-                  parameters_json LONGTEXT,
-                  requester VARCHAR(64) NOT NULL,
-                  status VARCHAR(32) NOT NULL,
-                  result_code VARCHAR(128) DEFAULT NULL,
-                  execution_implemented TINYINT(1) NOT NULL DEFAULT 0,
-                  approver VARCHAR(64) DEFAULT NULL,
-                  reason TEXT,
-                  operator VARCHAR(64) DEFAULT NULL,
-                  trace_id VARCHAR(64) DEFAULT NULL,
-                  mcp_result_json LONGTEXT,
-                  mcp_success TINYINT(1) DEFAULT NULL,
-                  execution_message TEXT,
-                  write_mismatch TINYINT(1) DEFAULT NULL,
-                  write_mode VARCHAR(64) DEFAULT NULL,
-                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                  approved_at DATETIME DEFAULT NULL,
-                  executed_at DATETIME DEFAULT NULL,
-                  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                  PRIMARY KEY (id),
-                  KEY idx_runbook_requester_created (requester, created_at),
-                  KEY idx_runbook_status_created (status, created_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Runbook approval and execution records'
-                """);
-    }
 
     private void initializeSequence() {
         Long maxId = jdbcTemplate.queryForObject(
@@ -343,6 +422,8 @@ public class RunbookApprovalService {
     }
 
     private void persistExisting(Map<String, Object> item) {
+        String allowed = STATUS_APPROVED.equals(item.get("status")) || STATUS_REJECTED.equals(item.get("status"))
+                ? "status IN ('PENDING','APPROVED')" : "status='EXECUTING'";
         int updated = jdbcTemplate.update(
                 """
                 UPDATE ops_runbook_approval
@@ -366,8 +447,8 @@ public class RunbookApprovalService {
                     write_mode = ?,
                     approved_at = ?,
                     executed_at = ?
-                WHERE id = ?
-                """,
+                WHERE id = ? AND %s
+                """.formatted(allowed),
                 item.get("title"),
                 emptyToNull(String.valueOf(item.getOrDefault("action", ""))),
                 emptyToNull(String.valueOf(item.getOrDefault("command", ""))),
@@ -390,6 +471,25 @@ public class RunbookApprovalService {
                 toTimestamp(item.get("executedAt")),
                 item.get("id"));
         if (updated <= 0) {
+            if (STATUS_EXECUTED.equals(item.get("status")) || STATUS_EXECUTION_FAILED.equals(item.get("status"))) {
+                var rows = jdbcTemplate.queryForList("SELECT * FROM ops_runbook_approval WHERE id = ?", item.get("id"));
+                if (!rows.isEmpty() && "MANUALLY_CLOSED".equals(rows.get(0).get("status"))) {
+                    Map<String, Object> row = rows.get(0);
+                    String oldJson = String.valueOf(row.get("mcp_result_json"));
+                    Map<String, Object> result = parseJsonMap(oldJson);
+                    result.put("lateReceipt", Map.of("traceId", String.valueOf(item.get("traceId")),
+                            "receivedAt", System.currentTimeMillis(), "status", item.get("status"),
+                            "result", item.getOrDefault("mcpResult", Map.of())));
+                    String json = new com.award.log.agent.team.TeamDataPolicy(objectMapper).safe(result);
+                    int appended = jdbcTemplate.update("UPDATE ops_runbook_approval SET mcp_result_json=? "
+                                    + "WHERE id=? AND status='MANUALLY_CLOSED' AND mcp_result_json=?",
+                            json, item.get("id"), oldJson);
+                    if (appended != 1) throw new IllegalStateException("Late receipt conflict; inspect pipeline audit");
+                    var closed = loadForMutation(toLong(item.get("id")));
+                    item.clear(); item.putAll(closed);
+                    return;
+                }
+            }
             throw new NoSuchElementException("Runbook request not found");
         }
     }
@@ -465,6 +565,13 @@ public class RunbookApprovalService {
         if (!expected.equals(actual)) {
             throw new IllegalStateException(message);
         }
+    }
+
+    private Map<String, Object> loadForMutation(long id) {
+        // Never authorize writes from the process-local listing cache.
+        var rows = jdbcTemplate.queryForList("SELECT * FROM ops_runbook_approval WHERE id = ?", id);
+        if (rows.isEmpty()) throw new NoSuchElementException("Runbook request not found");
+        return fromDbRow(rows.get(0));
     }
 
     private Map<String, Object> getById(long id) {

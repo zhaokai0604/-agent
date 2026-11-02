@@ -25,6 +25,15 @@ public class McpAuditService {
     private final HttpAuditSubject httpAuditSubject;
     private final OpsPathPolicy opsPathPolicy;
 
+    public void persistWriteIntent(String traceId, String toolName, Map<String, Object> parameters,
+            String fingerprint, String requester, GateDecision decision) {
+        var context = com.award.log.security.OpsSecurityContext.get();
+        opsAuditTraceService.requireWriteIntent(traceId, toolName, requester, decision.getRiskLevel().name(),
+                opsPathPolicy.getPolicyVersion(), Map.of("effectFingerprint", fingerprint,
+                        "parameters", parameters == null ? Map.of() : parameters,
+                        "sessionId", context == null || context.getSessionId() == null ? "" : context.getSessionId()));
+    }
+
     public void persistGateReject(String traceId, String userInstruction, String toolName,
                                   GateDecision decision, long startTime, Map<String, Object> parameters) {
         String outcome = McpSecurityService.mapGateCodeToOutcome(decision.getCode());

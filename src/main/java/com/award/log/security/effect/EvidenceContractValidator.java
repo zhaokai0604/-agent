@@ -54,6 +54,12 @@ public final class EvidenceContractValidator {
         JsonNode data = WriteToolResultSupport.businessDataFromToolPayload(toolResultJson);
         List<String> missing = new ArrayList<>();
         switch (contractId) {
+            case "RESTORE_PATH" -> {
+                if (!hasTrue(data, "restored") || !hasTrue(data, "recoveryVerified")) missing.add("restored|recoveryVerified");
+            }
+            case "PURGE_RECYCLE" -> {
+                if (!hasTrue(data, "purged")) missing.add("purged");
+            }
             case "DELETE_PATH" -> {
                 if (!hasPositiveNumber(data, "filesDeleted")
                         && !hasPositiveNumber(data, "bytesFreed")

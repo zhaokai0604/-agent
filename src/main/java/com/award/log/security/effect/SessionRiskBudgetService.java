@@ -30,6 +30,25 @@ public class SessionRiskBudgetService {
     }
 
     public BudgetDecision check(String subject, ToolEffect effect) {
+        Deque<BudgetEvent> q = purgeAndGet(normalize(subject));
+        synchronized (q) {
+            return checkLocked(subject, effect);
+        }
+    }
+
+    /** 在执行前原子占用预算；失败和结果不明的写尝试也占用，避免并发穿透。 */
+    public BudgetDecision reserve(String subject, ToolEffect effect) {
+        Deque<BudgetEvent> q = purgeAndGet(normalize(subject));
+        synchronized (q) {
+            BudgetDecision decision = checkLocked(subject, effect);
+            if (decision.allowed() && effect != null && effect.writeEffect()) {
+                q.addLast(new BudgetEvent(System.currentTimeMillis(), effect.irreversibility()));
+            }
+            return decision;
+        }
+    }
+
+    private BudgetDecision checkLocked(String subject, ToolEffect effect) {
         if (effect == null || !effect.writeEffect()) {
             return BudgetDecision.allow(snapshot(subject));
         }
@@ -57,13 +76,16 @@ public class SessionRiskBudgetService {
         }
         String key = normalize(subject);
         Deque<BudgetEvent> q = purgeAndGet(key);
-        q.addLast(new BudgetEvent(System.currentTimeMillis(), effect.irreversibility()));
+        synchronized (q) {
+            q.addLast(new BudgetEvent(System.currentTimeMillis(), effect.irreversibility()));
+        }
     }
 
     public Map<String, Object> summary(String subject) {
         Snapshot snap = snapshot(subject);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("realWrites", snap.realWrites());
+        m.put("accountingMode", "WRITE_ATTEMPTS");
         m.put("irreversibilityPoints", snap.irreversibilityPoints());
         m.put("maxRealWrites", maxRealWrites);
         m.put("maxIrreversibilityPoints", maxIrreversibilityPoints);
@@ -73,12 +95,14 @@ public class SessionRiskBudgetService {
 
     private Snapshot snapshot(String subject) {
         Deque<BudgetEvent> q = purgeAndGet(normalize(subject));
-        int writes = q.size();
-        int points = 0;
-        for (BudgetEvent e : q) {
-            points += e.irreversibility();
+        synchronized (q) {
+            int writes = q.size();
+            int points = 0;
+            for (BudgetEvent e : q) {
+                points += e.irreversibility();
+            }
+            return new Snapshot(writes, points);
         }
-        return new Snapshot(writes, points);
     }
 
     private Deque<BudgetEvent> purgeAndGet(String key) {

@@ -70,11 +70,15 @@ class McpExecuteControllerTest {
                 httpAuditSubject,
                 new ToolEffectResolver(),
                 new SessionRiskBudgetService(3_600_000L, 20, 60),
-                null,
+                new OpsExecutionPipeline(mcpToolCatalog,mcpSecurityService,mcpExecutionService,mcpAuditService,
+                        pendingConfirmationService,new ToolEffectResolver(),new SessionRiskBudgetService(3_600_000L,20,60),
+                        pepProperties,new com.fasterxml.jackson.databind.ObjectMapper()),
                 pepProperties);
         when(mcpToolCatalog.isRegistered(anyString())).thenReturn(true);
         when(mcpToolCatalog.describePlatformSupport(anyString()))
                 .thenReturn(new HashMap<>(Map.of("available", true, "reason", "")));
+        org.mockito.Mockito.lenient().when(mcpExecutionService.execute(anyString(),anyMap(),anyLong(),anyString(),anyString()))
+                .thenReturn(new HashMap<>(Map.of("success",true,"data","{}")));
     }
 
     @Test
@@ -101,9 +105,9 @@ class McpExecuteControllerTest {
                 .thenReturn(execResponse);
 
         Map<String, Object> previewRequest = new HashMap<>();
-        previewRequest.put("toolName", "CleanTempTool");
+        previewRequest.put("toolName", "ServiceRestartTool");
         previewRequest.put("userMessage", "clean tmp");
-        previewRequest.put("parameters", Map.of("path", "/safe/path", "dryRun", false));
+        previewRequest.put("parameters", Map.of("serviceName", "fixture", "dryRun", false));
 
         Map<String, Object> preview = controller.executeTool(previewRequest);
         String confirmationId = String.valueOf(preview.get("confirmationId"));
@@ -111,13 +115,15 @@ class McpExecuteControllerTest {
         Map<String, Object> confirmRequest = new HashMap<>();
         confirmRequest.put("confirmationId", confirmationId);
         confirmRequest.put("confirmCode", "确认执行");
+        confirmRequest.put("capabilityToken",preview.get("capabilityToken"));
+        confirmRequest.put("confirmToken",preview.get("confirmToken"));
         confirmRequest.put("toolName", "ServiceRestartTool");
         confirmRequest.put("userMessage", "tampered");
         confirmRequest.put("parameters", Map.of("path", "/evil/path", "serviceName", "sshd"));
 
         Map<String, Object> confirmed = controller.confirmExecuteTool(confirmRequest);
 
-        assertTrue(Boolean.TRUE.equals(confirmed.get("success")));
+        assertTrue(Boolean.TRUE.equals(confirmed.get("executionSuccess")));
         assertEquals(confirmationId, confirmed.get("traceId"));
 
         ArgumentCaptor<String> toolCaptor = ArgumentCaptor.forClass(String.class);
@@ -131,8 +137,8 @@ class McpExecuteControllerTest {
                 eq("audit-instruction"),
                 eq(true));
 
-        assertEquals("CleanTempTool", toolCaptor.getValue());
-        assertEquals("/safe/path", paramsCaptor.getValue().get("path"));
+        assertEquals("ServiceRestartTool", toolCaptor.getValue());
+        assertEquals("fixture", paramsCaptor.getValue().get("serviceName"));
         assertNotNull(preview.get("expiresAtMs"));
         assertNotNull(preview.get("capabilityToken"));
         assertNotNull(preview.get("effectFingerprint"));
@@ -155,9 +161,9 @@ class McpExecuteControllerTest {
                 });
 
         Map<String, Object> previewRequest = new HashMap<>();
-        previewRequest.put("toolName", "CleanTempTool");
+        previewRequest.put("toolName", "ServiceRestartTool");
         previewRequest.put("userMessage", "clean tmp");
-        previewRequest.put("parameters", Map.of("path", "/safe/path"));
+        previewRequest.put("parameters", Map.of("serviceName", "fixture"));
 
         Map<String, Object> preview = controller.executeTool(previewRequest);
         String confirmationId = String.valueOf(preview.get("confirmationId"));

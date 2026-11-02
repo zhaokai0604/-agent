@@ -170,7 +170,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
             return configured;
         }
         List<String> ordered = new ArrayList<>();
-        for (String preferred : List.of(System.getProperty("java.io.tmpdir", ""), System.getenv("TEMP"), System.getenv("TMP"))) {
+        for (String preferred : new String[] {System.getProperty("java.io.tmpdir", ""), System.getenv("TEMP"), System.getenv("TMP")}) {
             addExistingAllowedRoot(ordered, configured, preferred);
         }
         for (String root : configured) {
@@ -233,6 +233,9 @@ public class CleanTempTool extends AbstractCommandExecutor {
             targetPath, targetDays, isDryRun ? "DRY-RUN" : "DELETE", removeDir);
 
         try {
+            if (!isDryRun && minPrivilegeExecutor.isGlobalDryRun()) {
+                return buildErrorResponse("全局演练模式已启用，未执行真实回收", startTime);
+            }
             if (!opsPathPolicy.isAllowedCleanDirectory(targetPath)) {
                 return buildErrorResponse(opsPathPolicy.rejectReason("清理目录不在白名单或命中黑名单"), startTime);
             }
@@ -287,8 +290,11 @@ public class CleanTempTool extends AbstractCommandExecutor {
             }
             findCmd.add("-print");
             AbstractCommandExecutor.CommandResult result = minPrivilegeExecutor.executeSafely(findCmd);
+            var frozenCandidates=com.award.log.security.effect.FileApprovalScope.frozenCandidates();
+            if(frozenCandidates!=null) result=new AbstractCommandExecutor.CommandResult(true,String.join("\n",frozenCandidates),null,0,false);
 
             if (result.output() == null || result.output().isBlank()) {
+                com.award.log.security.effect.FileApprovalScope.candidates(List.of());
                 String data = String.format(
                     "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"bytesFreed\":0,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"businessEffect\":\"%s\",\"message\":\"没有找到符合条件的文件\"}",
                     isDryRun ? "DRY-RUN" : "NOOP", jsonEscapePath(targetPath), targetDays, maxDepth, agePolicy.strategy(),
@@ -303,6 +309,8 @@ public class CleanTempTool extends AbstractCommandExecutor {
                 }
             }
 
+            fileList.removeIf(file -> safeDeleteSupport != null && safeDeleteSupport.isRecyclePath(Path.of(file)));
+            com.award.log.security.effect.FileApprovalScope.candidates(fileList.stream().map(Path::of).toList());
             int filesDeleted = 0;
             int lockedSkipped = 0;
             long bytesSelected = 0L;
@@ -323,26 +331,18 @@ public class CleanTempTool extends AbstractCommandExecutor {
                             bytesLocked += fileBytes;
                             continue;
                         }
-                        boolean recycled = false;
                         if (safeDeleteSupport != null) {
                             SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
                                     Path.of(file), null, true);
-                            if (outcome.success()) {
+                            if (outcome.success() && "RECYCLE".equals(outcome.mode())) {
                                 filesDeleted++;
                                 bytesFreed += fileBytes;
-                                recycled = true;
                                 if (outcome.handle() != null && !outcome.handle().isBlank()) {
                                     recycleHandles.add(outcome.handle());
                                 }
                             }
                         }
-                        if (!recycled) {
-                            AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of("rm", "-f", file));
-                            if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
-                                filesDeleted++;
-                                bytesFreed += fileBytes;
-                            }
-                        }
+                        // A failed recycle must never escalate to permanent deletion.
                     } catch (Exception e) {
                         log.debug("删除文件失败: {}", file);
                     }
@@ -362,10 +362,10 @@ public class CleanTempTool extends AbstractCommandExecutor {
                 );
             } else {
                 data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"bytesSelected\":%d,\"bytesFreed\":%d,\"bytesLocked\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"businessEffect\":\"%s\"}",
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"bytesSelected\":%d,\"bytesRecycled\":%d,\"bytesFreed\":0,\"bytesFreedMeasured\":false,\"bytesLocked\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"businessEffect\":\"%s\"}",
                     jsonEscapePath(targetPath), targetDays, fileList.size(), filesDeleted, lockedSkipped, maxDepth, agePolicy.strategy(),
                     bytesSelected, bytesFreed, bytesLocked, recycleHandles.size(), toJsonArray(recycleHandles),
-                    filesDeleted > 0 && bytesFreed > 0 ? "EFFECTIVE" : "NO_EFFECT"
+                    filesDeleted > 0 && bytesFreed > 0 ? "RECYCLED" : "NO_EFFECT"
                 );
                 if (filesDeleted == 0 && !fileList.isEmpty() && lockedSkipped < fileList.size()) {
                     return buildErrorResponse(
@@ -390,77 +390,56 @@ public class CleanTempTool extends AbstractCommandExecutor {
 
     private String removeDirectoryTree(String targetPath, boolean isDryRun, long startTime)
             throws JsonProcessingException {
-        if (OsRuntime.isWindows()) {
-            String safe = targetPath.replace("'", "''");
-            if (isDryRun) {
-                String psPreview = "$p='" + safe + "';"
-                        + "if (-not (Test-Path -LiteralPath $p)) { @{exists=$false} | ConvertTo-Json -Compress; exit 0 };"
-                        + "$s=(Get-ChildItem -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum);"
-                        + "$c=(Get-ChildItem -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object).Count;"
-                        + "@{exists=$true; entries=[int]$c; bytes=[int64]$s.Sum} | ConvertTo-Json -Compress";
-                AbstractCommandExecutor.CommandResult preview = minPrivilegeExecutor.executeSafely(
-                        List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psPreview),
-                        120_000L);
-                long duration = System.currentTimeMillis() - startTime;
-                String data = String.format(
-                        "{\"mode\":\"DRY-RUN\",\"removeDirectory\":true,\"path\":\"%s\",\"preview\":%s,\"platform\":\"windows\"}",
-                        jsonEscapePath(targetPath), preview.success() && preview.output() != null ? preview.output().trim() : "{}");
-                return buildSuccessResponse(data, duration, false);
+        try {
+            Path target = Path.of(targetPath);
+            if (Files.isSymbolicLink(target) || !Files.isDirectory(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                return buildErrorResponse("目标目录不存在或为符号链接，已拒绝处置", startTime);
             }
-            String psDelete = "$p='" + safe + "';"
-                    + "if (-not (Test-Path -LiteralPath $p)) { Write-Error 'path not found'; exit 1 };"
-                    + "$s=(Get-ChildItem -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum;"
-                    + "Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop;"
-                    + "@{removed=$true; bytes=[int64]$s} | ConvertTo-Json -Compress";
-            AbstractCommandExecutor.CommandResult del = minPrivilegeExecutor.executeSafely(
-                    List.of("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psDelete),
-                    120_000L);
-            if (isSimulatedDryRun(del)) {
-                return buildErrorResponse(
-                        "全局演练模式已开启：Remove-Item 被模拟执行，磁盘未变化。请在系统配置关闭演练模式并重启。",
-                        startTime);
-            }
-            if (!del.success()) {
-                return buildErrorResponse("删除目录失败: " + (del.error() != null ? del.error() : del.output()), startTime);
-            }
+            com.award.log.security.effect.FileApprovalScope.candidates(List.of(target));
             long bytes = 0;
-            try {
-                JsonNode node = objectMapper.readTree(del.output() != null ? del.output().trim() : "{}");
-                bytes = node.path("bytes").asLong(0);
-            } catch (Exception ignored) {
+            long files = 0;
+            try (var paths = Files.walk(target)) {
+                var iterator = paths.iterator();
+                while (iterator.hasNext()) {
+                    Path entry = iterator.next();
+                    if (Files.isRegularFile(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                        files++;
+                        bytes += Files.size(entry);
+                    }
+                }
             }
-            long duration = System.currentTimeMillis() - startTime;
-            String data = String.format(
-                    "{\"mode\":\"DELETE\",\"removeDirectory\":true,\"path\":\"%s\",\"filesDeleted\":1,\"bytesFreed\":%d,\"removed\":true,\"platform\":\"windows\"}",
-                    jsonEscapePath(targetPath), bytes);
-            return buildSuccessResponse(data, duration, false);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("mode", isDryRun ? "DRY-RUN" : "DELETE");
+            data.put("path", targetPath);
+            data.put("removeDirectory", true);
+            data.put("filesFound", 1);
+            data.put("filesInDirectory", files);
+            data.put("bytesSelected", bytes);
+            if (!isDryRun) {
+                if (safeDeleteSupport == null) {
+                    return buildErrorResponse("回收站服务不可用，已拒绝删除目录", startTime);
+                }
+                SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(target, null, true);
+                if (!outcome.success() || !"RECYCLE".equals(outcome.mode())) {
+                    return buildErrorResponse("目录回收失败，原目录未永久删除: " + outcome.error(), startTime);
+                }
+                data.put("removed", !Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+                data.put("filesDeleted", 1);
+                data.put("recycledCount", 1);
+                data.put("recycleHandle", outcome.handle());
+                data.put("recycleHandles", List.of(outcome.handle()));
+                data.put("bytesRecycled", bytes);
+                data.put("bytesRemovedFromTarget", bytes);
+                data.put("bytesFreed", 0);
+                data.put("bytesFreedMeasured", false);
+                data.put("businessEffect", "RECYCLED");
+            }
+            return buildSuccessResponse(objectMapper.writeValueAsString(data),
+                    System.currentTimeMillis() - startTime, false);
+        } catch (Exception e) {
+            return buildErrorResponse("目录回收失败，已拒绝不可逆删除: " + e.getMessage(), startTime);
         }
-        if (isDryRun) {
-            AbstractCommandExecutor.CommandResult du = minPrivilegeExecutor.executeSafely(
-                    List.of("du", "-sk", targetPath));
-            long duration = System.currentTimeMillis() - startTime;
-            String data = String.format(
-                    "{\"mode\":\"DRY-RUN\",\"removeDirectory\":true,\"path\":\"%s\",\"duKb\":%s}",
-                    jsonEscapePath(targetPath), du.success() && du.output() != null ? du.output().trim().split("\\s+")[0] : "0");
-            return buildSuccessResponse(data, duration, false);
-        }
-        AbstractCommandExecutor.CommandResult rm = minPrivilegeExecutor.executeSafely(
-                List.of("rm", "-rf", targetPath));
-        if (isSimulatedDryRun(rm)) {
-            return buildErrorResponse(
-                    "全局演练模式已开启：rm 被模拟执行，磁盘未变化。请在系统配置关闭演练模式并重启。",
-                    startTime);
-        }
-        if (!rm.success()) {
-            return buildErrorResponse("删除目录失败: " + (rm.error() != null ? rm.error() : rm.output()), startTime);
-        }
-        long duration = System.currentTimeMillis() - startTime;
-        String data = String.format(
-                "{\"mode\":\"DELETE\",\"removeDirectory\":true,\"path\":\"%s\",\"filesDeleted\":1,\"bytesFreed\":0,\"removed\":true}",
-                jsonEscapePath(targetPath));
-        return buildSuccessResponse(data, duration, false);
     }
-
     private String defaultTempTargetPath() {
         if (!OsRuntime.isWindows()) {
             return "/tmp";
@@ -477,7 +456,7 @@ public class CleanTempTool extends AbstractCommandExecutor {
     }
 
     private String cleanTempFilesWindows(String targetPath, int targetDays, boolean isDryRun, long startTime)
-            throws JsonProcessingException {
+            throws java.io.IOException {
         String safe = targetPath.replace("'", "''");
         int maxDepth = Math.max(1, remediationProperties.getMaxScanDepth());
         int accessDays = Math.max(1, remediationProperties.getPreferAccessDays());
@@ -519,6 +498,10 @@ public class CleanTempTool extends AbstractCommandExecutor {
                 log.warn("解析 Windows 清理文件列表失败: {}", e.getMessage());
             }
         }
+        var approvedCandidates=com.award.log.security.effect.FileApprovalScope.frozenCandidates();
+        if(approvedCandidates!=null) fileList=new ArrayList<>(approvedCandidates);
+        fileList.removeIf(file -> safeDeleteSupport != null && safeDeleteSupport.isRecyclePath(Path.of(file)));
+        com.award.log.security.effect.FileApprovalScope.candidates(fileList.stream().map(Path::of).toList());
         if (fileList.isEmpty()) {
             String data = String.format(
                     "{\"mode\":\"%s\",\"path\":\"%s\",\"days\":%d,\"filesFound\":0,\"filesDeleted\":0,\"bytesFreed\":0,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"dirBytes\":%d,\"businessEffect\":\"%s\",\"message\":\"没有找到符合条件的文件\",\"platform\":\"windows\"}",
@@ -544,29 +527,18 @@ public class CleanTempTool extends AbstractCommandExecutor {
                     bytesLocked += fileBytes;
                     continue;
                 }
-                boolean recycled = false;
-                if (safeDeleteSupport != null) {
+                    if (safeDeleteSupport != null) {
                     SafeDeleteSupport.DeleteOutcome outcome = safeDeleteSupport.deleteFile(
                             Path.of(file), null, true);
-                    if (outcome.success()) {
+                    if (outcome.success() && "RECYCLE".equals(outcome.mode())) {
                         filesDeleted++;
                         bytesFreed += fileBytes;
-                        recycled = true;
                         if (outcome.handle() != null && !outcome.handle().isBlank()) {
                             recycleHandles.add(outcome.handle());
                         }
                     }
                 }
-                if (!recycled) {
-                    String f = file.replace("'", "''");
-                    AbstractCommandExecutor.CommandResult delResult = minPrivilegeExecutor.executeSafely(List.of(
-                            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                            "Remove-Item -LiteralPath '" + f + "' -Force -ErrorAction SilentlyContinue"));
-                    if (delResult.success() && !isSimulatedDryRun(delResult) && !Files.exists(Path.of(file))) {
-                        filesDeleted++;
-                        bytesFreed += fileBytes;
-                    }
-                }
+                // A failed recycle must never escalate to permanent deletion.
             }
         }
         int previewCount = Math.min(fileList.size(), 20);
@@ -580,10 +552,10 @@ public class CleanTempTool extends AbstractCommandExecutor {
                     jsonEscapePath(targetPath), targetDays, fileList.size(), previewCount, toJsonArray(previewFiles), maxDepth, strategy, dirBytes, bytesSelected);
         } else {
             data = String.format(
-                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"dirBytes\":%d,\"bytesSelected\":%d,\"bytesFreed\":%d,\"bytesLocked\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"platform\":\"windows\",\"businessEffect\":\"%s\"}",
+                    "{\"mode\":\"DELETE\",\"path\":\"%s\",\"days\":%d,\"filesFound\":%d,\"filesDeleted\":%d,\"lockedSkipped\":%d,\"maxScanDepth\":%d,\"cleanupStrategy\":\"%s\",\"dirBytes\":%d,\"bytesSelected\":%d,\"bytesRecycled\":%d,\"bytesFreed\":0,\"bytesFreedMeasured\":false,\"bytesLocked\":%d,\"recycledCount\":%d,\"recycleHandles\":%s,\"platform\":\"windows\",\"businessEffect\":\"%s\"}",
                     jsonEscapePath(targetPath), targetDays, fileList.size(), filesDeleted, lockedSkipped, maxDepth, strategy,
                     dirBytes, bytesSelected, bytesFreed, bytesLocked, recycleHandles.size(), toJsonArray(recycleHandles),
-                    filesDeleted > 0 && bytesFreed > 0 ? "EFFECTIVE" : "NO_EFFECT");
+                    filesDeleted > 0 && bytesFreed > 0 ? "RECYCLED" : "NO_EFFECT");
             if (filesDeleted == 0 && !fileList.isEmpty() && lockedSkipped < fileList.size()) {
                 return buildErrorResponse(
                         "未删除任何文件（可能全局演练模式仍开启、路径无写权限或文件被占用）", startTime);

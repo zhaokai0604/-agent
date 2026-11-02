@@ -93,6 +93,10 @@ public final class OpsSecurityContext {
         HOLDER.remove();
     }
 
+    public static void restore(Ctx previous) {
+        if(previous==null)HOLDER.remove();else HOLDER.set(previous);
+    }
+
     @Data
     @Builder
     public static class Ctx {

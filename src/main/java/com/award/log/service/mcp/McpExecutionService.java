@@ -35,7 +35,9 @@ public class McpExecutionService {
 
     public Map<String, Object> execute(String toolName, Map<String, Object> parameters, long startTime,
                                        String traceId, String userInstruction, boolean userConfirmedWrite) {
-        OpsSecurityContext.open(traceId, userInstruction, true, McpToolSurface.FULL, false, userConfirmedWrite);
+        var previous=OpsSecurityContext.get();
+        OpsSecurityContext.open(traceId, userInstruction, true, McpToolSurface.FULL, false, userConfirmedWrite,false,
+                previous==null?"anonymous":previous.getRequester(),previous==null?"":previous.getSessionId());
         ChatToolExecutionTracker.clear();
         try {
             Map<String, Object> response = new HashMap<>();
@@ -98,7 +100,7 @@ public class McpExecutionService {
             return response;
         } finally {
             ChatToolExecutionTracker.clear();
-            OpsSecurityContext.clear();
+            OpsSecurityContext.restore(previous);
         }
     }
 

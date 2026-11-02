@@ -44,7 +44,7 @@ class AbstractCommandExecutorCoverageTest {
     }
 
     @Test
-    void retryRepeatsFailedCommandAndZeroTimeoutWaitsForCompletion() throws Exception {
+    void mutatingShellCommandIsNotRetriedAndZeroTimeoutWaitsForCompletion() throws Exception {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Harness harness = new Harness(executor);
@@ -53,8 +53,8 @@ class AbstractCommandExecutorCoverageTest {
             String retryCommand = "if exist \"" + markerPath + "\" (del \"" + markerPath
                     + "\" & exit /b 0) else (type nul > \"" + markerPath + "\" & exit /b 1)";
             AbstractCommandExecutor.CommandResult retried = harness.retry(cmd(retryCommand), 1000);
-            assertTrue(retried.success());
-            assertFalse(Files.exists(marker));
+            assertFalse(retried.success());
+            assertTrue(Files.exists(marker));
 
             AbstractCommandExecutor.CommandResult noTimeout = harness.retry(cmd("echo no-timeout"), 0);
             assertTrue(noTimeout.success());

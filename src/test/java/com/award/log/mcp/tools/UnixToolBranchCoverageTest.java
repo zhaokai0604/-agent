@@ -65,7 +65,7 @@ class UnixToolBranchCoverageTest {
             JsonNode removedData = json(removed.path("data").asText());
             assertTrue(removed.path("success").asBoolean(false));
             assertEquals(1, removedData.path("filesDeleted").asInt());
-            assertEquals("EFFECTIVE", removedData.path("businessEffect").asText());
+            assertEquals("RECYCLED", removedData.path("businessEffect").asText());
             assertFalse(Files.exists(old));
 
             Files.writeString(root.resolve("nested.tmp"), "1234");

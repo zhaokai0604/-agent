@@ -18,7 +18,7 @@ class ChatWriteExecutionPolicyTest {
     void httpConfirmedWriteForcesRealDelete() {
         OpsSecurityContext.open("t", "confirm", true, McpToolSurface.FULL, false, true);
         ChatWriteExecutionPolicy.ResolvedWrite write = ChatWriteExecutionPolicy.resolve(
-                null, "/tmp/award-extract", 7, true, false, true);
+                null, "/tmp/award-extract", 7, false, false, true);
         assertFalse(write.dryRun());
         assertTrue(write.confirmDelete());
         assertTrue(write.removeDirectory());
@@ -32,5 +32,18 @@ class ChatWriteExecutionPolicyTest {
                 null, "/tmp", 7, null, null, false);
         assertTrue(write.dryRun());
         assertFalse(write.confirmDelete());
+    }    @Test void explicitPreviewWinsOverConfirmedContextForEveryWriteKind() {
+        OpsSecurityContext.openChatAgent("t","preview",McpToolSurface.FULL,true);
+        assertTrue(ChatWriteExecutionPolicy.resolve(null,"/tmp/child",7,true,true,true).dryRun());
+        assertTrue(ChatWriteExecutionPolicy.resolveRestart(true,true).dryRun());
+        assertTrue(ChatWriteExecutionPolicy.resolveKill(true,true).dryRun());
+        assertTrue(ChatWriteExecutionPolicy.resolveStop(true,true).dryRun());
     }
+    @Test void fileCleanupCannotBecomeDirectoryRemovalImplicitly() {
+        var policy=new OpsPathPolicy(new com.award.log.config.AgentOpsProperties());
+        policy.updateEditablePathLists(com.award.log.util.OsRuntime.isWindows(),java.util.List.of("C:/Temp"),java.util.List.of("C:/Temp"),java.util.List.of());
+        assertFalse(ChatWriteExecutionPolicy.resolve(policy,"C:/Temp/child",7,false,true,false).removeDirectory());
+        assertFalse(ChatWriteExecutionPolicy.resolve(policy,"C:/Temp/child",7,false,true,null).removeDirectory());
+    }
+
 }

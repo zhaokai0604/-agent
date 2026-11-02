@@ -114,6 +114,25 @@ public class RunbookApprovalController {
         return Result.success(runbookApprovalService.list(principal, admin));
     }
 
+    @PostMapping("/{id}/reconcile")
+    public Result<Map<String, Object>> reconcile(@PathVariable long id,
+            @RequestBody(required = false) Map<String, Object> payload, HttpServletRequest request) {
+        if (!requestUserResolver.isAdmin(request)) return Result.error(403, "Only administrators can reconcile runbooks");
+        Map<String, Object> body = payload == null ? Map.of() : payload;
+        try {
+            return Result.success(runbookApprovalService.reconcile(id,
+                    stringField(body, "expectedTraceId"), stringField(body, "outcome"),
+                    stringField(body, "evidence"), stringField(body, "confirmCode"),
+                    Boolean.TRUE.equals(body.get("externalEffectsReviewed")), currentPrincipal(request)));
+        } catch (NoSuchElementException e) {
+            return Result.error(404, e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        } catch (IllegalStateException e) {
+            return Result.error(409, e.getMessage());
+        }
+    }
+
     private String currentPrincipal(HttpServletRequest request) {
         Integer userId = requestUserResolver.currentUserId(request);
         return userId == null ? "unknown" : String.valueOf(userId);

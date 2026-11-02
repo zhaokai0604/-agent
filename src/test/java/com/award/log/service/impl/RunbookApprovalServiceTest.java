@@ -1,6 +1,7 @@
 package com.award.log.service.impl;
 
 import com.award.log.mcp.McpToolCatalog;
+import com.award.log.governance.OpsExecutionPipeline;
 import com.award.log.security.McpInvocationSecurityGate.GateDecision;
 import com.award.log.security.OpsPathPolicy;
 import com.award.log.security.RiskLevel;
@@ -31,6 +32,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -46,6 +48,8 @@ class RunbookApprovalServiceTest {
     private OpsAuditTraceService opsAuditTraceService;
     @Mock
     private OpsPathPolicy opsPathPolicy;
+    @Mock
+    private OpsExecutionPipeline governedPipeline;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private InMemoryJdbcTemplate jdbcTemplate;
@@ -61,8 +65,15 @@ class RunbookApprovalServiceTest {
                 objectMapper,
                 opsAuditTraceService,
                 opsPathPolicy,
-                jdbcTemplate);
+                jdbcTemplate, governedPipeline);
         service.init();
+
+        org.mockito.Mockito.lenient().when(governedPipeline.preview(anyString(), anyMap(), anyString(), anyString()))
+                .thenReturn(new OpsExecutionPipeline.PipelineResult(Map.of("success",true),"preview",0,"",null,"","preview"));
+        org.mockito.Mockito.lenient().when(governedPipeline.propose(anyString(), anyMap(), anyString(), anyString(), anyString()))
+                .thenReturn(new OpsExecutionPipeline.PipelineResult(Map.of("needConfirm",true,"confirmationId","ticket",
+                        "capabilityToken","cap","confirmToken","hmac","expiresAtMs",System.currentTimeMillis()+600000),"ticket",0,"",null,"","preview"));
+
     }
 
     @Test
@@ -72,13 +83,13 @@ class RunbookApprovalServiceTest {
         when(mcpToolCatalog.isHttpAllowed("CleanTempTool")).thenReturn(true);
         when(mcpSecurityService.evaluatePostConfirm(anyString(), anyMap(), anyString()))
                 .thenReturn(GateDecision.allow(RiskLevel.MEDIUM, 4.0, Map.of(), "ok"));
-        when(mcpSecurityService.buildInstruction(anyString(), anyMap())).thenReturn("instr");
+
 
         Map<String, Object> mcpResult = new HashMap<>();
         mcpResult.put("success", true);
         mcpResult.put("data", "{\"success\":true,\"data\":\"{\\\"mode\\\":\\\"DELETE\\\"}\"}");
-        when(mcpExecutionService.execute(anyString(), anyMap(), anyLong(), anyString(), anyString(), anyBoolean()))
-                .thenReturn(mcpResult);
+        when(governedPipeline.executeConfirmed(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(new OpsExecutionPipeline.PipelineResult(mcpResult,"pipeline-trace",0,"",null,"","preview"));
 
         Map<String, Object> params = Map.of(
                 "path", "/tmp/award-extract",
@@ -114,6 +125,40 @@ class RunbookApprovalServiceTest {
                 anyLong(),
                 eq("admin"),
                 eq("policy-v1"));
+    }
+
+    @Test
+    void executeUsesGovernedPipelineWhenConfigured() {
+        when(opsPathPolicy.getPolicyVersion()).thenReturn("policy-v1");
+        when(mcpToolCatalog.isRegistered("CleanTempTool")).thenReturn(true);
+        when(mcpToolCatalog.isHttpAllowed("CleanTempTool")).thenReturn(true);
+        when(mcpSecurityService.evaluatePostConfirm(anyString(), anyMap(), anyString()))
+                .thenReturn(GateDecision.allow(RiskLevel.MEDIUM, 4.0, Map.of(), "ok"));
+
+        Map<String, Object> governedBody = new HashMap<>();
+        governedBody.put("success", true);
+        governedBody.put("data", "verified by governed pipeline");
+        when(governedPipeline.executeConfirmed(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(new OpsExecutionPipeline.PipelineResult(
+                        governedBody, "pipeline-trace", System.currentTimeMillis(),
+                        "CleanTempTool", null, "fingerprint", "preview"));
+
+        RunbookApprovalService governed = new RunbookApprovalService(
+                mcpExecutionService, mcpSecurityService, mcpToolCatalog, objectMapper,
+                opsAuditTraceService, opsPathPolicy, jdbcTemplate, governedPipeline);
+        governed.init();
+        Map<String, Object> submitted = governed.submit(
+                "Governed cleanup", "CleanTempTool", null, "CleanTempTool",
+                Map.of("path", "/tmp/award-extract", "dryRun", false, "confirmDelete", true), "u1");
+        long id = ((Number) submitted.get("id")).longValue();
+        governed.approve(id, "approver");
+
+        Map<String, Object> executed = governed.execute(id, "approver");
+
+        assertEquals("EXECUTED", executed.get("status"));
+        assertEquals("pipeline-trace", executed.get("traceId"));
+        verify(governedPipeline).executeConfirmed(eq("ticket"), eq("cap"), eq("hmac"), eq("确认执行"), eq("approver"));
+        verify(mcpExecutionService, never()).execute(anyString(), anyMap(), anyLong(), anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -221,6 +266,15 @@ class RunbookApprovalServiceTest {
 
         @Override
         public int update(String sql, Object... args) {
+
+            if (sql.contains("SET status='EXECUTING'")) {
+                long id = toLong(args[2]);
+                var row = rows.stream().filter(r -> toLong(r.get("id")) == id).findFirst().orElseThrow();
+                if (!"APPROVED".equals(row.get("status"))) return 0;
+                row.put("status", "EXECUTING"); row.put("operator", args[0]); row.put("executed_at", args[1]);
+                return 1;
+            }
+
             if (sql.startsWith("INSERT INTO ops_runbook_approval")) {
                 Map<String, Object> row = new HashMap<>();
                 row.put("id", toLong(args[0]));

@@ -144,6 +144,8 @@ public final class WriteToolResultSupport {
         }
         JsonNode nestedSuccess = data.get("success");
         boolean nestedOk = nestedSuccess != null && nestedSuccess.isBoolean() && nestedSuccess.asBoolean(false);
+        if (data.path("restored").asBoolean(false) && data.path("recoveryVerified").asBoolean(false)) return true;
+        if (data.path("purged").asBoolean(false)) return true;
         if (data.has("filesDeleted")) {
             return data.path("filesDeleted").asInt(0) > 0;
         }

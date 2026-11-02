@@ -53,6 +53,8 @@ public final class RemediationContractFactory {
             service = effect.targetId();
         }
         return switch (tool) {
+            case "RecycleBinTool" -> new ExpectedEffect("restore".equalsIgnoreCase(first(parameters, "operation", "op"))
+                    ? "RESTORE_STATE" : "PURGE_STATE", "EQUALS", "true", "回收站操作完成并返回对应证据");
             case "CleanTempTool", "DiskOpsTool", "LogCleanupTool", "LogOpsTool" ->
                     ExpectedEffect.diskOrPathDecrease(path);
             case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" ->
@@ -81,7 +83,8 @@ public final class RemediationContractFactory {
             case "ServiceRestartTool", "ServiceOpsTool", "SystemdTool" ->
                     RecoverSpec.irreversible(
                             "服务重启不可撤销；仅可补偿为再次 systemctl 操作或人工回滚配置，执行前须确认白名单与业务窗口");
-            case "RecycleBinTool" -> RecoverSpec.none();
+            case "RecycleBinTool" -> effect.irreversibility() >= 7
+                    ? RecoverSpec.irreversible("过期回收项永久清除后无法恢复") : RecoverSpec.none();
             default -> switch (effect.action()) {
                 case DELETE, TRUNCATE -> RecoverSpec.recycleBin();
                 case RESTART, KILL -> RecoverSpec.irreversible(

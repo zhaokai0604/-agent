@@ -49,8 +49,10 @@ class CleanTempToolBehaviorTest {
         assertEquals("SUCCESS", root.path("status").asText());
         assertEquals("DELETE", data.path("mode").asText());
         assertEquals(1, data.path("filesDeleted").asInt());
-        assertTrue(data.path("bytesFreed").asLong(0) > 0);
-        assertEquals("EFFECTIVE", data.path("businessEffect").asText());
+        assertEquals(0, data.path("bytesFreed").asLong());
+        assertFalse(data.path("bytesFreedMeasured").asBoolean(true));
+        assertTrue(data.path("bytesRecycled").asLong(0) > 0);
+        assertEquals("RECYCLED", data.path("businessEffect").asText());
         assertFalse(Files.exists(file));
     }
 
@@ -121,6 +123,10 @@ class CleanTempToolBehaviorTest {
         assertTrue(deleted.path("success").asBoolean(false));
         assertTrue(mapper.readTree(deleted.path("data").asText()).path("removed").asBoolean(false));
         assertFalse(Files.exists(child));
+        JsonNode evidence = mapper.readTree(deleted.path("data").asText());
+        var recycle = new com.award.log.service.OpsRecycleBinService(new com.award.log.config.OpsPepProperties(), tempDir.resolve("recycle").toString());
+        assertTrue(recycle.restore(evidence.path("recycleHandle").asText()));
+        assertEquals("cache", Files.readString(file));
     }
 
     @Test
@@ -145,6 +151,8 @@ class CleanTempToolBehaviorTest {
         }
         ReflectionTestUtils.setField(policy, "policyVersion", "test-clean-root");
         return new CleanTempTool(executor, McpToolsTestFixtures.objectMapper(),
-                McpToolsTestFixtures.minPrivilegeExecutor(executor), policy, new com.award.log.config.OpsRemediationProperties(), null);
+                McpToolsTestFixtures.minPrivilegeExecutor(executor), policy, new com.award.log.config.OpsRemediationProperties(),
+                new com.award.log.service.SafeDeleteSupport(new com.award.log.service.OpsRecycleBinService(
+                        new com.award.log.config.OpsPepProperties(), root.resolve("recycle").toString())));
     }
 }

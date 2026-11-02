@@ -42,6 +42,8 @@ public final class RemediationVerifyEvaluator {
         Map<String, Object> body = executionBody == null ? Map.of() : executionBody;
         boolean success = Boolean.TRUE.equals(body.get("success"));
         String execJson = serialize(body);
+        List<String> handles = extractRecycleHandles(execJson);
+        if (!handles.isEmpty()) report.put("recover",c.recover().withHandles(handles).toMap());
         boolean requestedWrite = WriteToolResultSupport.requestedRealWrite(
                 requestParameters == null ? Map.of() : requestParameters);
 
@@ -85,10 +87,6 @@ public final class RemediationVerifyEvaluator {
 
         BusinessCheck business = checkBusinessExpectation(c.expectedEffect(), execJson);
         report.put("businessCheck", business.toMap());
-        List<String> handles = extractRecycleHandles(execJson);
-        if (!handles.isEmpty()) {
-            report.put("recover", c.recover().withHandles(handles).toMap());
-        }
         if (business.outcome() != VerifyOutcome.VERIFIED) {
             return fail(report, business.outcome(), business.message(), dryRunPreviewJson);
         }
@@ -143,10 +141,17 @@ public final class RemediationVerifyEvaluator {
             }
             return BusinessCheck.weak("缺少 PATH_USAGE 下降硬证据（filesDeleted/bytesFreed/recycle）；不得记为处置成功");
         }
+        if ("RESTORE_STATE".equals(metric)) {
+            return bool(data, "restored") && bool(data, "recoveryVerified")
+                    ? BusinessCheck.ok("恢复目标已复核存在") : BusinessCheck.incomplete("缺少恢复完成及目标存在证据");
+        }
+        if ("PURGE_STATE".equals(metric)) {
+            return bool(data, "purged") ? BusinessCheck.ok("过期回收项清理完成") : BusinessCheck.incomplete("缺少过期清理证据");
+        }
         if ("SERVICE_STATE".equals(metric)) {
             String after = text(data, "afterState", "status", "state", "ActiveState");
-            String lower = after.toLowerCase(Locale.ROOT);
-            if (lower.contains("active") || lower.contains("running") || lower.contains("ok")) {
+            String lower = after.trim().toLowerCase(Locale.ROOT);
+            if ("active".equals(lower) || "running".equals(lower)) {
                 return BusinessCheck.ok("服务状态满足预期: " + after);
             }
             return BusinessCheck.weak("缺少 afterState=active/running 硬证据；不得记为处置成功，实际=" + after);
@@ -237,16 +242,22 @@ public final class RemediationVerifyEvaluator {
     /** 执行后只读复测：候选数必须下降，且复测本身必须可用。 */
     private static BusinessCheck checkMeasuredEffect(
             Map<String, Object> executionBody, ExpectedEffect expected) {
-        if (executionBody == null || expected == null || !"PATH_USAGE".equals(expected.metric())
+        if (expected == null || !"PATH_USAGE".equals(expected.metric())) {
+            return BusinessCheck.ok("该操作不需要路径指标复测");
+        }
+        if (executionBody == null
                 || !(executionBody.get("metricsBefore") instanceof Map<?, ?> before)
                 || !(executionBody.get("metricsAfter") instanceof Map<?, ?> after)) {
-            return BusinessCheck.ok("未配置路径复测指标，沿用工具写证据校验");
+            return BusinessCheck.incomplete("缺少执行前后路径指标，不得将清理记为已验证");
         }
-        if (!Boolean.TRUE.equals(after.get("available"))) {
+        if (!Boolean.TRUE.equals(before.get("available")) || !Boolean.TRUE.equals(after.get("available"))
+                || !(before.containsKey("deletableCount") || before.containsKey("filesFound"))
+                || !(after.containsKey("deletableCount") || after.containsKey("filesFound"))) {
             return BusinessCheck.incomplete("执行后路径指标复测不可用，不得将清理记为已验证");
         }
         long beforeCount = metricNumber(before, "deletableCount", "filesFound");
         long afterCount = metricNumber(after, "deletableCount", "filesFound");
+        if (beforeCount < 0 || afterCount < 0) return BusinessCheck.incomplete("路径复测计数缺失或非法");
         long deleted = number(extractData(serialize(executionBody)), "filesDeleted", "deletedCount");
         if (deleted > 0 && afterCount < beforeCount) {
             return BusinessCheck.ok("执行后复测通过：候选数 " + beforeCount + " -> " + afterCount);
@@ -272,7 +283,7 @@ public final class RemediationVerifyEvaluator {
                 }
             }
         }
-        return 0L;
+        return -1L;
     }
 
     private static String serialize(Map<String, Object> body) {

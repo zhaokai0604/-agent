@@ -1,6 +1,7 @@
 package com.award.log.controller;
 
 import com.award.log.common.Result;
+import com.award.log.governance.OpsExecutionPipeline;
 import com.award.log.mcp.McpToolCatalog;
 import com.award.log.security.AuthInterceptor;
 import com.award.log.security.McpInvocationSecurityGate.GateDecision;
@@ -60,6 +61,7 @@ class RunbookApprovalControllerIntegrationTest {
     private OpsAuditTraceService opsAuditTraceService;
     @Mock
     private OpsPathPolicy opsPathPolicy;
+    @Mock private OpsExecutionPipeline governedPipeline;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final RequestUserResolver requestUserResolver = new RequestUserResolver();
@@ -70,6 +72,13 @@ class RunbookApprovalControllerIntegrationTest {
     @BeforeEach
     void setUp() {
         jdbcTemplate = new InMemoryJdbcTemplate();
+
+        org.mockito.Mockito.lenient().when(governedPipeline.preview(anyString(), anyMap(), anyString(), anyString()))
+                .thenReturn(new OpsExecutionPipeline.PipelineResult(Map.of("success",true),"preview",0,"",null,"","preview"));
+        org.mockito.Mockito.lenient().when(governedPipeline.propose(anyString(), anyMap(), anyString(), anyString(), anyString()))
+                .thenReturn(new OpsExecutionPipeline.PipelineResult(Map.of("needConfirm",true,"confirmationId","ticket",
+                        "capabilityToken","cap","confirmToken","hmac","expiresAtMs",System.currentTimeMillis()+600000),"ticket",0,"",null,"","preview"));
+
         mockMvc = buildMvc(createService(jdbcTemplate));
     }
 
@@ -80,13 +89,13 @@ class RunbookApprovalControllerIntegrationTest {
         when(opsPathPolicy.getPolicyVersion()).thenReturn("policy-v1");
         when(mcpSecurityService.evaluatePostConfirm(anyString(), anyMap(), anyString()))
                 .thenReturn(GateDecision.allow(RiskLevel.MEDIUM, 4.0, Map.of(), "ok"));
-        when(mcpSecurityService.buildInstruction(anyString(), anyMap())).thenReturn("instr");
+
 
         Map<String, Object> execResponse = new LinkedHashMap<>();
         execResponse.put("success", true);
         execResponse.put("data", "{\"success\":true,\"data\":\"{\\\"mode\\\":\\\"DELETE\\\"}\"}");
-        when(mcpExecutionService.execute(anyString(), anyMap(), anyLong(), anyString(), anyString(), anyBoolean()))
-                .thenReturn(execResponse);
+        when(governedPipeline.executeConfirmed(anyString(),anyString(),anyString(),anyString(),anyString()))
+                .thenReturn(new OpsExecutionPipeline.PipelineResult(execResponse,"pipeline-trace-verified",0,"",null,"","preview"));
 
         Map<String, Object> submitPayload = Map.of(
                 "title", "Disk cleanup",
@@ -122,6 +131,14 @@ class RunbookApprovalControllerIntegrationTest {
         secondServiceMvc.perform(post("/api/runbook/{id}/execute", id)
                         .sessionAttr(AuthInterceptor.SESSION_USER_ID, 1)
                         .sessionAttr(AuthInterceptor.SESSION_USER_ROLE, 1))
+                .andExpect(jsonPath("$.code").value(409));
+        secondServiceMvc.perform(post("/api/runbook/{id}/approve", id)
+                        .sessionAttr(AuthInterceptor.SESSION_USER_ID, 1)
+                        .sessionAttr(AuthInterceptor.SESSION_USER_ROLE, 1))
+                .andExpect(jsonPath("$.code").value(200));
+        secondServiceMvc.perform(post("/api/runbook/{id}/execute", id)
+                        .sessionAttr(AuthInterceptor.SESSION_USER_ID, 1)
+                        .sessionAttr(AuthInterceptor.SESSION_USER_ROLE, 1))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.status").value("EXECUTED"))
@@ -146,13 +163,7 @@ class RunbookApprovalControllerIntegrationTest {
         assertEquals("1", item.path("operator").asText());
         assertTrue(item.path("traceId").asText().length() > 10);
 
-        verify(mcpExecutionService).execute(
-                eq("CleanTempTool"),
-                anyMap(),
-                anyLong(),
-                anyString(),
-                anyString(),
-                eq(true));
+        verify(governedPipeline).executeConfirmed(eq("ticket"),eq("cap"),eq("hmac"),eq("确认执行"),eq("1"));
         verify(opsAuditTraceService).save(
                 anyString(),
                 eq("RUNBOOK"),
@@ -207,7 +218,7 @@ class RunbookApprovalControllerIntegrationTest {
                 objectMapper,
                 opsAuditTraceService,
                 opsPathPolicy,
-                jdbc);
+                jdbc, governedPipeline);
         ReflectionTestUtils.invokeMethod(service, "init");
         return service;
     }
@@ -273,6 +284,15 @@ class RunbookApprovalControllerIntegrationTest {
 
         @Override
         public int update(String sql, Object... args) {
+
+            if (sql.contains("SET status='EXECUTING'")) {
+                long id = toLong(args[2]);
+                var row = rows.stream().filter(r -> toLong(r.get("id")) == id).findFirst().orElseThrow();
+                if (!"APPROVED".equals(row.get("status"))) return 0;
+                row.put("status", "EXECUTING"); row.put("operator", args[0]); row.put("executed_at", args[1]);
+                return 1;
+            }
+
             if (sql.startsWith("INSERT INTO ops_runbook_approval")) {
                 Map<String, Object> row = new HashMap<>();
                 row.put("id", toLong(args[0]));

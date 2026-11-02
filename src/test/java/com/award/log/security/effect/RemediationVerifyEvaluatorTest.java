@@ -44,6 +44,8 @@ class RemediationVerifyEvaluatorTest {
     void verifiedWhenDeleteEvidencePresent() {
         Map<String, Object> exec = new LinkedHashMap<>();
         exec.put("success", true);
+        exec.put("metricsBefore", Map.of("available", true, "filesFound", 3));
+        exec.put("metricsAfter", Map.of("available", true, "filesFound", 0));
         exec.put("data", Map.of(
                 "mode", "DELETE",
                 "filesDeleted", 3,

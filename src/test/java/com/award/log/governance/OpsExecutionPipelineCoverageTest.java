@@ -235,6 +235,107 @@ class OpsExecutionPipelineCoverageTest {
     }
 
     @Test
+    void confirmedWriteAuditFailureConsumesApprovalWithoutInvokingTheWriteTool() {
+        when(securityService.evaluateInitial(anyString(),anyMap(),anyString()))
+                .thenReturn(McpInvocationSecurityGate.GateDecision.needConfirm(RiskLevel.MEDIUM,"confirm",5,Map.of(),"write"));
+        when(securityService.evaluatePostConfirm(anyString(),anyMap(),anyString()))
+                .thenReturn(McpInvocationSecurityGate.GateDecision.allow(RiskLevel.MEDIUM,5,Map.of(),"allowed"));
+        when(securityService.buildNeedConfirmResponse(anyString(),anyLong(),any(),anyString(),anyMap()))
+                .thenAnswer(c->new LinkedHashMap<>(Map.of("needConfirm",true)));
+        org.mockito.Mockito.doThrow(new IllegalStateException("audit database unavailable"))
+                .when(auditService).persistWriteIntent(anyString(),anyString(),anyMap(),anyString(),anyString(),any());
+        var proposal=pipeline.propose("ServiceRestartTool",Map.of("serviceName","fixture","dryRun",false),"restart","owner","{}");
+        var result=pipeline.executeConfirmed(String.valueOf(proposal.body().get("confirmationId")),
+                String.valueOf(proposal.body().get("capabilityToken")),"","确认执行","owner");
+        assertEquals("AUDIT_UNAVAILABLE",result.body().get("securityCode"));
+        assertEquals(false,result.body().get("writeStarted"));
+        assertEquals(true,result.body().get("confirmationConsumed"));
+        verify(executionService,never()).execute(anyString(),anyMap(),anyLong(),anyString(),anyString(),anyBoolean());
+    }
+
+    @Test
+    void directlyAdmittedWriteStillRequiresDurableAudit() {
+        when(securityService.evaluateInitial(anyString(),anyMap(),anyString()))
+                .thenReturn(McpInvocationSecurityGate.GateDecision.allow(RiskLevel.MEDIUM,5,Map.of(),"allowed"));
+        when(executionService.execute(anyString(),anyMap(),anyLong(),anyString(),anyString()))
+                .thenReturn(response(true,"{}"));
+        org.mockito.Mockito.doThrow(new IllegalStateException("audit database unavailable"))
+                .when(auditService).persistWriteIntent(anyString(),anyString(),anyMap(),anyString(),anyString(),any());
+        var result=pipeline.executeDirect("ServiceRestartTool",Map.of("serviceName","fixture","dryRun",false),"restart","owner");
+        assertEquals("AUDIT_UNAVAILABLE",result.body().get("securityCode"));
+        // Only a dry-run pre-observation is allowed; the real invocation must never happen.
+        var arguments=org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(executionService).execute(anyString(),arguments.capture(),anyLong(),anyString(),anyString());
+        assertEquals(true,arguments.getValue().get("dryRun"));
+    }
+
+    @Test
+    void consumedConfirmationIsReportedEvenWhenPostProbeFails() {
+        pepProperties.setEnabled(false);
+        when(securityService.evaluateInitial(anyString(), anyMap(), anyString()))
+                .thenReturn(McpInvocationSecurityGate.GateDecision.needConfirm(RiskLevel.MEDIUM,"确认",5,Map.of(),"write"));
+        when(securityService.evaluatePostConfirm(anyString(), anyMap(), anyString()))
+                .thenReturn(McpInvocationSecurityGate.GateDecision.allow(RiskLevel.MEDIUM,5,Map.of(),"allowed"));
+        when(securityService.buildNeedConfirmResponse(anyString(),anyLong(),any(),anyString(),anyMap()))
+                .thenAnswer(call -> new LinkedHashMap<>(Map.of("success",false,"needConfirm",true)));
+        when(executionService.execute(anyString(),anyMap(),anyLong(),anyString(),anyString(),anyBoolean()))
+                .thenReturn(response(true,"{\"mode\":\"DELETE\",\"filesDeleted\":1,\"recycleHandle\":\"canary\"}"));
+        when(executionService.execute(anyString(),anyMap(),anyLong(),anyString(),anyString()))
+                .thenReturn(response(false,"{}"));
+        var proposal=pipeline.propose("CleanTempTool",Map.of("path","C:/Temp","dryRun",false,"confirmDelete",true),
+                "清理","owner","{\"success\":true,\"data\":{\"filesFound\":1}}","session");
+        var result=pipeline.executeConfirmed(String.valueOf(proposal.body().get("confirmationId")),
+                String.valueOf(proposal.body().get("capabilityToken")),String.valueOf(proposal.body().get("confirmToken")),
+                "确认执行","owner","session");
+        assertEquals(true,result.body().get("confirmationConsumed"));
+        assertEquals(true,result.body().get("executionSuccess"));
+        assertEquals(false,result.body().get("success"));
+        assertEquals("EVIDENCE_INCOMPLETE",result.body().get("verifyOutcome"));
+        var replay=pipeline.executeConfirmed(String.valueOf(proposal.body().get("confirmationId")),
+                String.valueOf(proposal.body().get("capabilityToken")),String.valueOf(proposal.body().get("confirmToken")),
+                "确认执行","owner","session");
+        assertFalse(Boolean.TRUE.equals(replay.body().get("success")));
+    }
+
+    @Test
+    void badHmacConsumesTicketWithoutExecutingAnything() {
+        pepProperties.setEnabled(true);
+        when(securityService.evaluateInitial(anyString(),anyMap(),anyString()))
+                .thenReturn(McpInvocationSecurityGate.GateDecision.needConfirm(RiskLevel.MEDIUM,"确认",5,Map.of(),"write"));
+        when(securityService.buildNeedConfirmResponse(anyString(),anyLong(),any(),anyString(),anyMap()))
+                .thenAnswer(call -> new LinkedHashMap<>(Map.of("success",false,"needConfirm",true)));
+        var proposal=pipeline.propose("ServiceRestartTool",Map.of("serviceName","nginx","dryRun",false),"cleanup","owner","{}","session");
+        var result=pipeline.executeConfirmed(String.valueOf(proposal.body().get("confirmationId")),
+                String.valueOf(proposal.body().get("capabilityToken")),"bad-hmac","确认执行","owner","session");
+        assertEquals(true,result.body().get("confirmationConsumed"));
+        assertFalse(Boolean.TRUE.equals(result.body().get("success")));
+        verify(executionService,never()).execute(anyString(),anyMap(),anyLong(),anyString(),anyString(),anyBoolean());
+    }
+
+    @Test
+    void removedDirectoryIsVerifiedByActualAbsenceWhenToolProbeFails(@org.junit.jupiter.api.io.TempDir java.nio.file.Path temp) throws Exception {
+        var child=java.nio.file.Files.createDirectory(temp.resolve("approved-child"));
+        when(securityService.evaluateInitial(anyString(),anyMap(),anyString()))
+                .thenReturn(McpInvocationSecurityGate.GateDecision.allow(RiskLevel.MEDIUM,5,Map.of(),"allowed"));
+        when(executionService.execute(anyString(),anyMap(),anyLong(),anyString(),anyString()))
+                .thenAnswer(call -> {
+                    Map<String,Object> args=call.getArgument(1);
+                    if (Boolean.TRUE.equals(args.get("dryRun"))) {
+                        if (!java.nio.file.Files.exists(child)) throw new IllegalStateException("target no longer exists");
+                        return response(true,"{\"mode\":\"DRY-RUN\",\"filesFound\":1}");
+                    }
+                    java.nio.file.Files.move(child,temp.resolve("recycled-child"));
+                    return response(true,"{\"mode\":\"DELETE\",\"removed\":true,\"filesDeleted\":1}");
+                });
+        var result=pipeline.executeDirect("CleanTempTool",Map.of("path",child.toString(),"dryRun",false,
+                "confirmDelete",true,"removeDirectory",true),"cleanup","owner");
+        assertEquals(true,result.body().get("verified"));
+        assertTrue(java.nio.file.Files.exists(temp.resolve("recycled-child")));
+        assertFalse(java.nio.file.Files.exists(child));
+        assertEquals(0,((Map<?,?>)result.body().get("metricsAfter")).get("filesFound"));
+    }
+
+    @Test
     void executeDirectBlockedAndNeedConfirmDoNotBypassApproval() {
         when(securityService.evaluateInitial(anyString(), anyMap(), anyString()))
                 .thenReturn(McpInvocationSecurityGate.GateDecision.block("HIGH_RISK", "高风险"));

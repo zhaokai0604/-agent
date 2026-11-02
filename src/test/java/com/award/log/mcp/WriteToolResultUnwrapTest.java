@@ -25,6 +25,8 @@ class WriteToolResultUnwrapTest {
                 + MAPPER.writeValueAsString(inner) + "}";
         Map<String, Object> exec = new LinkedHashMap<>();
         exec.put("success", true);
+        exec.put("metricsBefore", Map.of("available", true, "filesFound", 2));
+        exec.put("metricsAfter", Map.of("available", true, "filesFound", 0));
         exec.put("data", toolResult);
 
         Map<String, Object> params = Map.of("dryRun", false, "confirmDelete", true);

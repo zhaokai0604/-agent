@@ -23,18 +23,27 @@ public class SafeDeleteSupport {
 
     public DeleteOutcome deleteFile(Path file, String traceId, boolean useRecycleBin) {
         if (file == null || !Files.exists(file)) {
+            com.award.log.security.effect.FileApprovalScope.reject("审批对象已不存在");
             return DeleteOutcome.skipped("not_found");
+        }
+        if(!useRecycleBin && com.award.log.security.effect.FileApprovalScope.frozenCandidates()!=null) {
+            com.award.log.security.effect.FileApprovalScope.reject("绑定的文件审批不允许永久删除");
+            return DeleteOutcome.failed("审批对象仅允许进入回收站");
         }
         if (useRecycleBin && recycleBinService != null) {
             try {
-                String handle = recycleBinService.moveToRecycleBin(file, traceId);
+                var expected = com.award.log.security.effect.FileApprovalScope.expected(file);
+                String handle = expected == null ? recycleBinService.moveToRecycleBin(file, traceId)
+                        : recycleBinService.moveToRecycleBin(file, traceId, expected);
                 return DeleteOutcome.recycled(handle, file.toString());
             } catch (Exception e) {
+                com.award.log.security.effect.FileApprovalScope.reject(e.getMessage());
                 log.warn("回收站移动失败，拒绝不可逆删除: {} {}", file, e.getMessage());
                 return DeleteOutcome.failed("recycle_failed: " + e.getMessage());
             }
         }
         if (useRecycleBin) {
+            com.award.log.security.effect.FileApprovalScope.reject("回收站服务不可用");
             return DeleteOutcome.failed("recycle_service_unavailable");
         }
         try {
@@ -43,6 +52,10 @@ public class SafeDeleteSupport {
         } catch (Exception e) {
             return DeleteOutcome.failed(e.getMessage());
         }
+    }
+
+    public boolean isRecyclePath(Path path) {
+        return recycleBinService != null && recycleBinService.isRecyclePath(path);
     }
 
     public record DeleteOutcome(String mode, boolean success, String handle, String path, String error) {
