@@ -1,7 +1,7 @@
 # 本地/演示用依赖栈（应用进程仍建议本机 mvn / jar 启动，便于调试 MCP 与宿主路径）
 #
 # 启动：docker compose up -d mysql qdrant
-# 建表：首次需对库执行 src/main/resources/schema.sql（及所需增量 SQL）
+# 建表：新空库由应用启动时 Flyway 迁移；旧库先备份并按迁移文档显式接管，不重复导入 schema.sql
 #
 # 环境变量可复制根目录 .env.example
 
@@ -16,6 +16,8 @@ services:
       TZ: Asia/Shanghai
     ports:
       - "${MYSQL_PUBLISH_PORT:-3306}:3306"
+    volumes:
+      - mysql_storage:/var/lib/mysql
     command: >
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
@@ -42,4 +44,5 @@ services:
       retries: 6
 
 volumes:
+  mysql_storage:
   qdrant_storage:

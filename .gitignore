@@ -118,3 +118,6 @@ deploy/release/
 alarm-config.json
 agent-path-policy-overrides.json
 system-config-overrides.json
+
+# Private retained log inputs; deployment data, never source or competition material.
+/data/log-inputs/

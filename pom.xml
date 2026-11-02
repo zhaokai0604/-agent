@@ -25,6 +25,9 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
+        <maven.build.timestamp.format>yyyyMMddHHmmssSSS</maven.build.timestamp.format>
+        <coverage.dataFile>${java.io.tmpdir}/threshcore-coverage/${project.artifactId}-${maven.build.timestamp}/jacoco.exec</coverage.dataFile>
+
         <!-- Java -->
         <java.version>17</java.version>
 
@@ -148,6 +151,16 @@
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- Versioned database migrations; versions follow the Spring Boot BOM. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
         </dependency>
 
         <!-- Lombok -->
@@ -363,9 +376,10 @@
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>0.8.12</version>
                 <configuration>
-                    <!-- 中文工程路径下 JaCoCo agent 写 target 可能失败，改写到系统 temp -->
-                    <destFile>${java.io.tmpdir}/award-log-jacoco.exec</destFile>
-                    <dataFile>${java.io.tmpdir}/award-log-jacoco.exec</dataFile>
+                    <!-- 保持 ASCII 路径，并按本次构建时间隔离，避免旧覆盖率或另一工程串入 -->
+                    <destFile>${coverage.dataFile}</destFile>
+                    <append>false</append>
+                    <dataFile>${coverage.dataFile}</dataFile>
                     <outputDirectory>${project.reporting.outputDirectory}/jacoco</outputDirectory>
                 </configuration>
                 <executions>
@@ -431,6 +445,29 @@
 
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>mysql-compat</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/Test*.java</include>
+                                <include>**/*Test.java</include>
+                                <include>**/*Tests.java</include>
+                                <include>**/*TestCase.java</include>
+                                <include>**/*IT.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <!-- 阿里云仓库 -->
     <repositories>
