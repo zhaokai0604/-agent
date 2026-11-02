@@ -31,10 +31,12 @@
 | GET | `/log/report/{taskId}/details` | 明细分页（`pageNum`/`pageSize`/`anomalyOnly`） |
 | GET | `/log/history` | 历史列表 |
 | GET | `/log/download/{taskId}/{type}` | 报告下载 |
-| POST | `/log/diagnose/{taskId}` | 诊断触发 |
+| POST/GET | `/log/diagnosis/{taskId}` | 提交独立诊断任务 / 查询持久状态与成功结果 |
+| POST | `/log/diagnosis/{taskId}/cancel` | 按 runId 取消诊断，保留解析结果 |
+| POST | `/log/diagnose/{taskId}` | 同步兼容入口，等待同一受跟踪诊断任务 |
 | POST | `/log/cancel/{taskId}` | 取消任务 |
 | DELETE | `/log/delete/{taskId}` | 删除任务 |
-| POST/GET | `/log/diagnose/chat`、`/log/diagnose/stream/{taskId}` | 诊断 SSE（AiDiagnosis） |
+| POST/GET | `/log/diagnose/chat`、`/log/diagnose/stream/{taskId}` | 默认关闭的旧兼容入口；日志页面不依赖它，旧任务诊断也接入同一持久任务 |
 
 ### 1.3 运维助手 / 运维工具台
 
@@ -45,6 +47,8 @@
 | GET | `/api/mcp/tools` | 工具列表 |
 | POST | `/api/mcp/execute` | 执行工具 |
 | POST | `/api/mcp/confirmExecute` | 二次确认执行 |
+
+协作任务工作台使用 `/api/agent-teams` 及其 `skills`、`{id}`、`{id}/approve`、`{id}/plan`、`{id}/cancel` 接口。接口归属、审批契约与验证边界见 [AgentTeams 运行与接管](AgentTeams运行与接管.md)。
 
 ### 1.4 巡检态势主链路
 
@@ -111,7 +115,7 @@
 | Model evaluate/reload | `/api/v1/model/evaluate`、`/reload` | `ModelEvaluationController` / `ModelHealthController` |
 | Model health | `GET /api/v1/model/health` | 可保留探测，无默认页 |
 | Collector / Kafka | `/api/collector/status`、`/api/kafka/status` | `CollectorStatusController` / `KafkaMonitorController` |
-| Runbook | `/api/runbook/*` | `RunbookApprovalController` |
+| Runbook | `/api/runbook/*` | `RunbookApprovalController`；管理员可用 `POST /{id}/reconcile` 对执行结果不明的工单人工核对结案，原工单不可重放 |
 | Ops Schedule | `/api/ops-schedule/tasks*` | `OpsScheduleController` |
 | RBAC | `/admin/role/*`、`/admin/permission/*` | `SysRoleController` / `SysPermissionController` |
 

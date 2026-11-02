@@ -13,7 +13,7 @@
 | 操作系统 | 银河麒麟高级服务器版 V11 |
 | CPU | LoongArch64（`uname -m` → `loongarch64`） |
 | JDK | 17（龙架构本地构建，非 x86 交叉运行） |
-| MariaDB | 10.6+（麒麟 V11 系统自带），库表已执行 `schema.sql` |
+| 数据库 | 核对实际 MariaDB 版本与驱动兼容性，应用 Flyway 迁移成功；目标平台需实机验证 |
 | 可选 | Nginx 反代、systemd 托管 |
 
 ---
@@ -54,8 +54,9 @@ sudo systemctl enable --now mariadb
 mariadb -u root -p -e "CREATE DATABASE IF NOT EXISTS log_analysis DEFAULT CHARSET utf8mb4;"
 mariadb -u root -p -e "CREATE USER IF NOT EXISTS 'threshcore'@'localhost' IDENTIFIED BY 'CHANGE_ME';"
 mariadb -u root -p -e "GRANT ALL PRIVILEGES ON log_analysis.* TO 'threshcore'@'localhost'; FLUSH PRIVILEGES;"
-mariadb -u root -p log_analysis < src/main/resources/schema.sql
 ```
+
+新空库在应用启动时执行 Flyway 迁移，不导入旧 `schema.sql`；已有业务库先备份并按 [版本迁移与任务恢复](版本迁移与任务恢复.md) 显式接管。不能把 Windows/MySQL 测试作为麒麟/MariaDB 的实机验收。
 
 ```bash
 sudo mkdir -p /opt/threshcore/logs
@@ -130,7 +131,13 @@ bash scripts/deploy/smoke_kylin_acceptance.sh
 - [ ] `systemctl status root-helper` 为 active；`/var/run/award-root-helper.sock` 存在
 - [ ] `AGENT_ROOT_HELPER_ENABLED=true`（需 root-helper 与策略文件 `/etc/award-agent/root-helper-policy.json`）
 - [ ] 写工具二次确认：MCP 预览返回 `dryRunPreviewHash` + `confirmToken`，参数变更后令牌失效
-- [ ] 表 `ops_recycle_entry` 已创建（`schema.sql`）；清理类工具删除优先进回收站
+- [ ] Flyway 迁移完成且表 `ops_recycle_entry` 已创建；清理类工具删除优先进回收站
+- [ ] 为每个需要处置的文件系统配置 `AGENT_RECYCLE_ROOT` / `AGENT_RECYCLE_VOLUME_ROOTS`，根目录
+      不互相嵌套且非符号链接；确认源路径同卷无对应根时系统会拒绝执行，不得用跨卷复制删除替代
+- [ ] 保留所有配置根直至条目恢复或过期清理完成；重启后用 `recycleBinOps(list)` 检查 `volumeRoot`
+      与 `handle`，并用一条合成文件完成 restore 验证
+- [ ] 按现场目录规模设置 `AGENT_RECYCLE_MAX_SCAN_ENTRIES`；list/purge 达到上限会留待后续轮次，
+      不能把单次返回为空理解为没有历史回收条目
 - [ ] `GET /api/ops/skills/yaml` 返回结构化 SOP 列表（登录后）
 - [ ] SecuritySelfCheck 对标项 pep / bwrap / yamlSkills 为 pass（管理端自检接口）
 
