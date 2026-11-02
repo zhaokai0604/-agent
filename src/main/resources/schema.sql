@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS `log_analysis_detail` (
 
 -- 告警规则表
 -- 先删除旧表（如果存在）
-DROP TABLE IF EXISTS `alarm_rule`;
+-- Existing alarm rules must survive repeated imports. Schema changes use Flyway migrations.
 
 -- 重新创建alarm_rule表
 CREATE TABLE IF NOT EXISTS `alarm_rule` (

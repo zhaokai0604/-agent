@@ -1,0 +1,909 @@
+{
+  "tables": [
+    {
+      "name": "ops_failure_insight",
+      "createSql": "CREATE TABLE IF NOT EXISTS ops_failure_insight (\n  id BIGINT NOT NULL AUTO_INCREMENT,\n  insight_key VARCHAR(160) NOT NULL,\n  security_code VARCHAR(64) NOT NULL,\n  tool_name VARCHAR(128) DEFAULT NULL,\n  intent_hint VARCHAR(512) DEFAULT NULL,\n  reflection TEXT NOT NULL,\n  source_trace_id VARCHAR(64) DEFAULT NULL,\n  hit_count INT NOT NULL DEFAULT 1,\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,\n  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (id),\n  UNIQUE KEY uk_insight_key (insight_key),\n  KEY idx_security_code (security_code)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Reflexion 失败教训'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL AUTO_INCREMENT"
+        },
+        {
+          "name": "insight_key",
+          "definition": "VARCHAR(160) NOT NULL"
+        },
+        {
+          "name": "security_code",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "tool_name",
+          "definition": "VARCHAR(128) DEFAULT NULL"
+        },
+        {
+          "name": "intent_hint",
+          "definition": "VARCHAR(512) DEFAULT NULL"
+        },
+        {
+          "name": "reflection",
+          "definition": "TEXT NOT NULL"
+        },
+        {
+          "name": "source_trace_id",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "hit_count",
+          "definition": "INT NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "created_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_insight_key",
+          "unique": true,
+          "columns": [
+            "insight_key"
+          ]
+        },
+        {
+          "name": "idx_security_code",
+          "unique": false,
+          "columns": [
+            "security_code"
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "name": "ops_workflow_memory",
+      "createSql": "CREATE TABLE IF NOT EXISTS ops_workflow_memory (\n  id BIGINT NOT NULL AUTO_INCREMENT,\n  workflow_id VARCHAR(64) NOT NULL,\n  domain_tag VARCHAR(32) NOT NULL,\n  finding_kinds VARCHAR(256) DEFAULT NULL,\n  title VARCHAR(255) NOT NULL,\n  description TEXT,\n  steps_json LONGTEXT NOT NULL,\n  source_type VARCHAR(16) NOT NULL DEFAULT 'seed',\n  source_trace_id VARCHAR(64) DEFAULT NULL,\n  utility_count INT NOT NULL DEFAULT 0,\n  success_count INT NOT NULL DEFAULT 0,\n  enabled TINYINT(1) NOT NULL DEFAULT 1,\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,\n  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (id),\n  UNIQUE KEY uk_workflow_id (workflow_id),\n  KEY idx_domain_tag (domain_tag),\n  KEY idx_enabled (enabled)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent Workflow Memory'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL AUTO_INCREMENT"
+        },
+        {
+          "name": "workflow_id",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "domain_tag",
+          "definition": "VARCHAR(32) NOT NULL"
+        },
+        {
+          "name": "finding_kinds",
+          "definition": "VARCHAR(256) DEFAULT NULL"
+        },
+        {
+          "name": "title",
+          "definition": "VARCHAR(255) NOT NULL"
+        },
+        {
+          "name": "description",
+          "definition": "TEXT"
+        },
+        {
+          "name": "steps_json",
+          "definition": "LONGTEXT NOT NULL"
+        },
+        {
+          "name": "source_type",
+          "definition": "VARCHAR(16) NOT NULL DEFAULT 'seed'"
+        },
+        {
+          "name": "source_trace_id",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "utility_count",
+          "definition": "INT NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "success_count",
+          "definition": "INT NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "enabled",
+          "definition": "TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "created_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_workflow_id",
+          "unique": true,
+          "columns": [
+            "workflow_id"
+          ]
+        },
+        {
+          "name": "idx_domain_tag",
+          "unique": false,
+          "columns": [
+            "domain_tag"
+          ]
+        },
+        {
+          "name": "idx_enabled",
+          "unique": false,
+          "columns": [
+            "enabled"
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "name": "ops_workflow_run",
+      "createSql": "CREATE TABLE IF NOT EXISTS ops_workflow_run (\n  id BIGINT NOT NULL AUTO_INCREMENT,\n  workflow_id VARCHAR(64) NOT NULL,\n  trace_id VARCHAR(64) DEFAULT NULL,\n  success TINYINT(1) NOT NULL DEFAULT 0,\n  steps_ok INT NOT NULL DEFAULT 0,\n  steps_total INT NOT NULL DEFAULT 0,\n  summary VARCHAR(512) DEFAULT NULL,\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (id),\n  KEY idx_workflow_run_wf (workflow_id),\n  KEY idx_workflow_run_trace (trace_id)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AWM workflow execution runs'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL AUTO_INCREMENT"
+        },
+        {
+          "name": "workflow_id",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "trace_id",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "success",
+          "definition": "TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "steps_ok",
+          "definition": "INT NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "steps_total",
+          "definition": "INT NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "summary",
+          "definition": "VARCHAR(512) DEFAULT NULL"
+        },
+        {
+          "name": "created_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_workflow_run_wf",
+          "unique": false,
+          "columns": [
+            "workflow_id"
+          ]
+        },
+        {
+          "name": "idx_workflow_run_trace",
+          "unique": false,
+          "columns": [
+            "trace_id"
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "name": "user_profile_preference",
+      "createSql": "CREATE TABLE IF NOT EXISTS user_profile_preference (user_id INT NOT NULL PRIMARY KEY,email_enabled TINYINT(1) DEFAULT 0,sms_enabled TINYINT(1) DEFAULT 0,task_alerts TINYINT(1) DEFAULT 1,update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,CONSTRAINT fk_user_profile_preference_user FOREIGN KEY (user_id) REFERENCES sys_user(user_id) ON DELETE CASCADE)",
+      "columns": [
+        {
+          "name": "user_id",
+          "definition": "INT NOT NULL PRIMARY KEY"
+        },
+        {
+          "name": "email_enabled",
+          "definition": "TINYINT(1) DEFAULT 0"
+        },
+        {
+          "name": "sms_enabled",
+          "definition": "TINYINT(1) DEFAULT 0"
+        },
+        {
+          "name": "task_alerts",
+          "definition": "TINYINT(1) DEFAULT 1"
+        },
+        {
+          "name": "update_time",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [],
+      "constraints": [
+        "CONSTRAINT fk_user_profile_preference_user FOREIGN KEY (user_id) REFERENCES sys_user(user_id) ON DELETE CASCADE"
+      ]
+    },
+    {
+      "name": "user_api_key",
+      "createSql": "CREATE TABLE IF NOT EXISTS user_api_key (id BIGINT PRIMARY KEY AUTO_INCREMENT,user_id INT NOT NULL,key_name VARCHAR(64) NOT NULL,key_prefix VARCHAR(32) NOT NULL,key_hash VARCHAR(255) NOT NULL,scope_bundle VARCHAR(64) NOT NULL,status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',last_used_at DATETIME DEFAULT NULL,created_at DATETIME DEFAULT CURRENT_TIMESTAMP,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,revoked_at DATETIME DEFAULT NULL,KEY idx_user_api_key_user (user_id),KEY idx_user_api_key_prefix (key_prefix),CONSTRAINT fk_user_api_key_user FOREIGN KEY (user_id) REFERENCES sys_user(user_id) ON DELETE CASCADE)",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT PRIMARY KEY AUTO_INCREMENT"
+        },
+        {
+          "name": "user_id",
+          "definition": "INT NOT NULL"
+        },
+        {
+          "name": "key_name",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "key_prefix",
+          "definition": "VARCHAR(32) NOT NULL"
+        },
+        {
+          "name": "key_hash",
+          "definition": "VARCHAR(255) NOT NULL"
+        },
+        {
+          "name": "scope_bundle",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "status",
+          "definition": "VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'"
+        },
+        {
+          "name": "last_used_at",
+          "definition": "DATETIME DEFAULT NULL"
+        },
+        {
+          "name": "created_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "revoked_at",
+          "definition": "DATETIME DEFAULT NULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_user_api_key_user",
+          "unique": false,
+          "columns": [
+            "user_id"
+          ]
+        },
+        {
+          "name": "idx_user_api_key_prefix",
+          "unique": false,
+          "columns": [
+            "key_prefix"
+          ]
+        }
+      ],
+      "constraints": [
+        "CONSTRAINT fk_user_api_key_user FOREIGN KEY (user_id) REFERENCES sys_user(user_id) ON DELETE CASCADE"
+      ]
+    },
+    {
+      "name": "alarm_rule",
+      "createSql": "CREATE TABLE IF NOT EXISTS alarm_rule (\n  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '规则ID',\n  name VARCHAR(100) NOT NULL COMMENT '规则名称',\n  description VARCHAR(500) DEFAULT NULL COMMENT '规则描述',\n  rule_type VARCHAR(32) NOT NULL DEFAULT 'COMBINATION' COMMENT '规则类型',\n  rule_expression TEXT NOT NULL COMMENT '规则表达式',\n  severity VARCHAR(20) NOT NULL DEFAULT 'ERROR' COMMENT '告警级别',\n  push_channels VARCHAR(50) NOT NULL DEFAULT 'BOTH' COMMENT '推送渠道',\n  enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',\n  create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',\n  update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',\n  create_by VARCHAR(50) DEFAULT NULL COMMENT '创建人',\n  update_by VARCHAR(50) DEFAULT NULL COMMENT '更新人',\n  PRIMARY KEY (id)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='告警规则表'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL AUTO_INCREMENT COMMENT '规则ID'"
+        },
+        {
+          "name": "name",
+          "definition": "VARCHAR(100) NOT NULL COMMENT '规则名称'"
+        },
+        {
+          "name": "description",
+          "definition": "VARCHAR(500) DEFAULT NULL COMMENT '规则描述'"
+        },
+        {
+          "name": "rule_type",
+          "definition": "VARCHAR(32) NOT NULL DEFAULT 'COMBINATION' COMMENT '规则类型'"
+        },
+        {
+          "name": "rule_expression",
+          "definition": "TEXT NULL COMMENT '规则表达式'"
+        },
+        {
+          "name": "severity",
+          "definition": "VARCHAR(20) NOT NULL DEFAULT 'ERROR' COMMENT '告警级别'"
+        },
+        {
+          "name": "push_channels",
+          "definition": "VARCHAR(50) NOT NULL DEFAULT 'BOTH' COMMENT '推送渠道'"
+        },
+        {
+          "name": "enabled",
+          "definition": "TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用'"
+        },
+        {
+          "name": "create_time",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"
+        },
+        {
+          "name": "update_time",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'"
+        },
+        {
+          "name": "create_by",
+          "definition": "VARCHAR(50) DEFAULT NULL COMMENT '创建人'"
+        },
+        {
+          "name": "update_by",
+          "definition": "VARCHAR(50) DEFAULT NULL COMMENT '更新人'"
+        }
+      ],
+      "indexes": [],
+      "constraints": []
+    },
+    {
+      "name": "decision_feedback",
+      "createSql": "CREATE TABLE IF NOT EXISTS decision_feedback (\n  id BIGINT NOT NULL AUTO_INCREMENT,\n  decision_id VARCHAR(64) NOT NULL,\n  actual_alert TINYINT(1) NOT NULL DEFAULT 0,\n  reviewer VARCHAR(64) DEFAULT NULL,\n  remark VARCHAR(500) DEFAULT NULL,\n  create_time DATETIME DEFAULT CURRENT_TIMESTAMP,\n  log_content TEXT NULL,\n  log_level VARCHAR(32) DEFAULT NULL,\n  log_template VARCHAR(255) DEFAULT NULL,\n  model_confidence DOUBLE DEFAULT NULL,\n  is_trained TINYINT(1) DEFAULT 0,\n  error_rate_1m DOUBLE DEFAULT NULL,\n  error_1m DOUBLE DEFAULT NULL,\n  total_1m DOUBLE DEFAULT NULL,\n  interval_ms DOUBLE DEFAULT NULL,\n  PRIMARY KEY (id),\n  UNIQUE KEY uk_decision_feedback (decision_id)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='决策人工反馈表'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL AUTO_INCREMENT"
+        },
+        {
+          "name": "decision_id",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "actual_alert",
+          "definition": "TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "reviewer",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "remark",
+          "definition": "VARCHAR(500) DEFAULT NULL"
+        },
+        {
+          "name": "create_time",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "log_content",
+          "definition": "TEXT NULL"
+        },
+        {
+          "name": "log_level",
+          "definition": "VARCHAR(32) DEFAULT NULL"
+        },
+        {
+          "name": "log_template",
+          "definition": "VARCHAR(255) DEFAULT NULL"
+        },
+        {
+          "name": "model_confidence",
+          "definition": "DOUBLE DEFAULT NULL"
+        },
+        {
+          "name": "is_trained",
+          "definition": "TINYINT(1) DEFAULT 0"
+        },
+        {
+          "name": "error_rate_1m",
+          "definition": "DOUBLE DEFAULT NULL"
+        },
+        {
+          "name": "error_1m",
+          "definition": "DOUBLE DEFAULT NULL"
+        },
+        {
+          "name": "total_1m",
+          "definition": "DOUBLE DEFAULT NULL"
+        },
+        {
+          "name": "interval_ms",
+          "definition": "DOUBLE DEFAULT NULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_decision_feedback",
+          "unique": true,
+          "columns": [
+            "decision_id"
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "name": "ai_audit_log",
+      "createSql": "CREATE TABLE IF NOT EXISTS ai_audit_log (id BIGINT PRIMARY KEY AUTO_INCREMENT,user_id VARCHAR(64),user_role VARCHAR(32),remote_ip VARCHAR(64),method VARCHAR(16),path VARCHAR(255),status INT,duration_ms BIGINT,request_bytes INT,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT PRIMARY KEY AUTO_INCREMENT"
+        },
+        {
+          "name": "user_id",
+          "definition": "VARCHAR(64)"
+        },
+        {
+          "name": "user_role",
+          "definition": "VARCHAR(32)"
+        },
+        {
+          "name": "remote_ip",
+          "definition": "VARCHAR(64)"
+        },
+        {
+          "name": "method",
+          "definition": "VARCHAR(16)"
+        },
+        {
+          "name": "path",
+          "definition": "VARCHAR(255)"
+        },
+        {
+          "name": "status",
+          "definition": "INT"
+        },
+        {
+          "name": "duration_ms",
+          "definition": "BIGINT"
+        },
+        {
+          "name": "request_bytes",
+          "definition": "INT"
+        },
+        {
+          "name": "created_at",
+          "definition": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [],
+      "constraints": []
+    },
+    {
+      "name": "ops_runbook_approval",
+      "createSql": "CREATE TABLE IF NOT EXISTS ops_runbook_approval (\n  id BIGINT NOT NULL,\n  title VARCHAR(255) NOT NULL,\n  action_name VARCHAR(255) DEFAULT NULL,\n  command_text TEXT,\n  tool_name VARCHAR(128) DEFAULT NULL,\n  parameters_json LONGTEXT,\n  requester VARCHAR(64) NOT NULL,\n  status VARCHAR(32) NOT NULL,\n  result_code VARCHAR(128) DEFAULT NULL,\n  execution_implemented TINYINT(1) NOT NULL DEFAULT 0,\n  approver VARCHAR(64) DEFAULT NULL,\n  reason TEXT,\n  operator VARCHAR(64) DEFAULT NULL,\n  trace_id VARCHAR(64) DEFAULT NULL,\n  mcp_result_json LONGTEXT,\n  mcp_success TINYINT(1) DEFAULT NULL,\n  execution_message TEXT,\n  write_mismatch TINYINT(1) DEFAULT NULL,\n  write_mode VARCHAR(64) DEFAULT NULL,\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,\n  approved_at DATETIME DEFAULT NULL,\n  executed_at DATETIME DEFAULT NULL,\n  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (id),\n  KEY idx_runbook_requester_created (requester, created_at),\n  KEY idx_runbook_status_created (status, created_at)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Runbook approval and execution records'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL"
+        },
+        {
+          "name": "title",
+          "definition": "VARCHAR(255) NOT NULL"
+        },
+        {
+          "name": "action_name",
+          "definition": "VARCHAR(255) DEFAULT NULL"
+        },
+        {
+          "name": "command_text",
+          "definition": "TEXT"
+        },
+        {
+          "name": "tool_name",
+          "definition": "VARCHAR(128) DEFAULT NULL"
+        },
+        {
+          "name": "parameters_json",
+          "definition": "LONGTEXT"
+        },
+        {
+          "name": "requester",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "status",
+          "definition": "VARCHAR(32) NOT NULL"
+        },
+        {
+          "name": "result_code",
+          "definition": "VARCHAR(128) DEFAULT NULL"
+        },
+        {
+          "name": "execution_implemented",
+          "definition": "TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "approver",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "reason",
+          "definition": "TEXT"
+        },
+        {
+          "name": "operator",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "trace_id",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "mcp_result_json",
+          "definition": "LONGTEXT"
+        },
+        {
+          "name": "mcp_success",
+          "definition": "TINYINT(1) DEFAULT NULL"
+        },
+        {
+          "name": "execution_message",
+          "definition": "TEXT"
+        },
+        {
+          "name": "write_mismatch",
+          "definition": "TINYINT(1) DEFAULT NULL"
+        },
+        {
+          "name": "write_mode",
+          "definition": "VARCHAR(64) DEFAULT NULL"
+        },
+        {
+          "name": "created_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "approved_at",
+          "definition": "DATETIME DEFAULT NULL"
+        },
+        {
+          "name": "executed_at",
+          "definition": "DATETIME DEFAULT NULL"
+        },
+        {
+          "name": "updated_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_runbook_requester_created",
+          "unique": false,
+          "columns": [
+            "requester",
+            "created_at"
+          ]
+        },
+        {
+          "name": "idx_runbook_status_created",
+          "unique": false,
+          "columns": [
+            "status",
+            "created_at"
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "name": "log_alarm",
+      "createSql": "CREATE TABLE IF NOT EXISTS log_alarm (\n  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '告警ID',\n  alarm_id VARCHAR(64) NOT NULL COMMENT '告警唯一标识',\n  task_id VARCHAR(64) NOT NULL COMMENT '关联任务ID',\n  level VARCHAR(32) NOT NULL COMMENT '告警级别',\n  root_cause TEXT NULL COMMENT '根因分析',\n  solution TEXT NULL COMMENT '解决方案',\n  log_content TEXT NULL COMMENT '关联日志内容',\n  push_status VARCHAR(64) DEFAULT 'PENDING' COMMENT '推送状态',\n  lifecycle_status VARCHAR(32) DEFAULT 'NEW' COMMENT '生命周期状态',\n  ack_by VARCHAR(64) DEFAULT NULL COMMENT '确认人',\n  ack_time DATETIME DEFAULT NULL COMMENT '确认时间',\n  handled_by VARCHAR(64) DEFAULT NULL COMMENT '处理人',\n  handled_time DATETIME DEFAULT NULL COMMENT '处理时间',\n  closed_time DATETIME DEFAULT NULL COMMENT '关闭时间',\n  escalation_level INT DEFAULT 0 COMMENT '升级等级',\n  create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',\n  update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',\n  PRIMARY KEY (id),\n  UNIQUE KEY uk_alarm_id (alarm_id),\n  KEY idx_task_id (task_id),\n  KEY idx_level (level),\n  KEY idx_push_status (push_status),\n  KEY idx_lifecycle_status (lifecycle_status),\n  KEY idx_create_time (create_time)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='日志告警表'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL AUTO_INCREMENT COMMENT '告警ID'"
+        },
+        {
+          "name": "alarm_id",
+          "definition": "VARCHAR(64) NOT NULL COMMENT '告警唯一标识'"
+        },
+        {
+          "name": "task_id",
+          "definition": "VARCHAR(64) NOT NULL COMMENT '关联任务ID'"
+        },
+        {
+          "name": "level",
+          "definition": "VARCHAR(32) NOT NULL COMMENT '告警级别'"
+        },
+        {
+          "name": "root_cause",
+          "definition": "TEXT NULL COMMENT '根因分析'"
+        },
+        {
+          "name": "solution",
+          "definition": "TEXT NULL COMMENT '解决方案'"
+        },
+        {
+          "name": "log_content",
+          "definition": "TEXT NULL COMMENT '关联日志内容'"
+        },
+        {
+          "name": "push_status",
+          "definition": "VARCHAR(64) DEFAULT 'PENDING' COMMENT '推送状态'"
+        },
+        {
+          "name": "lifecycle_status",
+          "definition": "VARCHAR(32) DEFAULT 'NEW' COMMENT '生命周期状态'"
+        },
+        {
+          "name": "ack_by",
+          "definition": "VARCHAR(64) DEFAULT NULL COMMENT '确认人'"
+        },
+        {
+          "name": "ack_time",
+          "definition": "DATETIME DEFAULT NULL COMMENT '确认时间'"
+        },
+        {
+          "name": "handled_by",
+          "definition": "VARCHAR(64) DEFAULT NULL COMMENT '处理人'"
+        },
+        {
+          "name": "handled_time",
+          "definition": "DATETIME DEFAULT NULL COMMENT '处理时间'"
+        },
+        {
+          "name": "closed_time",
+          "definition": "DATETIME DEFAULT NULL COMMENT '关闭时间'"
+        },
+        {
+          "name": "escalation_level",
+          "definition": "INT DEFAULT 0 COMMENT '升级等级'"
+        },
+        {
+          "name": "create_time",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'"
+        },
+        {
+          "name": "update_time",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_alarm_id",
+          "unique": true,
+          "columns": [
+            "alarm_id"
+          ]
+        },
+        {
+          "name": "idx_task_id",
+          "unique": false,
+          "columns": [
+            "task_id"
+          ]
+        },
+        {
+          "name": "idx_level",
+          "unique": false,
+          "columns": [
+            "level"
+          ]
+        },
+        {
+          "name": "idx_push_status",
+          "unique": false,
+          "columns": [
+            "push_status"
+          ]
+        },
+        {
+          "name": "idx_lifecycle_status",
+          "unique": false,
+          "columns": [
+            "lifecycle_status"
+          ]
+        },
+        {
+          "name": "idx_create_time",
+          "unique": false,
+          "columns": [
+            "create_time"
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "name": "ops_audit_trace",
+      "createSql": "CREATE TABLE IF NOT EXISTS ops_audit_trace (id BIGINT PRIMARY KEY AUTO_INCREMENT,trace_id VARCHAR(64) NOT NULL,channel VARCHAR(32) NOT NULL,audit_kind VARCHAR(32),request_channel VARCHAR(32),stage VARCHAR(64),decision VARCHAR(64),user_input TEXT,risk_level VARCHAR(32),security_outcome VARCHAR(64),tool_name VARCHAR(128),target_type VARCHAR(64),target_name VARCHAR(255),parent_trace_id VARCHAR(64),confirmation_id VARCHAR(64),effect_summary TEXT,execution_ok TINYINT(1) DEFAULT 0,result_summary TEXT,steps_json LONGTEXT,duration_ms BIGINT,operator_user_id VARCHAR(64),policy_version VARCHAR(64),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,KEY idx_trace_id (trace_id),KEY idx_created_at (created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT PRIMARY KEY AUTO_INCREMENT"
+        },
+        {
+          "name": "trace_id",
+          "definition": "VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "channel",
+          "definition": "VARCHAR(32) NOT NULL"
+        },
+        {
+          "name": "audit_kind",
+          "definition": "VARCHAR(32) NULL"
+        },
+        {
+          "name": "request_channel",
+          "definition": "VARCHAR(32) NULL"
+        },
+        {
+          "name": "stage",
+          "definition": "VARCHAR(64) NULL"
+        },
+        {
+          "name": "decision",
+          "definition": "VARCHAR(64) NULL"
+        },
+        {
+          "name": "user_input",
+          "definition": "TEXT"
+        },
+        {
+          "name": "risk_level",
+          "definition": "VARCHAR(32)"
+        },
+        {
+          "name": "security_outcome",
+          "definition": "VARCHAR(64)"
+        },
+        {
+          "name": "tool_name",
+          "definition": "VARCHAR(128)"
+        },
+        {
+          "name": "target_type",
+          "definition": "VARCHAR(64) NULL"
+        },
+        {
+          "name": "target_name",
+          "definition": "VARCHAR(255) NULL"
+        },
+        {
+          "name": "parent_trace_id",
+          "definition": "VARCHAR(64) NULL"
+        },
+        {
+          "name": "confirmation_id",
+          "definition": "VARCHAR(64) NULL"
+        },
+        {
+          "name": "effect_summary",
+          "definition": "TEXT NULL"
+        },
+        {
+          "name": "execution_ok",
+          "definition": "TINYINT(1) DEFAULT 0"
+        },
+        {
+          "name": "result_summary",
+          "definition": "TEXT"
+        },
+        {
+          "name": "steps_json",
+          "definition": "LONGTEXT"
+        },
+        {
+          "name": "duration_ms",
+          "definition": "BIGINT"
+        },
+        {
+          "name": "operator_user_id",
+          "definition": "VARCHAR(64) NULL"
+        },
+        {
+          "name": "policy_version",
+          "definition": "VARCHAR(64) NULL"
+        },
+        {
+          "name": "created_at",
+          "definition": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "target_host_id",
+          "definition": "VARCHAR(32) NULL"
+        },
+        {
+          "name": "target_host_label",
+          "definition": "VARCHAR(256) NULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_trace_id",
+          "unique": false,
+          "columns": [
+            "trace_id"
+          ]
+        },
+        {
+          "name": "idx_created_at",
+          "unique": false,
+          "columns": [
+            "created_at"
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "name": "ops_patrol_history",
+      "createSql": "CREATE TABLE IF NOT EXISTS ops_patrol_history (\n  id BIGINT NOT NULL AUTO_INCREMENT,\n  patrol_time DATETIME NOT NULL,\n  finding_count INT NOT NULL DEFAULT 0,\n  correlation_json LONGTEXT,\n  findings_json LONGTEXT,\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (id),\n  KEY idx_patrol_time (patrol_time)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='运维巡检历史'",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "BIGINT NOT NULL AUTO_INCREMENT"
+        },
+        {
+          "name": "patrol_time",
+          "definition": "DATETIME NOT NULL"
+        },
+        {
+          "name": "finding_count",
+          "definition": "INT NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "correlation_json",
+          "definition": "LONGTEXT"
+        },
+        {
+          "name": "findings_json",
+          "definition": "LONGTEXT"
+        },
+        {
+          "name": "created_at",
+          "definition": "DATETIME DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_patrol_time",
+          "unique": false,
+          "columns": [
+            "patrol_time"
+          ]
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "extraIndexes": [
+    {
+      "table": "sys_user",
+      "name": "uk_email",
+      "unique": true,
+      "columns": [
+        "email"
+      ]
+    }
+  ],
+  "repairs": [
+    "UPDATE alarm_rule SET description = name WHERE description IS NULL OR description = ''",
+    "UPDATE alarm_rule SET rule_type = 'COMBINATION' WHERE rule_type IS NULL OR rule_type = ''",
+    "UPDATE alarm_rule SET severity = 'ERROR' WHERE severity IS NULL OR severity = ''",
+    "UPDATE alarm_rule SET push_channels = 'BOTH' WHERE push_channels IS NULL OR push_channels = ''",
+    "UPDATE alarm_rule SET enabled = 1 WHERE enabled IS NULL",
+    "UPDATE alarm_rule SET create_by = 'system' WHERE create_by IS NULL OR create_by = ''",
+    "UPDATE alarm_rule SET update_by = 'system' WHERE update_by IS NULL OR update_by = ''",
+    "UPDATE alarm_rule SET rule_expression = name WHERE (rule_expression IS NULL OR rule_expression = '') AND name IS NOT NULL",
+    "UPDATE decision_feedback SET is_trained = 0 WHERE is_trained IS NULL",
+    "UPDATE log_alarm SET lifecycle_status = 'NEW' WHERE lifecycle_status IS NULL OR lifecycle_status = ''",
+    "UPDATE log_alarm SET escalation_level = 0 WHERE escalation_level IS NULL"
+  ]
+}

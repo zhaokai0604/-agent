@@ -189,6 +189,28 @@
         where task_id = #{taskId,jdbcType=VARCHAR}
     </update>
 
+    <update id="updateIfStatus">
+        update log_analysis_task
+        <set>
+            <if test="task.userId != null">user_id = #{task.userId,jdbcType=INTEGER},</if>
+            <if test="task.fileName != null">file_name = #{task.fileName,jdbcType=VARCHAR},</if>
+            <if test="task.status != null">status = #{task.status,jdbcType=VARCHAR},</if>
+            <if test="task.progress != null">progress = #{task.progress,jdbcType=INTEGER},</if>
+            <if test="task.currentStep != null">current_step = #{task.currentStep,jdbcType=VARCHAR},</if>
+            <if test="task.errorMsg != null">error_msg = #{task.errorMsg,jdbcType=VARCHAR},</if>
+            <if test="task.aiDiagnosis != null">ai_diagnosis = #{task.aiDiagnosis,jdbcType=VARCHAR},</if>
+            <if test="task.totalLogs != null">total_logs = #{task.totalLogs,jdbcType=INTEGER},</if>
+            <if test="task.anomalyCount != null">anomaly_count = #{task.anomalyCount,jdbcType=INTEGER},</if>
+            <if test="task.anomalyRate != null">anomaly_rate = #{task.anomalyRate,jdbcType=DOUBLE},</if>
+            <if test="task.costTime != null">cost_time = #{task.costTime,jdbcType=BIGINT},</if>
+            <if test="task.createTime != null">create_time = #{task.createTime,jdbcType=TIMESTAMP},</if>
+            <if test="task.updateTime != null">update_time = #{task.updateTime,jdbcType=TIMESTAMP},</if>
+        </set>
+        where task_id = #{task.taskId,jdbcType=VARCHAR}
+        and status in
+        <foreach collection="expected" item="state" open="(" separator="," close=")">#{state}</foreach>
+    </update>
+
     <select id="getTaskStatusCount" resultType="java.util.Map">
         select status, count(*) as count
         from log_analysis_task

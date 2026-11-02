@@ -34,6 +34,13 @@ app:
       enabled: ${APP_AI_LEGACY_ENABLED:false}
 
 spring:
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: ${THRESH_DB_ADOPT_LEGACY:false}
+    baseline-version: '0'
+    clean-disabled: true
+    validate-on-migrate: true
   application:
     name: award-log
   # 任意 active profile 都会合并本机 application-local.yml（DB/AI 密钥等，文件已在 .gitignore）
@@ -179,6 +186,8 @@ log:
       path: ${LOG_COLLECTOR_ROOT:auto}
       max-depth: ${LOG_COLLECTOR_MAX_DEPTH:4}
       poll-interval-ms: ${LOG_COLLECTOR_POLL_MS:5000}
+      # 私有本地检查点；只在持久接收端确认后推进。空值关闭持久化。
+      checkpoint-directory: ${LOG_COLLECTOR_CHECKPOINT_DIR:./data/collector-checkpoints}
       include-extensions: .log,.txt,.out,.err,.debug,.info,.warn,.error,.fatal,.access,.audit,.trace
       exclude-directories: node_modules,target,.git,.idea,.vscode,.cursor,$recycle.bin,system volume information,winsxs,windows,program files,program files (x86),appdata
     db:
@@ -206,9 +215,10 @@ log:
       source-id: file-watcher
       dispatch-enabled: true
       dispatch-interval-ms: 5000
-      # 单采集器内存缓冲硬上限（行），超额丢弃防止调度卡住时 OOM
+      # 单采集器内存缓冲行上限；文件采集满后背压，保留游标等待排水
+      # 文件采集另有固定限制：缓冲8MiB、单行64KiB、每文件每轮读取1MiB
       buffer-max-lines: ${LOG_COLLECTOR_BUFFER_MAX_LINES:8000}
-      # 启动时从文件末尾跟读，不回放历史全文
+      # 仅首次发现文件时从 EOF 开始；存在检查点时回放未确认增量
       start-at-eof: ${LOG_COLLECTOR_START_AT_EOF:true}
     stream:
       error-rate-threshold: 0.30
@@ -393,6 +403,11 @@ agent:
     scan-tool-output: ${AGENT_INJECTION_SCAN_TOOL_OUTPUT:true}
   recycle:
     root: ${AGENT_RECYCLE_ROOT:${java.io.tmpdir}/award-recycle-bin}
+    # 可选的每卷回收根，逗号分隔。服务只会选择与源对象 FileStore 相同的根；
+    # 未配置同卷根时直接拒绝，绝不跨卷 copy-delete。根目录需保持稳定以支持重启后恢复句柄。
+    volume-roots: ${AGENT_RECYCLE_VOLUME_ROOTS:}
+    # list/purge 每个根单次最多检查的句柄目录，防止大目录扫描占满请求线程。
+    max-scan-entries: ${AGENT_RECYCLE_MAX_SCAN_ENTRIES:10000}
   trust:
     notify-max: ${AGENT_TRUST_NOTIFY_MAX:6.0}
   log-safety:
@@ -448,6 +463,7 @@ audit:
 
 ops:
   pep:
+    # 必须为true；旧的OPS_PEP_ENABLED=false会明确拒绝启动，请移除关闭配置。
     enabled: ${OPS_PEP_ENABLED:true}
     confirm-hmac-key: ${OPS_CONFIRM_HMAC_KEY:}
     confirm-ttl-ms: ${OPS_CONFIRM_TTL_MS:900000}

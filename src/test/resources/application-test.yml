@@ -11,8 +11,7 @@ spring:
     password: test
   sql:
     init:
-      mode: always
-      schema-locations: classpath:schema-test.sql
+      mode: never
   ai:
     openai:
       api-key: test-integration-key

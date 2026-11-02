@@ -33,6 +33,11 @@ public class ProductionProfileValidator implements ApplicationRunner {
             throw new IllegalStateException(
                     "[prod] 未配置数据库密码：请设置环境变量 DB_PASSWORD 或 spring.datasource.password（勿在仓库中提交明文）。");
         }
+        if (!com.award.log.security.effect.ConfirmTokenHmac.isUsableKey(
+                environment.getProperty("ops.pep.confirm-hmac-key", ""))) {
+            throw new IllegalStateException(
+                    "[prod] 请通过 OPS_CONFIRM_HMAC_KEY 配置有效的确认签名密钥，禁止使用空值或 CHANGE_ME。");
+        }
         String aiKey = environment.getProperty("spring.ai.openai.api-key", "");
         if (!StringUtils.hasText(aiKey)) {
             log.warn("[prod] 未配置 spring.ai.openai.api-key（AI_API_KEY）：统一助手、AI 诊断等将不可用。");

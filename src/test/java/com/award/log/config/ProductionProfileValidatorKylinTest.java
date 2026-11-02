@@ -13,6 +13,7 @@ class ProductionProfileValidatorKylinTest {
         MockEnvironment env = new MockEnvironment();
         env.setActiveProfiles("prod", "kylin");
         env.setProperty("spring.datasource.password", "secret");
+        env.setProperty("ops.pep.confirm-hmac-key", "test-only-explicit-key");
         env.setProperty("app.security.ai-audit-relaxed-read", "true");
 
         ProductionProfileValidator validator = new ProductionProfileValidator(env);
@@ -25,6 +26,7 @@ class ProductionProfileValidatorKylinTest {
         MockEnvironment env = new MockEnvironment();
         env.setActiveProfiles("prod", "kylin");
         env.setProperty("spring.datasource.password", "secret");
+        env.setProperty("ops.pep.confirm-hmac-key", "test-only-explicit-key");
         env.setProperty("app.security.ai-audit-relaxed-read", "false");
 
         ProductionProfileValidator validator = new ProductionProfileValidator(env);

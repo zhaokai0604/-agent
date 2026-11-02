@@ -59,6 +59,8 @@ public interface LogAnalysisTaskMapper {
 
     int updateById(LogAnalysisTask task);
 
+    int updateIfStatus(@Param("task") LogAnalysisTask task, @Param("expected") List<String> expected);
+
     List<Map<String, Object>> getTaskTrend(@Param("days") int days);
 
     List<Map<String, Object>> getTaskStatusCount();
