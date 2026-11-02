@@ -1,0 +1,145 @@
+{
+  "suiteVersion": "contract-eval/v1",
+  "skills": [
+    {
+      "skill": "alert-triage",
+      "playbook": "alert-triage",
+      "requiredTools": [
+        "LogAnalysisTool",
+        "SystemLoadTool",
+        "PortHealthTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "config-drift",
+      "playbook": "config-drift",
+      "requiredTools": [
+        "ConfigCheckTool",
+        "ConfigDriftTool",
+        "ServiceOpsTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "connectivity",
+      "playbook": "connectivity",
+      "requiredTools": [
+        "NetworkTool",
+        "PortHealthTool",
+        "ProcessTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "cpu-pressure",
+      "playbook": "cpu-pressure",
+      "requiredTools": [
+        "SystemLoadTool",
+        "ProcessTool",
+        "NetworkTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "disk-cleanup",
+      "playbook": "disk-cleanup",
+      "requiredTools": [
+        "DiskTool",
+        "CleanTempTool",
+        "LogCleanupTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "k8s-oom",
+      "playbook": "k8s-oom",
+      "requiredTools": [
+        "K8sTool",
+        "SystemLoadTool",
+        "ProcessTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "k8s-pod-crash",
+      "playbook": "k8s-pod-crash",
+      "requiredTools": [
+        "K8sTool",
+        "ContainerOpsTool",
+        "LogAnalysisTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "log-cleanup",
+      "playbook": "log-cleanup",
+      "requiredTools": [
+        "DiskTool",
+        "LogCleanupTool",
+        "LogAnalysisTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "oom-diagnosis",
+      "playbook": "oom",
+      "requiredTools": [
+        "SystemLoadTool",
+        "ProcessTool",
+        "LogAnalysisTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "patrol-automation",
+      "playbook": "patrol-automation",
+      "requiredTools": [
+        "SystemLoadTool",
+        "DiskTool",
+        "ProcessTool",
+        "PortHealthTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "remediation-verify",
+      "playbook": "remediation-verify",
+      "requiredTools": [
+        "SystemLoadTool",
+        "DiskTool",
+        "PortHealthTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "security-baseline",
+      "playbook": "security-baseline",
+      "requiredTools": [
+        "FirewallTool",
+        "SslCertTool",
+        "ProcessTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "service-restart",
+      "playbook": "service-restart",
+      "requiredTools": [
+        "ServiceRestartTool",
+        "SystemdTool",
+        "PortHealthTool"
+      ],
+      "minimumSignals": 2
+    },
+    {
+      "skill": "temp-cleanup",
+      "playbook": "temp-cleanup",
+      "requiredTools": [
+        "DiskTool",
+        "CleanTempTool"
+      ],
+      "minimumSignals": 2
+    }
+  ]
+}

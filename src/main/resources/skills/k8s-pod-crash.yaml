@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.0"
+runtime_contract: ops-pep/v1
 id: k8s-pod-crash
 playbook: k8s-pod-crash
 description: K8s Pod 异常崩溃与事件诊断

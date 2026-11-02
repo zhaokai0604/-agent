@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.0"
+runtime_contract: ops-pep/v1
 id: temp-cleanup
 playbook: temp-cleanup
 description: 临时文件受控清理

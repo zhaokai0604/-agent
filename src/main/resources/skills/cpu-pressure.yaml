@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.0"
+runtime_contract: ops-pep/v1
 id: cpu-pressure
 playbook: cpu-pressure
 description: CPU/负载持续升高归因

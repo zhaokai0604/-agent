@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.1"
+runtime_contract: ops-pep/v1
 id: config-drift
 playbook: config-drift
 description: 配置漂移检查与受控修复
@@ -9,6 +12,7 @@ decision_rules:
   confidence_gate:
     min_independent_signals: 2
 stop_conditions:
+  - evidence_insufficient
   - safety_block
 red_lines:
   - no_write_without_pep

@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.0"
+runtime_contract: ops-pep/v1
 id: security-baseline
 playbook: security-baseline
 description: 安全基线与异常信号

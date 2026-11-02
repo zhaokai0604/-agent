@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.0"
+runtime_contract: ops-pep/v1
 id: connectivity
 playbook: connectivity
 description: 网络连通性与端口健康

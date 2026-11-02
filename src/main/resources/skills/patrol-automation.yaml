@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.1"
+runtime_contract: ops-pep/v1
 id: patrol-automation
 playbook: patrol-automation
 description: 全面巡检与健康检查
@@ -10,6 +13,7 @@ decision_rules:
   confidence_gate:
     min_independent_signals: 2
 stop_conditions:
+  - evidence_insufficient
   - safety_block
 red_lines:
   - no_write_without_pep

@@ -17,6 +17,9 @@ public class SkillRoutingAdvisor {
 
     private final SkillCatalogLoader skillCatalogLoader;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.award.log.security.HttpAuditSubject auditSubject;
+
     public SkillRoutingAdvisor(SkillCatalogLoader skillCatalogLoader) {
         this.skillCatalogLoader = skillCatalogLoader;
     }
@@ -41,6 +44,17 @@ public class SkillRoutingAdvisor {
                 def.redLines(),
                 def.toView());
     }
+
+    public Map<String,Object> catalogStatus() { return skillCatalogLoader.status(); }
+    public Map<String,Object> catalogSnapshot(){return skillCatalogLoader.catalogView();}
+    public SkillCatalogLoader.Scope pinForRun(String runId) {
+        String requester=com.award.log.agent.RemediationClosureSupport.executionRequester(auditSubject==null?null:auditSubject.currentOperatorId());
+        return skillCatalogLoader.pinRun(runId,requester==null||requester.isBlank()?"SYSTEM":requester);
+    }
+    public Map<String,Object> previewRelease(){return skillCatalogLoader.previewDeployed();}
+    public void publish(String expected,String candidate,String actor,String reason){skillCatalogLoader.publish(expected,candidate,actor,reason);}
+    public void rollback(String expected,String target,String actor,String reason){skillCatalogLoader.rollback(expected,target,actor,reason);}
+    public List<Map<String,Object>> releaseHistory(int limit){return skillCatalogLoader.history(limit);}
 
     public List<Map<String, Object>> catalogViews() {
         List<Map<String, Object>> out = new ArrayList<>();

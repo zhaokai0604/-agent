@@ -1,3 +1,6 @@
+schema_version: 1
+version: "1.0.0"
+runtime_contract: ops-pep/v1
 id: disk-cleanup
 playbook: disk-cleanup
 description: 磁盘空间不足与受控清理
