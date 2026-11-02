@@ -83,6 +83,38 @@ class UnifiedAssistantControllerSmokeTest {
     }
 
     @Test
+    void workerReceivesIdentityCapturedFromHttpRequest() throws Exception {
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1); executor.setMaxPoolSize(1); executor.initialize();
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var called = new java.util.concurrent.CountDownLatch(1);
+        var owner = new java.util.concurrent.atomic.AtomicReference<String>();
+        executor.execute(() -> { try { release.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } });
+        var controller = new UnifiedAssistantController();
+        ReflectionTestUtils.setField(controller, "unifiedAssistantService", unifiedAssistantService);
+        ReflectionTestUtils.setField(controller, "sseExecutor", executor);
+        ReflectionTestUtils.setField(controller, "httpAuditSubject", new com.award.log.security.HttpAuditSubject());
+        when(unifiedAssistantService.chatStream(anyString(), anyList(), anyBoolean(), anyBoolean(),
+                nullable(String.class), anyString(), anyString())).thenAnswer(invocation -> {
+            owner.set(invocation.getArgument(5)); called.countDown(); return Flux.empty();
+        });
+        var request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.setAttribute(com.award.log.security.RequestUserResolver.REQ_USER_ID, 37);
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(request));
+        try {
+            controller.chatStream(Map.of("message", "check disk", "sessionId", "session-owner"));
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+            release.countDown();
+            assertTrue(called.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals("37", owner.get());
+        } finally {
+            release.countDown(); executor.shutdown();
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
     void chatStreamRejectsBlankMessage() throws Exception {
         mockMvc.perform(post("/api/assistant/chat/stream")
                         .contentType(MediaType.APPLICATION_JSON)

@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Slf4j
 @Service
-@org.springframework.context.annotation.DependsOn("logAlarmSchemaService")
+@org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization
 public class AlarmLifecycleServiceImpl implements AlarmLifecycleService {
 
     private static final Path SILENCE_FILE = Paths.get("data", "alarm-silence.json");

@@ -9,7 +9,9 @@ import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import java.awt.Desktop;
 import java.net.InetAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
 
 /**
@@ -44,5 +46,24 @@ public class AwardWinningLogApplication {
                 "相关地址: \thttp://" + ip + ":" + port + path + "/\n\t" +
                 "接口文档: \thttp://localhost:" + port + path + "/doc.html\n" +
                 "----------------------------------------------------------");
+        if (Boolean.parseBoolean(env.getProperty("threshcore.desktop.open-browser", "false"))) {
+            openDesktopBrowser("http://127.0.0.1:" + port + path + "/");
+        }
+    }
+
+    private static void openDesktopBrowser(String url) {
+        try {
+            if (Desktop.isDesktopSupported()
+                    && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                Desktop.getDesktop().browse(URI.create(url));
+                log.info("已打开系统浏览器: {}", url);
+                return;
+            }
+            String comSpec = System.getenv().getOrDefault("ComSpec", "cmd.exe");
+            new ProcessBuilder(comSpec, "/c", "start", "", url).start();
+            log.info("已通过 Windows Shell 打开系统浏览器: {}", url);
+        } catch (Exception e) {
+            log.warn("自动打开系统浏览器失败，请手动打开 {}: {}", url, e.getMessage());
+        }
     }
 }

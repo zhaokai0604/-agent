@@ -85,8 +85,9 @@ class AnalysisTaskManagerCoverageTest {
     void progressesCompletesAndPersistsDetailsInBatches() {
         LogAnalysisTask active = task("t2", 1, "b.log", "PROCESSING");
         when(taskMapper.selectById("t2")).thenReturn(active);
+        when(taskMapper.updateIfStatus(any(), any())).thenReturn(1);
         manager.updateProgress("t2", 55, "parsing");
-        verify(taskMapper).updateById(any(LogAnalysisTask.class));
+        verify(taskMapper).updateIfStatus(any(LogAnalysisTask.class), org.mockito.ArgumentMatchers.eq(List.of("PENDING", "PROCESSING")));
 
         LogAnalysisTask terminal = task("done", 1, "b.log", "COMPLETED");
         when(taskMapper.selectById("done")).thenReturn(terminal);
@@ -104,7 +105,6 @@ class AnalysisTaskManagerCoverageTest {
 
         manager.completeTask("empty", List.of(), null);
         manager.completeTask("null", null, null);
-        manager.updateAiDiagnosis("t2", "diagnosis");
     }
 
     @Test

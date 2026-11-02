@@ -102,7 +102,7 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
-    void executesWriteStepWhenGateAllowsExecution() {
+    void refusesWriteWithoutGovernedPipelineEvenWhenGateAllowsExecution() {
         WorkflowExecutionService service = newService(false);
         OpsWorkflow workflow = new OpsWorkflow(
                 "wf-log-exec",
@@ -124,9 +124,6 @@ class WorkflowExecutionServiceTest {
                         GovernanceAdmissionVerdict.ALLOW_AUTO,
                         OpsTrustTier.AUTO,
                         "auto execute"));
-        when(dispatcher.dispatch(eq("LogCleanupTool"), org.mockito.ArgumentMatchers.anyMap()))
-                .thenReturn(McpToolDispatchResult.ok("{\"success\":true,\"data\":{\"filesDeleted\":2}}"));
-
         WorkflowExecutionService.WorkflowRunResult result = service.execute(
                 workflow,
                 new WorkflowExecutionService.ExecutionRequest(
@@ -138,14 +135,11 @@ class WorkflowExecutionServiceTest {
                         Map.of("log-path", "/var/log/app", "log-days", 30)
                 ));
 
-        ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(dispatcher).dispatch(eq("LogCleanupTool"), paramsCaptor.capture());
+        assertTrue(result.blocked());
+        assertFalse(result.anyExecuted());
+        assertFalse(result.completedOk());
+        verify(dispatcher, never()).dispatch(anyString(), org.mockito.ArgumentMatchers.anyMap());
 
-        assertTrue(result.handled());
-        assertTrue(result.anyExecuted());
-        assertFalse(result.anyPreviewed());
-        assertFalse(Boolean.TRUE.equals(paramsCaptor.getValue().get("dryRun")));
-        assertTrue(Boolean.TRUE.equals(paramsCaptor.getValue().get("confirmDelete")));
     }
 
     @Test
@@ -250,7 +244,7 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
-    void executesCleanTempWithAutoDerivedDirectoryDefaults() {
+    void refusesDerivedDirectoryWriteWithoutGovernedPipeline() {
         WorkflowExecutionService service = newService(true);
         OpsWorkflow workflow = new OpsWorkflow(
                 "wf-temp-exec",
@@ -273,9 +267,6 @@ class WorkflowExecutionServiceTest {
                         GovernanceAdmissionVerdict.ALLOW_AUTO,
                         OpsTrustTier.AUTO,
                         "execute"));
-        when(dispatcher.dispatch(eq("CleanTempTool"), org.mockito.ArgumentMatchers.anyMap()))
-                .thenReturn(McpToolDispatchResult.ok("{\"success\":true,\"data\":{\"filesDeleted\":5}}"));
-
         WorkflowExecutionService.WorkflowRunResult result = service.execute(
                 workflow,
                 new WorkflowExecutionService.ExecutionRequest(
@@ -287,11 +278,11 @@ class WorkflowExecutionServiceTest {
                         Map.of("temp-path", "C:\\safe\\temp\\subdir")
                 ));
 
-        ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(dispatcher).dispatch(eq("CleanTempTool"), paramsCaptor.capture());
-        assertTrue(result.anyExecuted());
-        assertEquals(0, paramsCaptor.getValue().get("days"));
-        assertEquals(Boolean.TRUE, paramsCaptor.getValue().get("removeDirectory"));
+        assertTrue(result.blocked());
+        assertFalse(result.anyExecuted());
+        assertFalse(result.completedOk());
+        verify(dispatcher, never()).dispatch(anyString(), org.mockito.ArgumentMatchers.anyMap());
+
     }
 
     @Test
@@ -368,6 +359,37 @@ class WorkflowExecutionServiceTest {
         assertTrue(result.failed());
         assertFalse(result.handled());
         assertTrue(result.toMarkdown().contains("dispatcher failed"));
+    }
+
+    @Test
+    void governedWriteProducesOwnedPendingTicketInsteadOfDirectDispatch() {
+        WorkflowExecutionService service = newService(false);
+        var pipeline = org.mockito.Mockito.mock(com.award.log.governance.OpsExecutionPipeline.class);
+        ReflectionTestUtils.setField(service,"executionPipeline",pipeline);
+        when(remediationGate.decideLogCleanup(anyString(),anyInt(),anyBoolean(),anyString()))
+                .thenReturn(new OpsRemediationGate.RemediationDecision(OpsRemediationGate.WriteDecision.EXECUTE,
+                        GovernanceAdmissionVerdict.ALLOW_AUTO,OpsTrustTier.AUTO,"allowed"));
+        when(pipeline.preview(anyString(),org.mockito.ArgumentMatchers.anyMap(),anyString(),eq("owner")))
+                .thenReturn(new com.award.log.governance.OpsExecutionPipeline.PipelineResult(
+                        new java.util.LinkedHashMap<>(Map.of("success",true)),"trace",0,"LogCleanupTool",null,"","preview"));
+        when(pipeline.propose(anyString(),org.mockito.ArgumentMatchers.anyMap(),anyString(),eq("owner"),eq("preview"),eq("session")))
+                .thenReturn(new com.award.log.governance.OpsExecutionPipeline.PipelineResult(
+                        new java.util.LinkedHashMap<>(Map.of("needConfirm",true,"confirmationId","pending-owned")),"trace",0,"LogCleanupTool",null,"","preview"));
+        var workflow = new OpsWorkflow("wf-owned","disk",List.of(),"cleanup","cleanup",
+                List.of(OpsWorkflowStep.of("cleanup","cleanup","LogCleanupTool",Map.of("path","/var/log/app"))),"test","trace",0,true);
+        com.award.log.security.ChatToolExecutionTracker.clear();
+        com.award.log.security.OpsSecurityContext.openChatAgent("trace","cleanup",McpToolSurface.FULL,true,false,"owner","session");
+        try {
+            var result=service.execute(workflow,new WorkflowExecutionService.ExecutionRequest("trace","cleanup",McpToolSurface.FULL,true,new ArrayList<>(),Map.of()));
+            assertTrue(result.blocked());
+            assertFalse(result.anyExecuted());
+            assertFalse(result.completedOk());
+            assertEquals("pending-owned",com.award.log.security.ChatToolExecutionTracker.pendingConfirmation().get("confirmationId"));
+            verify(dispatcher,never()).dispatch(anyString(),org.mockito.ArgumentMatchers.anyMap());
+        } finally {
+            com.award.log.security.OpsSecurityContext.clear();
+            com.award.log.security.ChatToolExecutionTracker.clear();
+        }
     }
 
     private WorkflowExecutionService newService(boolean windows) {

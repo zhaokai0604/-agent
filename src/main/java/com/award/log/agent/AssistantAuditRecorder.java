@@ -36,6 +36,8 @@ public class AssistantAuditRecorder {
             List<Map<String, Object>> steps,
             long durationMs
     ) {
+        String actor=RemediationClosureSupport.executionRequester(httpAuditSubject.currentOperatorId());
+        if(actor==null||actor.isBlank())actor="SYSTEM";
         opsAuditTraceService.save(
                 traceId,
                 "ASSISTANT",
@@ -47,7 +49,7 @@ public class AssistantAuditRecorder {
                 resultSummary,
                 steps,
                 durationMs,
-                httpAuditSubject.currentOperatorId(),
+                actor,
                 opsPathPolicy.getPolicyVersion(),
                 Map.of(),
                 Map.of(

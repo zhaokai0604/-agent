@@ -26,6 +26,20 @@ public final class RemediationClosureSupport {
     private RemediationClosureSupport() {
     }
 
+    public static String executionRequester(String fallback) {
+        var context = com.award.log.security.OpsSecurityContext.get();
+        if (context != null && context.getRequester() != null && !context.getRequester().isBlank()
+                && !"anonymous".equals(context.getRequester())) return context.getRequester();
+        return fallback;
+    }
+
+    public static String pipelineJson(ObjectMapper mapper, com.award.log.governance.OpsExecutionPipeline.PipelineResult result)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        if (Boolean.TRUE.equals(result.body().get("needConfirm")))
+            com.award.log.security.ChatToolExecutionTracker.recordPendingConfirmation(result.body());
+        return mapper.writeValueAsString(result.body());
+    }
+
     public static Map<String, Object> verifyToolJson(
             String toolName,
             String toolResultJson,
@@ -111,6 +125,9 @@ public final class RemediationClosureSupport {
                     ? root.path("success").asBoolean(false)
                     : WriteToolResultSupport.isToolSuccess(toolResultJson);
             body.put("success", success);
+            for (String field : List.of("metricsBefore", "metricsAfter")) {
+                if (root.has(field) && root.get(field).isObject()) body.put(field, MAPPER.convertValue(root.get(field), Map.class));
+            }
             if (root.has("data")) {
                 JsonNode data = root.get("data");
                 if (data.isTextual()) {

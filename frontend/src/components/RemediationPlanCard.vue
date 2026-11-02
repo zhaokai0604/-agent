@@ -9,6 +9,11 @@
     <p class="plan-body">{{ planSummary }}</p>
     <p v-if="pendingWriteLabel" class="plan-pending">待挂载写工具：{{ pendingWriteLabel }}</p>
     <div v-if="pepMeta && (pepMeta.confirmToken || pepMeta.dryRunPreviewHash || pepMeta.expectedEffect || pepMeta.irreversibleWarning)" class="plan-pep">
+      <p v-if="pepMeta.approvalObjects">已冻结 {{ pepMeta.approvalObjects.targetCount }} 个待处理对象（共 {{ pepMeta.approvalObjects.entryCount }} 个文件或目录条目）；新增文件不会加入本次审批；对象替换或内容变化需重新预览。</p>
+      <details v-if="pepMeta.approvedTargets?.length">
+        <summary>查看本次待处理对象</summary>
+        <ul><li v-for="target in pepMeta.approvedTargets" :key="target">{{ target }}</li></ul>
+      </details>
       <p v-if="pepMeta.expectedEffect?.description">预期变化：{{ pepMeta.expectedEffect.description }}</p>
       <p v-if="pepMeta.irreversibleWarning || pepMeta.recover?.irreversibilityNote" class="plan-irreversible">
         不可逆：{{ pepMeta.irreversibleWarning || pepMeta.recover?.irreversibilityNote }}

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -25,6 +26,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -141,5 +143,20 @@ class LogAnalysisControllerSmokeTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data").value(true));
+    }
+
+    @Test
+    void retryingUploadWithSameKeyReturnsTheOriginalTask() throws Exception {
+        when(taskManager.reserveUpload(eq(1), eq("upload-key"), any(java.io.File.class), anyString()))
+                .thenReturn(new com.award.log.task.DurableLogTaskStore.UploadReservation("existing-task", false));
+        var file = new MockMultipartFile("file", "service.log", "text/plain", "ERROR existing task\n".getBytes());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/log/upload")
+                        .file(file).header("Idempotency-Key", "upload-key"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").value("existing-task"));
+
+        verify(taskManager, never()).initTask(anyString(), anyInt(), anyString());
+        verify(logAnalysisService, never()).startAnalysisAsync(any(), anyString());
     }
 }

@@ -25,6 +25,8 @@ public class LogCollectorManager {
 
     /** fan-out 队列最大行数；超过则丢弃最旧行，防止堆积撑爆堆 */
     static final int FAN_OUT_CAPACITY = 10_000;
+    /** A byte cap protects heap use when a batch contains unusually long log lines. */
+    static final long FAN_OUT_MAX_BYTES = 8L * 1024 * 1024;
     /** 默认单次取出上限，避免一次 JSON 序列化整队 1 万行 */
     static final int DEFAULT_TAKE_BATCH = 500;
 
@@ -36,6 +38,8 @@ public class LogCollectorManager {
      * 用有界 {@link ArrayBlockingQueue}，不要用 ConcurrentLinkedQueue.size() 做容量判断（O(n) 且不准）。
      */
     private final ArrayBlockingQueue<String> fanOutQueue = new ArrayBlockingQueue<>(FAN_OUT_CAPACITY);
+    private long fanOutBytes;
+    private long fanOutDroppedLines;
 
     public LogCollectorManager() {
         this.collectors = new ConcurrentHashMap<>();
@@ -78,7 +82,15 @@ public class LogCollectorManager {
     /** 停止全部已注册采集器。 */
     public void stopAll() {
         log.info("[采集器管理器] 停止所有采集器");
-        collectors.values().forEach(LogCollector::stop);
+        RuntimeException failure = null;
+        for (LogCollector collector : collectors.values()) {
+            try { collector.stop(); }
+            catch (RuntimeException stopped) {
+                if (failure == null) failure = new IllegalStateException("COLLECTORS_STOP_FAILED");
+                failure.addSuppressed(stopped);
+            }
+        }
+        if (failure != null) throw failure;
     }
 
     /**
@@ -86,15 +98,21 @@ public class LogCollectorManager {
      * <p>仅应由调度器调用；多个线程同时 collect 会互相抢空缓冲。
      */
     public List<String> collectAll() {
+        return collectBatch().lines();
+    }
+
+    public CollectedLogBatch collectBatch() {
         List<String> allLogs = new ArrayList<>();
+        List<Runnable> acknowledgements = new ArrayList<>();
         collectors.values().forEach(collector -> {
             if (collector.isRunning()) {
-                List<String> logs = collector.collect();
-                allLogs.addAll(logs);
+                CollectedLogBatch batch = collector.collectBatch();
+                allLogs.addAll(batch.lines());
+                acknowledgements.add(batch.acknowledge());
             }
         });
         publishFanOut(allLogs);
-        return allLogs;
+        return new CollectedLogBatch(allLogs, () -> acknowledgements.forEach(Runnable::run));
     }
 
     /** 主消费者：按默认批次取出并移出队列。 */
@@ -106,10 +124,11 @@ public class LogCollectorManager {
      * 主消费者：最多取出 {@code maxBatch} 行并移出队列。
      * 多连接场景必须只有一个主消费者调用本方法，否则会互相抢日志。
      */
-    public List<String> takeFanOut(int maxBatch) {
+    public synchronized List<String> takeFanOut(int maxBatch) {
         int cap = Math.max(1, Math.min(maxBatch, FAN_OUT_CAPACITY));
         List<String> out = new ArrayList<>(Math.min(cap, fanOutQueue.size() + 1));
         fanOutQueue.drainTo(out, cap);
+        for (String line : out) fanOutBytes -= utf8Bytes(line);
         return out;
     }
 
@@ -117,7 +136,7 @@ public class LogCollectorManager {
      * 次级观察者只读快照：不移出队列，不与主消费者抢数据。
      * 例如旧版 {@code LogWebSocketHandler} 巡检推送可走此接口。
      */
-    public List<String> snapshotFanOut(int max) {
+    public synchronized List<String> snapshotFanOut(int max) {
         int limit = Math.max(0, max);
         if (limit == 0) {
             return List.of();
@@ -134,15 +153,18 @@ public class LogCollectorManager {
     }
 
     /** 测试用：当前 fan-out 队列长度。 */
-    int fanOutSize() {
+    synchronized int fanOutSize() {
         return fanOutQueue.size();
     }
+
+    synchronized long fanOutBytes() { return fanOutBytes; }
+    synchronized long fanOutDroppedLines() { return fanOutDroppedLines; }
 
     /**
      * 写入 fan-out：队列满时先丢最旧再 offer，保证容量硬上限。
      * （offer 失败说明满了；poll 腾出空位后重试。）
      */
-    void publishFanOut(List<String> logs) {
+    synchronized void publishFanOut(List<String> logs) {
         if (logs == null || logs.isEmpty()) {
             return;
         }
@@ -150,11 +172,19 @@ public class LogCollectorManager {
             if (line == null) {
                 continue;
             }
-            while (!fanOutQueue.offer(line)) {
-                fanOutQueue.poll();
+            int bytes=utf8Bytes(line);
+            if(bytes>FAN_OUT_MAX_BYTES) { fanOutDroppedLines++; continue; }
+            while (fanOutQueue.size()>=FAN_OUT_CAPACITY || fanOutBytes+bytes>FAN_OUT_MAX_BYTES) {
+                String dropped=fanOutQueue.poll();
+                if(dropped==null) break;
+                fanOutBytes-=utf8Bytes(dropped);
+                fanOutDroppedLines++;
             }
+            if(fanOutQueue.offer(line)) fanOutBytes+=bytes;
         }
     }
+
+    private static int utf8Bytes(String line) { return line.getBytes(java.nio.charset.StandardCharsets.UTF_8).length; }
 
     /** @return 采集器名 → 是否在运行 */
     public Map<String, Boolean> getCollectorStatus() {
@@ -167,6 +197,12 @@ public class LogCollectorManager {
 
     public int getCollectorCount() {
         return collectors.size();
+    }
+
+    public Map<String, Object> getCollectorDiagnostics() {
+        Map<String, Object> diagnostics = new java.util.LinkedHashMap<>();
+        collectors.forEach((name, collector) -> diagnostics.put(name, collector.diagnostics()));
+        return diagnostics;
     }
 
     public LogCollector getCollector(String name) {

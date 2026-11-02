@@ -34,6 +34,10 @@ export default defineConfig(({ mode }) => {
   return {
     root: rootDir,
     plugins: [vue()],
+    // Spring Boot serves the built SPA under its context path. Keep Vite
+    // development at the root, but make production asset URLs include the
+    // context path so the packaged app can load its JS/CSS bundles.
+    base: mode === 'production' ? '/award-log/' : '/',
     // The optimized markdown-it bundle otherwise points Chrome at TypeScript
     // sources that are not published by Vite, producing noisy 404s in the
     // Network panel although the application request succeeds.

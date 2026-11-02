@@ -49,6 +49,10 @@ public class WorkflowExecutionService {
     private final WorkflowMemoryService workflowMemoryService;
     private final PlanEffectGate planEffectGate;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.award.log.governance.OpsExecutionPipeline executionPipeline;
+
     @Value("${agent.assistant.orchestrator.log-clean-days:30}")
     private int logCleanDays;
 
@@ -105,7 +109,7 @@ public class WorkflowExecutionService {
 
         /** 回放成功完成（含只读诊断），可用于入库统计 */
         public boolean completedOk() {
-            return !failed && handled();
+            return !failed && !blocked && handled();
         }
 
         public java.util.Optional<String> rawResultForTool(String toolName) {
@@ -237,7 +241,28 @@ public class WorkflowExecutionService {
                 parameters.put("dryRun", true);
             }
 
-            McpToolDispatchResult dispatched = mcpToolDispatcher.dispatch(invocation.toolName(), parameters);
+            McpToolDispatchResult dispatched;
+            if ("EXECUTE".equals(resolution.mode()) && AwmToolProfile.isWrite(invocation.toolName())) {
+                // A workflow's force flag is intent, not a consumed capability token.
+                var ctx = com.award.log.security.OpsSecurityContext.get();
+                String owner = ctx == null ? null : ctx.getRequester();
+                if (executionPipeline == null || owner == null || owner.isBlank() || "anonymous".equals(owner)) {
+                    dispatched = McpToolDispatchResult.fail("AWM 实写缺少统一执行链路或操作者，请回到工具预览确认");
+                } else {
+                    var preview = executionPipeline.preview(invocation.toolName(), parameters, request.userMessage(), owner);
+                    if (Boolean.TRUE.equals(preview.body().get("success"))) {
+                        var pending = executionPipeline.propose(invocation.toolName(), parameters, request.userMessage(), owner,
+                                preview.dryRunPreviewJson(), ctx.getSessionId());
+                        com.award.log.security.ChatToolExecutionTracker.recordPendingConfirmation(pending.body());
+                        dispatched = McpToolDispatchResult.fail("AWM 已产生待确认请求，请确认后执行；当前未实写");
+                    } else {
+                        dispatched = McpToolDispatchResult.fail(String.valueOf(preview.body().get("error")));
+                    }
+                }
+                blocked = true;
+            } else {
+                dispatched = mcpToolDispatcher.dispatch(invocation.toolName(), parameters);
+            }
             StepResult stepResult = summarizeStep(invocation.toolName(), resolution.mode(), parameters, dispatched);
             results.add(stepResult);
             recordStructuredAuditStep(request.auditSteps(), workflow, i, stepResult);
@@ -294,7 +319,7 @@ public class WorkflowExecutionService {
                 result.stepResults().size(),
                 summary);
         if (result.completedOk()) {
-            workflowMemoryService.recordSuccess(result.workflow().workflowId());
+            if (result.anyExecuted()) workflowMemoryService.recordSuccess(result.workflow().workflowId());
             workflowMemoryService.recordUtility(result.workflow().workflowId());
         }
     }

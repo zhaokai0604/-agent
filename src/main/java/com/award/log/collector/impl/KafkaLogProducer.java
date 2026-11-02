@@ -27,6 +27,14 @@ public class KafkaLogProducer {
     @Value("${log.pipeline.kafka.raw-topic:${spring.kafka.template.default-topic}}")
     private String logTopic;
 
+    @jakarta.annotation.PostConstruct
+    public void validateAcknowledgements() {
+        Object acks = kafkaTemplate.getProducerFactory().getConfigurationProperties().get("acks");
+        if (!"all".equals(String.valueOf(acks)) && !"-1".equals(String.valueOf(acks))) {
+            throw new IllegalStateException("RAW_LOG_KAFKA_ACKS_ALL_REQUIRED");
+        }
+    }
+
     /**
      * 发送单条日志到Kafka
      * @param logContent 日志内容
@@ -81,6 +89,18 @@ public class KafkaLogProducer {
         }
         for (RawLogEvent event : events) {
             sendRawEvent(event);
+        }
+    }
+
+    /** Completes only after every send has a broker receipt; errors remain visible to the caller. */
+    public CompletableFuture<Void> sendRawEventsAcknowledged(List<RawLogEvent> events) {
+        try {
+            CompletableFuture<?>[] sends = events.stream()
+                    .map(event -> kafkaTemplate.send(logTopic, JSON.toJSONString(event)))
+                    .toArray(CompletableFuture[]::new);
+            return CompletableFuture.allOf(sends);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
         }
     }
 }

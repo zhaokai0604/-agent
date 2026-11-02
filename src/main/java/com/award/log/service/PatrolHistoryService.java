@@ -3,7 +3,6 @@ package com.award.log.service;
 import com.alibaba.fastjson.JSON;
 import com.award.log.model.patrol.PatrolCorrelationSnapshot;
 import com.award.log.model.patrol.PatrolFinding;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -32,26 +31,6 @@ public class PatrolHistoryService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    @PostConstruct
-    void ensureTable() {
-        try {
-            jdbcTemplate.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ops_patrol_history (
-                      id BIGINT NOT NULL AUTO_INCREMENT,
-                      patrol_time DATETIME NOT NULL,
-                      finding_count INT NOT NULL DEFAULT 0,
-                      correlation_json LONGTEXT,
-                      findings_json LONGTEXT,
-                      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                      PRIMARY KEY (id),
-                      KEY idx_patrol_time (patrol_time)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='运维巡检历史'
-                    """);
-        } catch (Exception e) {
-            log.warn("创建 ops_patrol_history 表失败（可能无库权限）: {}", e.getMessage());
-        }
-    }
 
     public void saveRun(PatrolCorrelationSnapshot correlation, List<PatrolFinding> findings) {
         try {

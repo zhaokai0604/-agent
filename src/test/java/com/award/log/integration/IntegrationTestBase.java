@@ -12,6 +12,12 @@ import org.springframework.test.context.ActiveProfiles;
         "spring.datasource.url=jdbc:h2:mem:log_analysis_${random.int};MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1;NON_KEYWORDS=VALUE",
         "spring.datasource.username=sa",
         "spring.datasource.password=test",
+        "spring.sql.init.mode=never",
+        "spring.flyway.enabled=true",
+        "spring.flyway.baseline-on-migrate=false",
+        "log.analysis.input-dir=./target/test-log-inputs",
+        // API/database tests must not tail host logs or share production collector ownership.
+        "log.collector.enabled=false",
         "mybatis.mapper-locations=classpath:mapper-h2/*.xml",
         // Never inherit developer credentials or call external vector stores in tests.
         "knowledge.enabled=false",
@@ -26,4 +32,7 @@ abstract class IntegrationTestBase {
 
     @MockBean
     ElasticsearchService elasticsearchService;
+
+    @MockBean
+    com.award.log.service.AiLogAlarmService aiLogAlarmService;
 }

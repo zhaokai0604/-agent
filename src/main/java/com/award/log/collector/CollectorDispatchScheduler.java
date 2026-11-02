@@ -37,6 +37,10 @@ public class CollectorDispatchScheduler {
     private final AtomicLong totalDispatched = new AtomicLong(0);
     private final AtomicLong lastBatchSize = new AtomicLong(0);
     private final AtomicLong lastDispatchTime = new AtomicLong(0);
+    private final AtomicLong dispatchFailures = new AtomicLong(0);
+    private PendingBatch pending;
+    private java.util.concurrent.CompletableFuture<Void> delivery;
+    private record PendingBatch(List<RawLogEvent> events, Runnable acknowledge) {}
 
     @Value("${log.pipeline.collector.dispatch-enabled:true}")
     private boolean dispatchEnabled;
@@ -45,12 +49,17 @@ public class CollectorDispatchScheduler {
     private String sourceId;
 
     @Scheduled(fixedDelayString = "${log.pipeline.collector.dispatch-interval-ms:1000}")
-    public void dispatch() {
+    public synchronized void dispatch() {
         if (!dispatchEnabled) {
             return;
         }
+        if (pending != null) {
+            finishOrRetryDelivery();
+            return;
+        }
         // 始终由调度器单点 drain；Kafka 未装配时仍 fan-out，供 WebSocket 消费
-        List<String> collected = logCollectorManager.collectAll();
+        CollectedLogBatch batch = logCollectorManager.collectBatch();
+        List<String> collected = batch.lines();
         totalCollected.addAndGet(collected.size());
         if (collected.isEmpty()) {
             lastBatchSize.set(0);
@@ -78,14 +87,29 @@ public class CollectorDispatchScheduler {
             event.setContent(line);
             events.add(event);
         }
-        kafkaLogProducer.sendRawEvents(events);
-        totalDispatched.addAndGet(events.size());
-        lastBatchSize.set(events.size());
-        lastDispatchTime.set(now);
-        log.debug("[采集调度] 推送到Kafka完成，数量: {}", events.size());
+        pending = new PendingBatch(List.copyOf(events), batch.acknowledge());
+        finishOrRetryDelivery();
     }
 
-    public Map<String, Object> snapshot() {
+    private void finishOrRetryDelivery() {
+        if (delivery == null) delivery = kafkaLogProducer.sendRawEventsAcknowledged(pending.events());
+        if (!delivery.isDone()) return;
+        try {
+            delivery.join();
+            pending.acknowledge().run();
+            totalDispatched.addAndGet(pending.events().size());
+            lastBatchSize.set(pending.events().size());
+            lastDispatchTime.set(System.currentTimeMillis());
+            pending = null;
+        } catch (RuntimeException failure) {
+            dispatchFailures.incrementAndGet();
+            log.warn("[采集调度] 持久交付或检查点失败，保留批次等待重试");
+        } finally {
+            delivery = null;
+        }
+    }
+
+    public synchronized Map<String, Object> snapshot() {
         Map<String, Object> snapshot = new HashMap<>();
         snapshot.put("dispatchEnabled", dispatchEnabled);
         snapshot.put("sourceId", sourceId);
@@ -93,8 +117,12 @@ public class CollectorDispatchScheduler {
         snapshot.put("totalDispatched", totalDispatched.get());
         snapshot.put("lastBatchSize", lastBatchSize.get());
         snapshot.put("lastDispatchTime", lastDispatchTime.get());
+        snapshot.put("dispatchFailures", dispatchFailures.get());
+        snapshot.put("pendingDeliveryLines", pending == null ? 0 : pending.events().size());
+        snapshot.put("checkpointReceiver", kafkaLogProducer == null ? "NONE_REPLAY_ON_RESTART" : "KAFKA_BROKER_RECEIPT");
         snapshot.put("collectorStatus", logCollectorManager.getCollectorStatus());
         snapshot.put("collectorCount", logCollectorManager.getCollectorCount());
+        snapshot.put("collectorDiagnostics", logCollectorManager.getCollectorDiagnostics());
         return snapshot;
     }
 

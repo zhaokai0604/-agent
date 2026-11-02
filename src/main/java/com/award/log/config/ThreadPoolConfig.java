@@ -14,10 +14,23 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Configuration
 public class ThreadPoolConfig {
 
+    /** Interrupt running work before Spring waits for SmartLifecycle.stop callbacks. */
+    private ThreadPoolTaskExecutor newManagedExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor() {
+            @Override
+            protected void initiateEarlyShutdown() {
+                shutdown();
+            }
+        };
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setAwaitTerminationSeconds(3);
+        return executor;
+    }
+
     @Bean("sseTaskExecutor")
     public ThreadPoolTaskExecutor sseTaskExecutor() {
         int cores = Math.max(2, Runtime.getRuntime().availableProcessors());
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor executor = newManagedExecutor();
         executor.setCorePoolSize(Math.min(4, cores));
         executor.setMaxPoolSize(Math.min(8, cores * 2));
         executor.setQueueCapacity(100);
@@ -32,7 +45,7 @@ public class ThreadPoolConfig {
     @Bean("logAnalysisExecutor")
     public ThreadPoolTaskExecutor logAnalysisExecutor() {
         int cores = Math.max(2, Runtime.getRuntime().availableProcessors());
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        ThreadPoolTaskExecutor executor = newManagedExecutor();
         // 与 log.analysis.max-concurrent-tasks 对齐，避免编排任务占满
         executor.setCorePoolSize(Math.min(4, cores));
         executor.setMaxPoolSize(8);
@@ -45,19 +58,44 @@ public class ThreadPoolConfig {
         return executor;
     }
 
+    @Bean("logDiagnosisExecutor")
+    public ThreadPoolTaskExecutor logDiagnosisExecutor() {
+        ThreadPoolTaskExecutor executor = newManagedExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(20);
+        executor.setThreadNamePrefix("LogDiagnosis-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    @Bean("agentTeamExecutor")
+    public ThreadPoolTaskExecutor agentTeamExecutor() {
+        ThreadPoolTaskExecutor executor=newManagedExecutor();
+        executor.setCorePoolSize(2);executor.setMaxPoolSize(2);executor.setQueueCapacity(20);
+        executor.setThreadNamePrefix("AgentTeam-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());executor.initialize();return executor;
+    }
+
     /**
      * 分片工作池：与编排池分离，避免自等待死锁。
      */
     @Bean("logAnalysisShardExecutor")
     public ThreadPoolTaskExecutor logAnalysisShardExecutor() {
         int cores = Math.max(2, Runtime.getRuntime().availableProcessors());
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(cores);
+        ThreadPoolTaskExecutor executor = newManagedExecutor();
+        executor.setCorePoolSize(Math.min(cores, 16));
         executor.setMaxPoolSize(Math.min(cores * 2, 16));
         executor.setQueueCapacity(100);
         executor.setKeepAliveSeconds(60);
         executor.setThreadNamePrefix("LogShard-Thread-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setRejectedExecutionHandler((task, pool) -> {
+            if (pool.isShutdown()) {
+                throw new java.util.concurrent.RejectedExecutionException("日志分片线程池已关闭");
+            }
+            task.run();
+        });
         executor.initialize();
         log.info("日志分片线程池 core={} max={} queue=100", executor.getCorePoolSize(), executor.getMaxPoolSize());
         return executor;

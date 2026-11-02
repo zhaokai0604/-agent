@@ -67,6 +67,7 @@ class OpsAutoRemediationServiceTest {
                 opsGovernanceService,
                 opsAuditTraceService,
                 httpAuditSubject);
+        com.award.log.governance.GovernedPipelineFixture.install(service, cleanTempTool, logCleanupTool, serviceRestartTool);
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "riskPatrolAutoMax", 6.0d);
         ReflectionTestUtils.setField(service, "pendingProposalId", "p-1");

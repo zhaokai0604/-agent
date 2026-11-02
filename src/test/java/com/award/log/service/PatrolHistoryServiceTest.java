@@ -38,12 +38,6 @@ class PatrolHistoryServiceTest {
     }
 
     @Test
-    void ensureTableSwallowsErrors() {
-        doThrow(new RuntimeException("no ddl")).when(jdbcTemplate).execute(anyString());
-        assertDoesNotThrow(() -> service.ensureTable());
-    }
-
-    @Test
     void saveRunPersistsFindingPayload() {
         PatrolFinding finding = PatrolFinding.of("WARN", "DISK_HIGH", "disk pressure", "usage high");
 

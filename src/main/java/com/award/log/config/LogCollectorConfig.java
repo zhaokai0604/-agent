@@ -14,7 +14,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import javax.sql.DataSource;
-import jakarta.annotation.PreDestroy;
 
 import java.util.List;
 
@@ -74,13 +73,16 @@ public class LogCollectorConfig {
     @Value("${log.pipeline.collector.start-at-eof:true}")
     private boolean startAtEof;
 
+    @Value("${log.collector.file.checkpoint-directory:./data/collector-checkpoints}")
+    private String fileCheckpointDirectory;
+
     @Value("${log.collector.db.query:SELECT id, level, message, created_at FROM system_log WHERE id > {lastId} ORDER BY id ASC LIMIT 500}")
     private String dbQuery;
 
     @Value("${log.collector.db.checkpoint-file:}")
     private String dbCheckpointFile;
 
-    @Bean
+    @Bean(destroyMethod = "stopAll")
     public LogCollectorManager logCollectorManager() {
         LogCollectorManager collectorManager = new LogCollectorManager();
         if (kafkaLogProducer != null) {
@@ -108,11 +110,14 @@ public class LogCollectorConfig {
                                 : "file-collector-" + (++idx);
                         FileLogCollector fileCollector = new FileLogCollector(
                                 root, collectorName, includeExtensions, excludeDirectories,
-                                maxDepth, pollIntervalMs, bufferMaxLines, startAtEof);
+                                maxDepth, pollIntervalMs, bufferMaxLines, startAtEof,
+                                fileCheckpointDirectory == null || fileCheckpointDirectory.isBlank() ? null
+                                        : java.nio.file.Path.of(fileCheckpointDirectory));
                         collectorManager.addCollector(fileCollector);
                         log.info("[采集器配置] 文件采集器 {} → {}", collectorName, root);
                     } catch (Exception e) {
-                        log.error("[采集器配置] 初始化文件采集器失败 [{}]: {}", root, e.getMessage(), e);
+                        collectorManager.stopAll();
+                        throw new IllegalStateException("FILE_COLLECTOR_INITIALIZATION_FAILED", e);
                     }
                 }
             }
@@ -146,7 +151,8 @@ public class LogCollectorConfig {
                 collectorManager.startAll();
                 log.info("[采集器配置] 所有采集器启动成功，数量: {}", collectorManager.getCollectorCount());
             } catch (Exception e) {
-                log.error("[采集器配置] 启动采集器失败: {}", e.getMessage(), e);
+                collectorManager.stopAll();
+                throw new IllegalStateException("LOG_COLLECTOR_START_FAILED", e);
             }
         } else {
             log.info("[采集器配置] 日志采集器已禁用");
@@ -155,8 +161,4 @@ public class LogCollectorConfig {
         return collectorManager;
     }
 
-    @PreDestroy
-    public void destroyCollectors() {
-        // No need to implement this since we're not storing a reference to the collectorManager
-    }
 }

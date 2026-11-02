@@ -26,6 +26,7 @@ public class TaskInfo {
     private String aiDiagnosis;
     private LocalDateTime createTime;
     private TaskSummary summary;
+    private DurableLogTaskStore.Snapshot runtime;
 
     /**
      * 任务统计摘要：总量、异常率、是否截断及等级分布。

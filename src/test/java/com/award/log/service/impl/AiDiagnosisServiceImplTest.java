@@ -41,6 +41,16 @@ class AiDiagnosisServiceImplTest {
         assertTrue(service.generateDiagnosis(List.of()).contains("未在日志中发现明显异常"));
     }
 
+    @Test void trackedDiagnosisPropagatesPartialStreamFailureWithoutRetry() {
+        var row = new EnhancedLogParseResultEntity("connection refused");
+        row.setSeverity(LogSeverityLevel.ERROR_LEVEL);
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.concat(
+                Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("partial"))))),
+                Flux.error(new IllegalStateException("provider failed"))));
+        assertThrows(IllegalStateException.class, () -> service.generateTrackedDiagnosis(List.of(row)).collectList().block());
+        org.mockito.Mockito.verify(chatModel, org.mockito.Mockito.times(1)).stream(any(Prompt.class));
+    }
+
     @Test
     void generateDiagnosisShouldCallChatModel() {
         EnhancedLogParseResultEntity row = new EnhancedLogParseResultEntity("Connection refused");

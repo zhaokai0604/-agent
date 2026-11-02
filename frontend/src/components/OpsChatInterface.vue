@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="ops-page ops-chat-container ops-chat-container--agent">
     <div class="chat-messages" ref="messagesContainer" @scroll="onMessagesScroll">
       <div v-if="messages.length > 0" class="agent-session-strip agent-chat-column">
@@ -449,6 +449,7 @@ const onMessagesScroll = () => {
 const isGenerationCancelled = (token) => token !== generationToken
 
 const stopGeneration = () => {
+  const wasGenerating = streaming.value || loading.value
   generationToken += 1
   streaming.value = false
   loading.value = false
@@ -461,7 +462,7 @@ const stopGeneration = () => {
     streamReader = null
   }
   const last = messages.value[messages.value.length - 1]
-  if (last?.role === 'assistant') {
+  if (wasGenerating && last?.role === 'assistant') {
     if (!String(last.content || '').trim()) {
       messages.value.pop()
     } else if (!String(last.content).includes('（已停止生成）')) {
@@ -691,9 +692,12 @@ function openSkills () {
 }
 
 const confirmPlanFromMessage = async (index) => {
+  const requestMessages = messages.value
+  const requestSessionId = activeSessionId.value
   confirmPlanIndex.value = index
   try {
     await confirmRemediationDialog()
+    if (messages.value !== requestMessages) return
     const prior = messages.value[index]
     const pendingConfirmations = Array.isArray(prior?.pendingConfirmations) && prior.pendingConfirmations.length
       ? prior.pendingConfirmations
@@ -709,18 +713,20 @@ const confirmPlanFromMessage = async (index) => {
           pep.confirmationId,
           pep.capabilityToken,
           pep.confirmToken,
-          activeSessionId.value
+          requestSessionId
         )
+        if (messages.value !== requestMessages) return
         const toolName = result?.toolName || pep.toolName || prior?.plannedTools?.[0] || '运维工具'
         const body = result?.body || result
         const success = body?.success === true
-        const remainingConfirmations = success ? pendingConfirmations.slice(1) : pendingConfirmations
-        if (prior && success) {
+        const consumed = success || body?.confirmationConsumed === true
+        const remainingConfirmations = consumed ? pendingConfirmations.slice(1) : pendingConfirmations
+        if (prior && consumed) {
           const nextPending = remainingConfirmations[0] || null
           prior.pendingConfirmations = remainingConfirmations
           prior.pendingConfirmation = nextPending
           prior.pepMeta = nextPending || null
-          prior.writeConfirmed = remainingConfirmations.length === 0
+          prior.writeConfirmed = success && remainingConfirmations.length === 0
           prior.awaitingConfirm = remainingConfirmations.length > 0
           prior.meta = {
             ...(prior.meta || {}),
@@ -751,6 +757,7 @@ const confirmPlanFromMessage = async (index) => {
         scrollToBottom()
         return
       } catch (error) {
+        if (messages.value !== requestMessages) return
         if (prior) {
           prior.confirmationError = error?.message || String(error)
           prior.awaitingConfirm = true
@@ -891,6 +898,7 @@ const runNaturalLanguageStream = async (message) => {
 }
 
 const handleSend = async () => {
+  const requestMessages = messages.value
   const rawInput = inputMessage.value.trim()
   let message = buildDraftMessage(rawInput)
   if (pendingAttachment.value) {
@@ -912,7 +920,9 @@ const handleSend = async () => {
   if (userConfirmedRemediation(message) && !skipRemediationConfirm.value) {
     try {
       await confirmRemediationDialog()
+      if (messages.value !== requestMessages) return
     } catch {
+      if (messages.value !== requestMessages) return
       messages.value.push({
         role: 'assistant',
         content: '已取消执行。',
@@ -948,6 +958,7 @@ const handleSend = async () => {
   try {
     await runNaturalLanguageStream(message)
   } catch (error) {
+    if (messages.value !== requestMessages) return
     console.error('助手流式对话失败:', error)
     messages.value.push({
       role: 'assistant',

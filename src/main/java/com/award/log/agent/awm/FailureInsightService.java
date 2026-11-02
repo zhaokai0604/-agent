@@ -52,7 +52,6 @@ public class FailureInsightService {
 
     @PostConstruct
     void init() {
-        ensureTable();
         reloadCache();
         maybeSeedBootstrap();
     }
@@ -93,30 +92,6 @@ public class FailureInsightService {
         captureReject("当前只读模式下重启 nginx", "READ_ONLY_TOOL_SURFACE", "ServiceRestartTool", "bootstrap seed", "seed");
     }
 
-    void ensureTable() {
-        try {
-            jdbcTemplate.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ops_failure_insight (
-                      id BIGINT NOT NULL AUTO_INCREMENT,
-                      insight_key VARCHAR(160) NOT NULL,
-                      security_code VARCHAR(64) NOT NULL,
-                      tool_name VARCHAR(128) DEFAULT NULL,
-                      intent_hint VARCHAR(512) DEFAULT NULL,
-                      reflection TEXT NOT NULL,
-                      source_trace_id VARCHAR(64) DEFAULT NULL,
-                      hit_count INT NOT NULL DEFAULT 1,
-                      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                      PRIMARY KEY (id),
-                      UNIQUE KEY uk_insight_key (insight_key),
-                      KEY idx_security_code (security_code)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Reflexion 失败教训'
-                    """);
-        } catch (Exception e) {
-            log.warn("创建 ops_failure_insight 表失败: {}", e.getMessage());
-        }
-    }
 
     /** 从库全量刷新内存缓存；关闭开关时清空。 */
     public void reloadCache() {

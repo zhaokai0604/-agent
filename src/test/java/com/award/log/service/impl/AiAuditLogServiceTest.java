@@ -23,7 +23,6 @@ class AiAuditLogServiceTest {
     void setUp() {
         jdbc = new InMemoryJdbc();
         service = new AiAuditLogService(jdbc);
-        service.initTable();
     }
 
     @Test

@@ -158,7 +158,7 @@ class WorkflowExecutionServiceCoverageTest {
         assertTrue(result.rawResultForTool("Missing").isEmpty());
         assertTrue(result.toMarkdown().contains("回放完成"));
         verify(memoryService).recordRun(eq("wf-read"), eq("t-1"), eq(true), eq(1), eq(1), anyString());
-        verify(memoryService).recordSuccess("wf-read");
+        verify(memoryService, org.mockito.Mockito.never()).recordSuccess("wf-read");
         verify(memoryService).recordUtility("wf-read");
         verify(auditRecorder, atLeastOnce()).addStructuredStep(anyList(), eq("workflow"), anyMap());
 

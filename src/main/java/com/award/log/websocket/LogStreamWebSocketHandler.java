@@ -2,6 +2,9 @@ package com.award.log.websocket;
 
 import com.award.log.analyzer.RealTimeLogAnalyzer;
 import com.award.log.collector.LogCollectorManager;
+import com.award.log.analysis.LogLineParseSupport;
+import com.award.log.analysis.GeneralLogSeverityResolver;
+import com.award.log.model.LogSeverityLevel;
 import com.award.log.model.LogDocument;
 import com.award.log.service.ElasticsearchService;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +26,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.time.Instant;
+import java.time.ZoneId;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 
@@ -102,11 +107,16 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
         } catch (Exception e) {
             log.warn("注册到实时日志分析器失败: {}", e.getMessage());
         }
+        startPushIfNeeded();
     }
 
     @PreDestroy
     public void destroy() {
         stopPush();
+        if (realTimeLogAnalyzer != null) {
+            realTimeLogAnalyzer.unregisterWebSocketHandler(this);
+        }
+        activeSessions.clear();
         if (scheduler != null) {
             scheduler.shutdownNow();
         }
@@ -167,10 +177,7 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         activeSessions.remove(session.getId());
         log.info("WebSocket连接关闭: {}, 状态: {}", session.getId(), status);
-        // 没有人看了就停推送，省 CPU；再有人连会 startPushIfNeeded
-        if (activeSessions.isEmpty()) {
-            stopPush();
-        }
+        // Keep the server-side analysis consumer alive when all viewers disconnect.
     }
 
     @Override
@@ -183,7 +190,7 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    /** 首个活跃连接时启动全局推送任务（单实例，不是每连接一个）。 */
+    /** 首个活跃连接时确保唯一的全局采集/分析消费者已运行。 */
     private void startPushIfNeeded() {
         ScheduledExecutorService exec = scheduler;
         if (exec == null || exec.isShutdown()) {
@@ -230,7 +237,7 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
      * 注意：不要在这里为每个 session 再 takeFanOut。
      */
     void pushLogsOnce() {
-        if (activeSessions.isEmpty() || logCollectorManager == null) {
+        if (logCollectorManager == null) {
             return;
         }
         List<String> logs = logCollectorManager.takeFanOut(batchSize);
@@ -249,7 +256,11 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
             List<Map<String, Object>> parsedLogs = parseLogLines(logBatch);
             for (Map<String, Object> logItem : parsedLogs) {
                 if (realTimeLogAnalyzer != null) {
-                    realTimeLogAnalyzer.addLog(logItem);
+                    try {
+                        realTimeLogAnalyzer.addLog(logItem);
+                    } catch (Exception e) {
+                        log.warn("实时分析器处理日志失败: {}", e.getMessage());
+                    }
                 }
                 if (elasticsearchService != null) {
                     try {
@@ -271,30 +282,29 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
             Map<String, Object> item = new HashMap<>();
             item.put("content", line);
             item.put("level", inferLevel(line));
-            item.put("timestamp", System.currentTimeMillis());
+            item.put("timestamp", eventTimestamp(line));
             parsedLogs.add(item);
         }
         return parsedLogs;
     }
 
+    private static long eventTimestamp(String line) {
+        String normalized=LogLineParseSupport.extractNormalizedTimeString(line);
+        if(normalized==null || normalized.isBlank()) return System.currentTimeMillis();
+        try { return LogLineParseSupport.toEpochMillis(normalized); }
+        catch(RuntimeException invalid) { return System.currentTimeMillis(); }
+    }
+
     private static String inferLevel(String line) {
-        if (line == null) {
-            return "INFO";
-        }
-        String upper = line.toUpperCase();
-        if (upper.contains("FATAL")) {
-            return "FATAL";
-        }
-        if (upper.contains("ERROR")) {
-            return "ERROR";
-        }
-        if (upper.contains("WARN")) {
-            return "WARN";
-        }
-        if (upper.contains("DEBUG")) {
-            return "DEBUG";
-        }
-        return "INFO";
+        LogSeverityLevel severity=GeneralLogSeverityResolver.resolve(line);
+        return switch(severity) {
+            case FATAL_LEVEL -> "FATAL";
+            case ERROR_LEVEL -> "ERROR";
+            case WARNING_LEVEL -> "WARN";
+            case INFO_LEVEL -> "INFO";
+            case DEBUG_LEVEL -> "DEBUG";
+            default -> "INFO";
+        };
     }
 
     /**
@@ -357,7 +367,13 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
     private LogDocument convertToLogDocument(Map<String, Object> log) {
         LogDocument document = new LogDocument();
         document.setId(java.util.UUID.randomUUID().toString());
-        document.setTimestamp(java.time.LocalDateTime.now());
+        Object eventTimestamp = log.get("timestamp");
+        if (eventTimestamp instanceof Number epochMillis) {
+            document.setTimestamp(Instant.ofEpochMilli(epochMillis.longValue())
+                    .atZone(ZoneId.systemDefault()).toLocalDateTime());
+        } else {
+            document.setTimestamp(java.time.LocalDateTime.now());
+        }
 
         String level = (String) log.get("level");
         document.setSeverity(level != null ? level : "INFO");
@@ -369,18 +385,9 @@ public class LogStreamWebSocketHandler extends TextWebSocketHandler {
         document.setContent(content != null ? content : "无内容");
         document.setProtocol("WEBSOCKET_STREAM");
 
-        boolean isAnomaly = false;
-        if (level != null) {
-            String upper = level.toUpperCase();
-            isAnomaly = upper.equals("ERROR") || upper.equals("WARN") || upper.equals("FATAL");
-        }
-        if (!isAnomaly && content != null) {
-            String lower = content.toLowerCase();
-            isAnomaly = lower.contains("error") || lower.contains("exception")
-                    || lower.contains("fail") || lower.contains("warn")
-                    || lower.contains("fatal") || lower.contains("critical");
-        }
-        document.setAnomaly(isAnomaly);
+        document.setAnomaly("ERROR".equalsIgnoreCase(level)
+                || "WARN".equalsIgnoreCase(level)
+                || "FATAL".equalsIgnoreCase(level));
         return document;
     }
 }

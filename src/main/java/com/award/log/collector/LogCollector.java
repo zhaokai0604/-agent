@@ -24,6 +24,9 @@ public interface LogCollector {
      */
     List<String> collect();
 
+    /** The caller may acknowledge only after a durable receiver has accepted the whole batch. */
+    default CollectedLogBatch collectBatch() { return new CollectedLogBatch(collect(), () -> {}); }
+
     /**
      * 获取采集器名称
      * @return 采集器名称
@@ -35,4 +38,7 @@ public interface LogCollector {
      * @return 是否运行中
      */
     boolean isRunning();
+
+    /** Read-only health counters; implementations must not drain the buffer. */
+    default java.util.Map<String, Object> diagnostics() { return java.util.Map.of(); }
 }

@@ -46,6 +46,9 @@ public class AiDiagnosisController {
     private AnalysisTaskManager taskManager;
 
     @Autowired
+    private com.award.log.service.LogTaskDiagnosisService taskDiagnosis;
+
+    @Autowired
     private RequestUserResolver requestUserResolver;
 
     @Autowired
@@ -113,44 +116,15 @@ public class AiDiagnosisController {
                 emitter.complete();
                 return emitter;
             }
-            if (task.getResult() == null) {
+            if (!"COMPLETED".equals(task.getStatus())) {
                 emitter.send("Analysis has not completed yet. Current status: " + task.getStatus());
                 emitter.complete();
                 return emitter;
             }
             sseExecutor.execute(() -> {
-                StringBuilder fullResponse = new StringBuilder();
                 try {
-                    Flux<String> stream = aiDiagnosisService.generateDiagnosisStreamFromFullResult(task.getResult());
-                    if (stream == null) {
-                        emitter.send("Diagnosis service unavailable");
-                        emitter.complete();
-                        return;
-                    }
-                    stream.doOnNext(chunk -> {
-                                try {
-                                    if (chunk != null) {
-                                        emitter.send(chunk);
-                                        fullResponse.append(chunk);
-                                    }
-                                } catch (Exception e) {
-                                    log.error("Failed to send diagnosis stream chunk", e);
-                                    emitter.complete();
-                                }
-                            })
-                            .doOnComplete(() -> {
-                                taskManager.updateAiDiagnosis(taskId, fullResponse.toString());
-                                emitter.complete();
-                            })
-                            .doOnError(e -> {
-                                log.error("Diagnosis stream failed for task {}", taskId, e);
-                                try {
-                                    emitter.send("Diagnosis failed");
-                                } catch (Exception ignored) {
-                                }
-                                emitter.complete();
-                            })
-                            .subscribe();
+                    emitter.send(taskDiagnosis.await(taskId, java.util.UUID.randomUUID().toString()));
+                    emitter.complete();
                 } catch (Exception e) {
                     log.error("Execute diagnosis stream failed for task {}", taskId, e);
                     try {

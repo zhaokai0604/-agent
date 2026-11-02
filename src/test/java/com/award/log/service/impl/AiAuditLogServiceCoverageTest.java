@@ -52,11 +52,9 @@ class AiAuditLogServiceCoverageTest {
     }
 
     @Test
-    void lifecycleAndDatabaseFailuresAreSafe() {
+    void blankUserAndEmptyQueriesRemainSafe() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         AiAuditLogService service = new AiAuditLogService(jdbc);
-        doThrow(new RuntimeException("ddl unavailable")).when(jdbc).execute(anyString());
-        service.initTable();
         service.save(null, null, null, "GET", "/", 200, 0L, 0);
 
         when(jdbc.queryForList(anyString(), any(Object[].class))).thenReturn(List.of());

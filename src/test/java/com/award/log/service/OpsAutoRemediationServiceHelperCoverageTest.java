@@ -53,6 +53,7 @@ class OpsAutoRemediationServiceHelperCoverageTest {
     void setUp() {
         service = new OpsAutoRemediationService(cleanTempTool, logCleanupTool, serviceRestartTool, pathPolicy,
                 new ObjectMapper(), scoreEngine, securityGate, governance, audit, subject);
+        com.award.log.governance.GovernedPipelineFixture.install(service, cleanTempTool, logCleanupTool, serviceRestartTool);
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "runMode", "HYBRID");
         ReflectionTestUtils.setField(service, "riskPatrolAutoMax", 6.0d);

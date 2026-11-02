@@ -40,6 +40,7 @@ class LogAnalysisControllerCoverageTest {
 
     @Mock private LogAnalysisService logAnalysisService;
     @Mock private AiDiagnosisService aiDiagnosisService;
+    @Mock private com.award.log.service.LogTaskDiagnosisService taskDiagnosis;
     @Mock private AnalysisTaskManager taskManager;
     @Mock private RequestUserResolver requestUserResolver;
 
@@ -51,6 +52,7 @@ class LogAnalysisControllerCoverageTest {
         controller = new LogAnalysisController();
         ReflectionTestUtils.setField(controller, "logAnalysisService", logAnalysisService);
         ReflectionTestUtils.setField(controller, "aiDiagnosisService", aiDiagnosisService);
+        ReflectionTestUtils.setField(controller, "taskDiagnosis", taskDiagnosis);
         ReflectionTestUtils.setField(controller, "taskManager", taskManager);
         ReflectionTestUtils.setField(controller, "requestUserResolver", requestUserResolver);
         request = new MockHttpServletRequest();
@@ -130,9 +132,9 @@ class LogAnalysisControllerCoverageTest {
         completed.setStatus("COMPLETED");
         completed.setResult(List.of(new EnhancedLogParseResultEntity("ERROR log")));
         when(taskManager.getTaskForUser(eq("d2"), eq(7), eq(false))).thenReturn(completed);
-        when(aiDiagnosisService.generateDiagnosisFromFullResult(any())).thenReturn("diagnosis");
+        when(taskDiagnosis.await(eq("d2"), anyString())).thenReturn("diagnosis");
         assertEquals(200, controller.performDiagnosis(request, "d2").getCode());
-        verify(taskManager).updateAiDiagnosis("d2", "diagnosis");
+        verify(taskDiagnosis).await(eq("d2"), anyString());
         MockHttpServletResponse unsupported = new MockHttpServletResponse();
         controller.downloadReport(request, "d2", "pdf", unsupported);
         assertEquals(400, unsupported.getStatus());

@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -29,6 +30,7 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,6 +54,9 @@ public class LogAnalysisController {
     private AiDiagnosisService aiDiagnosisService;
 
     @Autowired
+    private com.award.log.service.LogTaskDiagnosisService taskDiagnosis;
+
+    @Autowired
     private AnalysisTaskManager taskManager;
 
     @Autowired
@@ -59,7 +64,8 @@ public class LogAnalysisController {
 
     @Operation(summary = "Upload log file")
     @PostMapping("/upload")
-    public Result<String> uploadLog(HttpServletRequest request, @RequestParam("file") MultipartFile file) {
+    public Result<String> uploadLog(HttpServletRequest request, @RequestParam("file") MultipartFile file,
+                                    @RequestHeader(value = "Idempotency-Key", required = false) String requestKey) {
         if (file.isEmpty()) {
             return Result.error("File cannot be empty");
         }
@@ -67,43 +73,78 @@ public class LogAnalysisController {
         String taskId = UUID.randomUUID().toString();
         try {
             File destFile = createSafeTempUpload(taskId, file);
+            if (requestKey != null && userId != null) {
+                var reservation = taskManager.reserveUpload(userId, requestKey, destFile, taskId);
+                if (!reservation.created()) {
+                    Files.deleteIfExists(destFile.toPath());
+                    return Result.success(reservation.taskId());
+                }
+            }
             taskManager.initTask(taskId, userId, safeOriginalFilename(file));
+            taskManager.prepareInput(taskId, destFile);
             logAnalysisService.startAnalysisAsync(destFile, taskId);
             return Result.success(taskId);
         } catch (IllegalArgumentException e) {
+            rejectSubmission(taskId);
             return Result.error(e.getMessage());
         } catch (Exception e) {
+            rejectSubmission(taskId);
             log.error("Upload failed for task {}", taskId, e);
             return Result.error("Upload failed");
         }
     }
 
+    Result<String> uploadLog(HttpServletRequest request, MultipartFile file) {
+        return uploadLog(request, file, null);
+    }
+
     @Operation(summary = "Upload multiple log files")
     @PostMapping("/upload/multi")
-    public Result<List<String>> uploadLogs(HttpServletRequest request, @RequestParam("files") MultipartFile[] files) {
+    public Result<List<String>> uploadLogs(HttpServletRequest request, @RequestParam("files") MultipartFile[] files,
+                                           @RequestHeader(value = "Idempotency-Key", required = false) String requestKey) {
         if (files == null || files.length == 0) {
             return Result.error("Files cannot be empty");
         }
         Integer userId = requestUserResolver.currentUserId(request);
         List<String> taskIds = new ArrayList<>();
+        String submittingTask = null;
         try {
-            for (MultipartFile file : files) {
+            for (int index = 0; index < files.length; index++) {
+                MultipartFile file = files[index];
+                submittingTask = null;
                 if (file.isEmpty()) {
                     continue;
                 }
                 String taskId = UUID.randomUUID().toString();
+                submittingTask = taskId;
                 File destFile = createSafeTempUpload(taskId, file);
+                if (requestKey != null && userId != null) {
+                    String fileRequestKey = requestKey + ":" + index;
+                    var reservation = taskManager.reserveUpload(userId, fileRequestKey, destFile, taskId);
+                    if (!reservation.created()) {
+                        Files.deleteIfExists(destFile.toPath());
+                        taskIds.add(reservation.taskId());
+                        continue;
+                    }
+                }
                 taskManager.initTask(taskId, userId, safeOriginalFilename(file));
+                taskManager.prepareInput(taskId, destFile);
                 logAnalysisService.startAnalysisAsync(destFile, taskId);
                 taskIds.add(taskId);
             }
             return Result.success(taskIds);
         } catch (IllegalArgumentException e) {
+            rejectSubmission(submittingTask);
             return Result.error(e.getMessage());
         } catch (Exception e) {
+            rejectSubmission(submittingTask);
             log.error("Batch upload failed", e);
             return Result.error("Upload failed");
         }
+    }
+
+    Result<List<String>> uploadLogs(HttpServletRequest request, MultipartFile[] files) {
+        return uploadLogs(request, files, null);
     }
 
     @Operation(summary = "Get task progress")
@@ -214,8 +255,8 @@ public class LogAnalysisController {
             if (task == null || task.getResult() == null) {
                 return Result.error(404, "Task not found, access denied, or analysis not completed");
             }
-            String diagnosis = aiDiagnosisService.generateDiagnosisFromFullResult(task.getResult());
-            taskManager.updateAiDiagnosis(taskId, diagnosis);
+            if (!"COMPLETED".equals(task.getStatus())) return Result.error(409, "Analysis is not completed");
+            String diagnosis = taskDiagnosis.await(taskId, UUID.randomUUID().toString());
             return Result.success(diagnosis);
         } catch (Exception e) {
             log.error("Diagnosis failed for task {}", taskId, e);
@@ -303,6 +344,12 @@ public class LogAnalysisController {
         Integer userId = requestUserResolver.currentUserId(request);
         boolean admin = requestUserResolver.isAdmin(request);
         return taskManager.canAccessTask(taskId, userId, admin);
+    }
+
+    private void rejectSubmission(String taskId) {
+        if (taskId == null) return;
+        try { taskManager.submissionFailed(taskId); }
+        catch (Exception e) { log.warn("Submission cleanup remains pending taskId={}", taskId, e); }
     }
 
     private File createSafeTempUpload(String taskId, MultipartFile file) throws Exception {

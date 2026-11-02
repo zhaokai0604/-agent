@@ -679,11 +679,22 @@ public class UnifiedAssistantService {
                     Mono.fromCallable(() -> {
                                     OpsSecurityContext.openChatAgent(traceId, userMessage, surface, allowWrite,
                                             openToolPermissions, requester, sessionId);
+                                ChatToolExecutionTracker.clear();
                                 try {
-                                    return opsRuntimeService.runPlaybook(
-                                            playbook, userMessage, surface, intentRisk);
+                                    var run = opsRuntimeService.runPlaybook(playbook, userMessage, surface, intentRisk);
+                                    var pending = ChatToolExecutionTracker.pendingConfirmations();
+                                    if (run != null && !pending.isEmpty()) {
+                                        Map<String,Object> report = new LinkedHashMap<>(run.report() == null ? Map.of() : run.report());
+                                        report.put("pendingConfirmations", pending);
+                                        report.put("pendingConfirmation", pending.get(0));
+                                        report.put("awaitingConfirm", true);
+                                        report.put("securityOutcome", "NEED_CONFIRM");
+                                        return new com.award.log.agent.OpsRunResult(run.markdown(), run.traceId(), report);
+                                    }
+                                    return run;
                                 } finally {
                                     OpsSecurityContext.clear();
+                                    ChatToolExecutionTracker.clear();
                                 }
                             })
                             .subscribeOn(Schedulers.boundedElastic())

@@ -97,6 +97,7 @@ public class RealTimeLogAnalyzer {
 
     // 标记是否应该停止分析循环
     private volatile boolean stopAnalysisLoop = false;
+    private volatile boolean closed;
     
     // 内存检查任务调度器（只调 buffer / 线程数，不重建池）
     private ScheduledExecutorService memoryCheckScheduler;
@@ -118,8 +119,11 @@ public class RealTimeLogAnalyzer {
         final double anomalyThreshold = 0.6;
     }
 
-    @javax.annotation.PostConstruct
-    public void init() {
+    @jakarta.annotation.PostConstruct
+    public synchronized void init() {
+        if (closed || memoryCheckScheduler != null) {
+            return;
+        }
         // 初始化线程池和缓冲区大小
         adjustResourcesBasedOnMemory();
         
@@ -127,22 +131,32 @@ public class RealTimeLogAnalyzer {
         startMemoryCheckScheduler();
     }
 
-    @javax.annotation.PreDestroy
+    @jakarta.annotation.PreDestroy
     public void destroy() {
-        stopRealTimeAnalysis();
-        shutdownExecutorGracefully(workerPool, "workerPool");
-        shutdownExecutorGracefully(analysisScheduler, "analysisScheduler");
-        shutdownExecutorGracefully(memoryCheckScheduler, "memoryCheckScheduler");
         synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            stopRealTimeAnalysis();
             logBuffer.clear();
         }
+        // Stop producers before interrupting the consumer; never hold this monitor while joining.
+        shutdownExecutorGracefully(memoryCheckScheduler, "memoryCheckScheduler");
+        shutdownExecutorGracefully(analysisScheduler, "analysisScheduler");
+        synchronized (poolLock) {
+            if (workerPool != null) {
+                workerPool.shutdownNow();
+            }
+        }
+        shutdownExecutorGracefully(workerPool, "workerPool");
     }
 
     private static void shutdownExecutorGracefully(ExecutorService exec, String name) {
         if (exec == null) {
             return;
         }
-        exec.shutdown();
+        exec.shutdownNow();
         try {
             if (!exec.awaitTermination(5, TimeUnit.SECONDS)) {
                 log.warn("{} 未在 5s 内结束，执行 shutdownNow", name);
@@ -211,6 +225,9 @@ public class RealTimeLogAnalyzer {
 
     private void resizeWorkerPool(int newCoreSize) {
         synchronized (poolLock) {
+            if (closed) {
+                return;
+            }
             if (workerPool == null) {
                 workerPool = newWorkerPool(newCoreSize);
                 corePoolSize = newCoreSize;
@@ -253,6 +270,9 @@ public class RealTimeLogAnalyzer {
     }
 
     private void submitWorkerTask(Runnable task) {
+        if (closed) {
+            return;
+        }
         ThreadPoolExecutor pool = workerPool;
         if (pool == null || pool.isShutdown()) {
             log.warn("工作线程池不可用，在当前线程执行分析任务");
@@ -262,6 +282,9 @@ public class RealTimeLogAnalyzer {
         try {
             pool.execute(task);
         } catch (RejectedExecutionException e) {
+            if (closed) {
+                return;
+            }
             log.warn("工作线程池繁忙，在当前线程执行分析任务: {}", e.getMessage());
             task.run();
         }
@@ -290,6 +313,9 @@ public class RealTimeLogAnalyzer {
      * 启动实时分析任务
      */
     public synchronized void startRealTimeAnalysis() {
+        if (closed) {
+            return;
+        }
         stopAnalysisLoop = false;
         if (analysisLoopFuture != null && !analysisLoopFuture.isCancelled()) {
             return;
@@ -328,7 +354,10 @@ public class RealTimeLogAnalyzer {
     /**
      * 重置分析状态，允许重新开始分析
      */
-    public void resetAnalysisState() {
+    public synchronized void resetAnalysisState() {
+        if (closed) {
+            return;
+        }
         stopAnalysisLoop = false;
         logBuffer.clear();
         log.info("分析状态已重置");
@@ -339,6 +368,9 @@ public class RealTimeLogAnalyzer {
      * @param logEntry 日志数据
      */
     public synchronized void addLog(Map<String, Object> logEntry) {
+        if (closed) {
+            return;
+        }
         // 检查内存使用情况，如果内存使用过高，直接处理而不加入缓冲区
         double memoryUsage = getMemoryUsage();
         if (memoryUsage > MEMORY_THRESHOLD_HIGH) {
@@ -818,6 +850,10 @@ public class RealTimeLogAnalyzer {
      */
     public void registerWebSocketHandler(LogStreamWebSocketHandler handler) {
         messageBroadcaster.registerHandler(handler);
+    }
+
+    public void unregisterWebSocketHandler(LogStreamWebSocketHandler handler) {
+        messageBroadcaster.unregisterHandler(handler);
     }
 
     /**

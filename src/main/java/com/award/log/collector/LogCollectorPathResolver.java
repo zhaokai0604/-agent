@@ -96,7 +96,7 @@ public final class LogCollectorPathResolver {
         try {
             Path p = Path.of(path.trim());
             if (Files.exists(p)) {
-                roots.add(normalizeRoot(p.toAbsolutePath().toString()));
+                roots.add(normalizeRoot(p.toRealPath().normalize().toString()));
             }
         } catch (Exception ignored) {
             // 非法路径跳过

@@ -25,7 +25,6 @@ class OpsAuditTraceServiceTest {
     void setUp() {
         jdbc = new InMemoryJdbc();
         service = new OpsAuditTraceService(jdbc);
-        service.initTable();
     }
 
     @Test

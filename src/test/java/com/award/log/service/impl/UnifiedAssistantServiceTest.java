@@ -157,16 +157,22 @@ class UnifiedAssistantServiceTest {
                     assertTrue(ctx.isChatAgentPath());
                     assertEquals(McpToolSurface.FULL, ctx.getToolSurface());
                     assertFalse(ctx.isUserConfirmedWrite());
+                    assertEquals("owner-37",ctx.getRequester());
+                    assertEquals("session-37",ctx.getSessionId());
+                    com.award.log.security.ChatToolExecutionTracker.recordPendingConfirmation(Map.of(
+                            "confirmationId","confirm-37","capabilityToken","cap-37","confirmToken","hmac-37"));
                     return new OpsRunResult("## 全面巡检\n\n- 发现项：**0**\n", "trace-test",
                             Map.of("type", "orchestrate-result", "traceId", "trace-test"));
                 });
 
-        String joined = String.join("", service.chatStream("帮我检查电脑", List.of(), true, false)
+        String joined = String.join("", service.chatStream("帮我检查电脑", List.of(), true, false, null, "owner-37", "session-37")
                 .collectList()
                 .block());
 
         assertTrue(joined.contains("ASSISTANT_META:"));
         assertTrue(joined.contains("## 全面巡检"));
+        assertTrue(joined.contains("confirm-37"));
+        assertTrue(joined.contains("NEED_CONFIRM"));
         assertNull(OpsSecurityContext.get());
     }
 }

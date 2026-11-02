@@ -139,9 +139,13 @@ attachInterceptors(managementRequest)
 
 export { formatApiError }
 
-export const uploadLog = (formData) => request.post('/log/upload', formData)
+export const uploadLog = (formData, idempotencyKey) => request.post('/log/upload', formData, {
+  headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined
+})
 
-export const uploadLogs = (formData) => request.post('/log/upload/multi', formData)
+export const uploadLogs = (formData, idempotencyKey) => request.post('/log/upload/multi', formData, {
+  headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined
+})
 
 export const getTaskStatus = (taskId) => request.get(`/log/task/${taskId}`)
 export const getReport = (taskId) => request.get(`/log/report/${taskId}`)
@@ -158,6 +162,17 @@ export const getHistory = (pageNum = 1, pageSize = 10, filters = {}) => {
   return request.get('/log/history', { params })
 }
 export const performDiagnosis = (taskId) => request.post(`/log/diagnose/${taskId}`)
+export const getDiagnosisJob = (taskId, signal) => request.get(`/log/diagnosis/${taskId}`, { signal })
+export const startDiagnosisJob = (taskId, requestId, signal) => request.post(`/log/diagnosis/${taskId}`, { requestId }, { signal })
+export const cancelDiagnosisJob = (taskId, runId) => request.post(`/log/diagnosis/${taskId}/cancel`, { runId })
+export const listAgentTeams = () => request.get('/api/agent-teams')
+export const getAgentTeamSkills = () => request.get('/api/agent-teams/skills')
+export const getAgentTeam = (id, signal) => request.get(`/api/agent-teams/${id}`, { signal, silent: true })
+export const startAgentTeam = (payload) => request.post('/api/agent-teams', payload)
+export const approveAgentTeam = (id, payload) => request.post(`/api/agent-teams/${id}/approve`, payload)
+export const editAgentTeamPlan = (id, payload) => request.post(`/api/agent-teams/${id}/plan`, payload)
+export const cancelAgentTeam = (id) => request.post(`/api/agent-teams/${id}/cancel`)
+export const retryAgentTeamEvidence = (id, payload) => request.post(`/api/agent-teams/${id}/evidence`, payload)
 // DELIVERY: 死封装/无挂载页 — 见 docs/deployment/交付API白名单.md
 export const pauseTask = (taskId) => request.post(`/log/pause/${taskId}`)
 export const resumeTask = (taskId) => request.post(`/log/resume/${taskId}`)
@@ -488,6 +503,10 @@ export const getAnalysisSkills = () => managementRequest.get('/api/ops/analysis-
 
 /** YAML 结构化运维 Skill（SOP 目录，只读） */
 export const getYamlSkills = () => managementRequest.get('/api/ops/skills/yaml')
+export const previewSkillRelease = () => managementRequest.post('/api/ops/skills/releases/preview')
+export const publishSkillRelease = (payload) => managementRequest.post('/api/ops/skills/releases/publish', payload)
+export const rollbackSkillRelease = (payload) => managementRequest.post('/api/ops/skills/releases/rollback', payload)
+export const getSkillReleaseHistory = () => managementRequest.get('/api/ops/skills/releases/history')
 
 /** 主动调用 AI 分析 Skill */
 export const invokeAnalysisSkill = (skillId, params = {}) =>

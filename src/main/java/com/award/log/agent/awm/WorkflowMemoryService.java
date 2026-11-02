@@ -50,7 +50,6 @@ public class WorkflowMemoryService {
 
     @PostConstruct
     void init() {
-        ensureTable();
         reloadCache();
         if (seedOnStartup && enabled) {
             seedIfEmpty();
@@ -79,67 +78,7 @@ public class WorkflowMemoryService {
         }
     }
 
-    void ensureTable() {
-        try {
-            jdbcTemplate.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ops_workflow_memory (
-                      id BIGINT NOT NULL AUTO_INCREMENT,
-                      workflow_id VARCHAR(64) NOT NULL,
-                      domain_tag VARCHAR(32) NOT NULL,
-                      finding_kinds VARCHAR(256) DEFAULT NULL,
-                      title VARCHAR(255) NOT NULL,
-                      description TEXT,
-                      steps_json LONGTEXT NOT NULL,
-                      source_type VARCHAR(16) NOT NULL DEFAULT 'seed',
-                      source_trace_id VARCHAR(64) DEFAULT NULL,
-                      utility_count INT NOT NULL DEFAULT 0,
-                      success_count INT NOT NULL DEFAULT 0,
-                      enabled TINYINT(1) NOT NULL DEFAULT 1,
-                      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                      PRIMARY KEY (id),
-                      UNIQUE KEY uk_workflow_id (workflow_id),
-                      KEY idx_domain_tag (domain_tag),
-                      KEY idx_enabled (enabled)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent Workflow Memory'
-                    """);
-            jdbcTemplate.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ops_workflow_run (
-                      id BIGINT NOT NULL AUTO_INCREMENT,
-                      workflow_id VARCHAR(64) NOT NULL,
-                      trace_id VARCHAR(64) DEFAULT NULL,
-                      success TINYINT(1) NOT NULL DEFAULT 0,
-                      steps_ok INT NOT NULL DEFAULT 0,
-                      steps_total INT NOT NULL DEFAULT 0,
-                      summary VARCHAR(512) DEFAULT NULL,
-                      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                      PRIMARY KEY (id),
-                      KEY idx_workflow_run_wf (workflow_id),
-                      KEY idx_workflow_run_trace (trace_id)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AWM workflow execution runs'
-                    """);
-            ensureSuccessCountColumn();
-        } catch (Exception e) {
-            log.warn("创建 AWM 表失败（可能无库权限）: {}", e.getMessage());
-        }
-    }
 
-    private void ensureSuccessCountColumn() {
-        try {
-            jdbcTemplate.queryForObject(
-                    "SELECT success_count FROM ops_workflow_memory LIMIT 1",
-                    Integer.class);
-        } catch (Exception e) {
-            try {
-                jdbcTemplate.execute(
-                        "ALTER TABLE ops_workflow_memory ADD COLUMN success_count INT NOT NULL DEFAULT 0");
-            } catch (Exception ignored) {
-                log.debug("success_count 列迁移跳过: {}", ignored.getMessage());
-            }
-        }
-    }
 
     /** 从库全量刷新内存缓存；关闭 AWM 时清空。 */
     public void reloadCache() {

@@ -24,8 +24,21 @@ class RemediationClosureSupportTest {
                 json,
                 RemediationClosureSupport.writeParams("CleanTempTool", "/tmp", false),
                 "tester");
-        assertEquals(VerifyOutcome.VERIFIED.name(), report.get("verifyOutcome"));
-        assertTrue(RemediationClosureSupport.verifiedOk(report));
+        assertEquals(VerifyOutcome.EVIDENCE_INCOMPLETE.name(), report.get("verifyOutcome"));
+        assertFalse(RemediationClosureSupport.verifiedOk(report));
+    }
+
+    @Test
+    void malformedOrAcknowledgementOnlyPayloadCannotProveWrite() {
+        for (String json : List.of("", "not-json", "{\"success\":true}",
+                "{\"success\":true,\"data\":\"acknowledged\"}","{\"success\":true,\"data\":[]}")) {
+            var report=RemediationClosureSupport.verifyToolJson("CleanTempTool",json,
+                    RemediationClosureSupport.writeParams("CleanTempTool","/tmp",false),"owner");
+            assertFalse(RemediationClosureSupport.verifiedOk(report),json);
+        }
+        com.award.log.security.OpsSecurityContext.openChatAgent("trace","cleanup",com.award.log.security.McpToolSurface.FULL,false,false,"real-owner","session");
+        try { assertEquals("real-owner",RemediationClosureSupport.executionRequester("fallback")); }
+        finally { com.award.log.security.OpsSecurityContext.clear(); }
     }
 
     @Test

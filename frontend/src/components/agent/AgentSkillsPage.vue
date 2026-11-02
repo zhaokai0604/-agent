@@ -200,8 +200,33 @@
           show-icon
           class="conn-alert"
           title="标准运维流程"
-          description="来自 YAML 文件的运维流程：包含工具链、操作红线与最小验证信号。仅供查看，执行仍走助手或工具控制台。"
+          description="展示当前已发布的运维流程；每次运行固定使用当时的版本。管理员可预览部署版本、发布或回退，执行仍经过受控管线。"
         />
+
+        <el-card v-if="yamlCatalog.durable" shadow="never" class="release-panel">
+          <p>当前发布代次：{{ yamlCatalog.generation }} · 目录指纹：{{ yamlCatalog.catalogFingerprint?.slice(0, 12) }}</p>
+          <template v-if="canManageReleases">
+            <el-input v-model="releaseReason" maxlength="500" show-word-limit placeholder="填写发布或回退原因" />
+            <div class="skill-actions">
+              <el-button :loading="releaseBusy" @click="previewDeployment">预览部署版本</el-button>
+              <el-button type="primary" :disabled="!canPublishRelease || releaseBusy" @click="publishDeployment">发布已预览版本</el-button>
+              <el-button type="warning" :disabled="!releaseReason.trim() || yamlCatalog.generation < 2 || releaseBusy" @click="rollbackDeployment">回退上一版本</el-button>
+            </div>
+            <div v-if="releasePreview">
+              <p>契约与安全回归：{{ releasePreview.evaluation?.passed ? '通过' : '未通过，不能发布' }}，共 {{ releasePreview.evaluation?.checks }} 项检查。此评测不包含真实模型或业务效果。</p>
+              <ul><li v-for="failure in releasePreview.evaluation?.failures || []" :key="failure">{{ failure }}</li></ul>
+              <el-table :data="releasePreview.changes || []" size="small">
+                <el-table-column prop="skill" label="Skill" /><el-table-column prop="before" label="当前版本" /><el-table-column prop="after" label="候选版本" />
+              </el-table>
+            </div>
+            <el-collapse><el-collapse-item title="发布与回退记录" name="history">
+              <el-table :data="releaseHistory" size="small">
+                <el-table-column prop="generation" label="代次" width="70" /><el-table-column prop="action" label="动作" width="110" />
+                <el-table-column prop="actor" label="操作者" width="100" /><el-table-column prop="reason" label="原因" />
+              </el-table>
+            </el-collapse-item></el-collapse>
+          </template>
+        </el-card>
 
         <div class="skills-toolbar">
           <el-input
@@ -216,7 +241,7 @@
         <div v-loading="yamlLoading" class="skills-grid yaml-grid">
           <article v-for="skill in filteredYamlSkills" :key="skill.id" class="skill-card yaml-card">
             <div class="yaml-card__head">
-              <span class="analysis-category">{{ skill.playbook || 'general' }}</span>
+              <span class="analysis-category">{{ skill.playbook || 'general' }} · v{{ skill.version || '未声明' }}</span>
               <span class="yaml-signals">≥{{ skill.minIndependentSignals ?? 2 }} 信号</span>
             </div>
             <h3>{{ skill.id }}</h3>
@@ -271,11 +296,12 @@
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { formatApiError, getAnalysisSkills, getMcpTools, getPlatformInfo, getYamlSkills, invokeAnalysisSkill } from '../../api'
+import { formatApiError, getAnalysisSkills, getMcpTools, getPlatformInfo, getYamlSkills, invokeAnalysisSkill, previewSkillRelease, publishSkillRelease, rollbackSkillRelease, getSkillReleaseHistory } from '../../api'
 import { mergeToolRegistry, mcpToolDisplayName, mcpToolBadge, getMcpToolCommandHint, defaultParamsForTool, coerceToolParams } from '../../utils/mcpToolsMeta'
 import { runMcpToolExecute } from '../../utils/mcpToolExecute'
 import { renderAssistantMarkdown, bindProseCopyButtons } from '../../utils/assistantMarkdown'
 import ToolResultDialog from '../ToolResultDialog.vue'
+import { canPublishSkillRelease, skillReleasePayload } from '../../utils/skillReleaseApproval'
 
 const activeTab = ref('mcp')
 const tools = ref([])
@@ -300,6 +326,41 @@ const analysisResultRef = ref(null)
 const yamlSkills = ref([])
 const yamlLoading = ref(false)
 const yamlSearch = ref('')
+const yamlCatalog = ref({})
+const canManageReleases = ref(false)
+const releaseReason = ref('')
+const releasePreview = ref(null)
+const releaseHistory = ref([])
+const releaseBusy = ref(false)
+const canPublishRelease = computed(() => canPublishSkillRelease(releasePreview.value, yamlCatalog.value.catalogFingerprint, releaseReason.value))
+
+async function previewDeployment() {
+  releaseBusy.value = true
+  releasePreview.value = null
+  try { releasePreview.value = (await previewSkillRelease()).preview }
+  catch (error) { ElMessage.error(error.message || '版本预览失败') }
+  finally { releaseBusy.value = false }
+}
+async function publishDeployment() {
+  releaseBusy.value = true
+  try {
+    await publishSkillRelease(skillReleasePayload(releasePreview.value, yamlCatalog.value.catalogFingerprint, releaseReason.value))
+    releasePreview.value = null
+    await loadYamlSkills()
+    ElMessage.success('Skill 发布完成')
+  } catch (error) { releasePreview.value = null; ElMessage.error(error.message || '发布失败，请重新预览') }
+  finally { releaseBusy.value = false }
+}
+async function rollbackDeployment() {
+  releaseBusy.value = true
+  try {
+    await rollbackSkillRelease({ expectedFingerprint: yamlCatalog.value.catalogFingerprint, reason: releaseReason.value.trim() })
+    releasePreview.value = null
+    await loadYamlSkills()
+    ElMessage.success('Skill 已回退，重启后仍保留此版本')
+  } catch (error) { ElMessage.error(error.message || '回退失败，请刷新后核对版本') }
+  finally { releaseBusy.value = false }
+}
 
 const filteredYamlSkills = computed(() => {
   const q = yamlSearch.value.trim().toLowerCase()
@@ -386,8 +447,15 @@ async function loadYamlSkills() {
     const data = await getYamlSkills()
     const list = Array.isArray(data?.skills) ? data.skills : []
     yamlSkills.value = list
+    yamlCatalog.value = data.catalog || {}
+    canManageReleases.value = data.canManage === true
+    releaseHistory.value = canManageReleases.value ? ((await getSkillReleaseHistory()).history || []) : []
   } catch {
     yamlSkills.value = []
+    yamlCatalog.value = {}
+    canManageReleases.value = false
+    releasePreview.value = null
+    releaseHistory.value = []
   } finally {
     yamlLoading.value = false
   }
@@ -562,6 +630,8 @@ onMounted(() => {
 .analysis-grid {
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 }
+
+.release-panel { margin-bottom: 16px; }
 
 .yaml-grid {
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));

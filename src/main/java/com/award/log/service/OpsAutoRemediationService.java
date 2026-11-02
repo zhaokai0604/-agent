@@ -887,7 +887,7 @@ public class OpsAutoRemediationService {
 
     /**
      * 自动修复统一写入口：真实执行、风险预算、前后指标、效果验证和审计全部由 PEP 管线完成。
-     * 无管线时的分支只服务于现有轻量单测，不作为生产运行路径。
+     * 缺少统一管线时拒绝真实写操作。
      */
     private String executeWrite(String toolName, String target, int days, String source) throws Exception {
         Map<String, Object> params = new LinkedHashMap<>();
@@ -908,12 +908,7 @@ public class OpsAutoRemediationService {
                     toolName, params, "巡检自动修复 " + source + " " + target,
                     source == null || source.isBlank() ? "autonomous" : source).body());
         }
-        return switch (toolName) {
-            case "CleanTempTool" -> cleanTempTool.cleanTempFiles(target, days, false, true);
-            case "LogCleanupTool" -> logCleanupTool.cleanupOldLogs(target, days, false, true);
-            case "ServiceRestartTool" -> serviceRestartTool.restartService(target, false, true);
-            default -> throw new IllegalArgumentException("不支持的自动修复写工具: " + toolName);
-        };
+        throw new IllegalStateException("统一执行管线不可用，已拒绝真实写操作");
     }
 
     private void finalizeSummary(String ts, double disk, int findingsCount,

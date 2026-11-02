@@ -103,6 +103,10 @@ public class OpsDeferredTaskService {
         if (toolName == null || toolName.isBlank() || !ALLOWED_DEFERRED_TOOLS.contains(toolName)) {
             throw new IllegalArgumentException("Unsupported deferred tool: " + toolName);
         }
+        if (new com.award.log.security.effect.ToolEffectResolver().resolve(toolName, parameters).writeEffect()
+                && com.award.log.mcp.WriteToolResultSupport.requestedRealWrite(parameters)) {
+            throw new IllegalArgumentException("延时真实写需要持久化审批，请改为到期后实时预览确认");
+        }
         if ("CleanTempTool".equals(toolName)) {
             Boolean dryRun = getBoolean(parameters, "dryRun");
             Boolean confirmDelete = getBoolean(parameters, "confirmDelete");
@@ -120,7 +124,7 @@ public class OpsDeferredTaskService {
         meta.status = "RUNNING";
         try {
             log.info("Running deferred ops task taskId={} tool={}", taskId, meta.toolName);
-            Map<String, Object> exec = mcpExecuteController.executeDeferredScheduledTool(meta.toolName, meta.parameters);
+            Map<String, Object> exec = mcpExecuteController.executeDeferredScheduledTool(meta.toolName, meta.parameters, meta.createdBy);
             meta.status = Boolean.TRUE.equals(exec.get("success")) ? "DONE" : "FAILED";
             log.info("Finished deferred ops task taskId={} success={}", taskId, exec.get("success"));
         } catch (Exception e) {

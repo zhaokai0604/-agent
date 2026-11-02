@@ -2,7 +2,7 @@
   <div class="ops-page log-analysis-page" :class="{ 'log-analysis-page--fill': isUploadIdle }">
       <!-- 1. 初始上传状态 -->
       <transition name="el-fade-in-linear">
-        <div v-if="!reportData && taskStatus.status !== 'PROCESSING' && taskStatus.status !== 'FAILED'" class="upload-section">
+        <div v-if="isUploadIdle" class="upload-section">
           <OpsPageHeader
             title="观测证据分析"
             subtitle="导入日志证据，自动识别异常并生成可交给 agent 继续推理的诊断报告"
@@ -97,6 +97,15 @@
           </el-result>
         </div>
       </transition>
+
+      <div v-if="taskStatus.status === 'RECOVERY_REQUIRED'" class="failure-section">
+        <el-result icon="warning" title="分析中断，等待恢复" :sub-title="taskStatus.errorMsg || '上次执行已经停止，可以核对后恢复分析'">
+          <template #extra>
+            <el-button v-if="canRecoverLogTask(taskStatus)" type="primary" @click="handleRecoverTask" :loading="recovering">从保存的日志重新分析</el-button>
+            <el-button @click="resetTask">重新上传日志</el-button>
+          </template>
+        </el-result>
+      </div>
 
       <!-- 3. 分析报告仪表盘 -->
       <transition name="el-zoom-in-bottom">
@@ -249,7 +258,7 @@
         <div class="ai-header">
           <div class="ai-avatar"><el-icon :size="28"><Service /></el-icon></div>
           <div class="ai-bubble">
-            <p v-if="aiThinking">正在分析异常日志并生成诊断建议…</p>
+            <p v-if="aiThinking">{{ aiJob?.status === 'QUEUED' ? '诊断已排队…' : '正在分析日志样本并生成诊断建议…' }}</p>
             <p v-else>诊断结果如下：</p>
           </div>
         </div>
@@ -265,6 +274,8 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="aiDialogVisible = false">关闭</el-button>
+          <el-button v-if="aiJob && ['QUEUED', 'RUNNING'].includes(aiJob.status)" @click="cancelGlobalDiagnosis">取消诊断</el-button>
+          <el-button v-if="aiJob && !['QUEUED', 'RUNNING'].includes(aiJob.status)" @click="handleGlobalDiagnosis(true)">重新诊断</el-button>
           <el-button type="primary" @click="copySolution">复制诊断报告</el-button>
         </span>
       </template>
@@ -281,10 +292,10 @@
 import { ref, reactive, computed, nextTick, onMounted, onUnmounted, defineExpose } from 'vue'
 import { UploadFilled, WarningFilled, Warning, CircleCheck, Refresh, Download, Cpu, Timer, CircleCheckFilled, ArrowDown, CircleClose, Service } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
-import { uploadLog, uploadLogs, getTaskStatus, getReport, performDiagnosis, cancelTask, downloadReport, getApiBaseUrl } from '../api'
+import { uploadLog, uploadLogs, getTaskStatus, getReport, getDiagnosisJob, startDiagnosisJob, cancelDiagnosisJob, cancelTask, resumeTask, downloadReport, getApiBaseUrl } from '../api'
+import { canRecoverLogTask, shouldPollLogTask } from '../utils/logTaskState'
 import { ElMessage } from 'element-plus'
 import MarkdownIt from 'markdown-it'
-import { appendSsePayloadFromChunk, flushSseBuffer } from '../utils/sseStream'
 import {
   dispatchOpsAgentPrefill,
   agentPrefillEngineFailure,
@@ -301,6 +312,7 @@ const md = new MarkdownIt()
 
 // --- State ---
 const fileInput = ref(null)
+const uploadInFlight = ref(false)
 const taskId = ref('')
 const reportData = ref(null)
 const anomalyLogs = ref([])
@@ -311,6 +323,7 @@ const isUploadIdle = computed(() => (
   !reportData.value
   && taskStatus.status !== 'PROCESSING'
   && taskStatus.status !== 'FAILED'
+  && taskStatus.status !== 'RECOVERY_REQUIRED'
 ))
 
 const legendData = [
@@ -331,6 +344,7 @@ const aiThinking = ref(false)
 const currentEventId = ref('')
 const aiResult = reactive({ summary: '', reasons: [], solution: '' })
 const aiResultText = ref('') // Store the global diagnosis text
+const aiJob = ref(null)
 
 const renderedAiDiagnosis = computed(() => {
   return md.render(aiResultText.value)
@@ -340,8 +354,21 @@ const taskStatus = reactive({
   status: 'IDLE', // IDLE, PROCESSING, COMPLETED, FAILED
   progress: 0,
   currentStep: '',
-  errorMsg: ''
+  errorMsg: '',
+  runtime: null
 })
+const recovering = ref(false)
+const handleRecoverTask = async () => {
+  recovering.value = true
+  try {
+    await resumeTask(taskId.value)
+    taskStatus.status = 'PROCESSING'
+    taskStatus.progress = 0
+    taskStatus.errorMsg = ''
+    startStatusPolling()
+  } catch (error) { ElMessage.error(error.message || '恢复提交失败，请重新上传日志') }
+  finally { recovering.value = false }
+}
 
 let timer = null
 let pollFailCount = 0
@@ -402,6 +429,7 @@ function startStatusPolling () {
       taskStatus.progress = res.progress
       taskStatus.currentStep = res.currentStep
       taskStatus.status = res.status
+      taskStatus.runtime = res.runtime || null
 
       if (res.status === 'PROCESSING') {
         if (res.progress === lastProgress) {
@@ -422,8 +450,9 @@ function startStatusPolling () {
         clearPollTimer()
         taskStatus.errorMsg = res.errorMsg || '分析失败'
         ElMessage.error(taskStatus.errorMsg)
-      } else if (res.status === 'PAUSED' || res.status === 'CANCELLED') {
+      } else if (res.status === 'PAUSED' || res.status === 'CANCELLED' || res.status === 'RECOVERY_REQUIRED') {
         clearPollTimer()
+        taskStatus.errorMsg = res.errorMsg || ''
         if (res.status === 'CANCELLED') {
           taskStatus.errorMsg = res.errorMsg || '任务已取消'
           ElMessage.info(taskStatus.errorMsg)
@@ -451,12 +480,20 @@ const loadTask = async (id) => {
         taskStatus.progress = statusRes?.progress ?? 0
         taskStatus.currentStep = statusRes?.currentStep || ''
         taskStatus.errorMsg = statusRes?.errorMsg || ''
+        taskStatus.runtime = statusRes?.runtime || null
+
+        if (status === 'RECOVERY_REQUIRED') {
+          taskStatus.status = status
+          reportData.value = null
+          anomalyLogs.value = []
+          return
+        }
 
         if (status === 'PROCESSING' || status === 'PENDING' || status === 'PAUSED') {
           taskStatus.status = status === 'PENDING' ? 'PROCESSING' : status
           reportData.value = null
           anomalyLogs.value = []
-          if (status !== 'PAUSED') {
+          if (shouldPollLogTask(status)) {
             startStatusPolling()
           }
           return
@@ -468,8 +505,9 @@ const loadTask = async (id) => {
           return
         }
 
-        taskStatus.status = 'COMPLETED'
-        await fetchReport()
+        taskStatus.status = status
+        if (status === 'COMPLETED') await fetchReport()
+        else ElMessage.warning('任务状态尚未识别，请刷新后核对')
     } catch (error) {
         console.error('加载任务失败:', error)
         ElMessage.error('加载任务失败：' + (error.message || '未找到相关任务'))
@@ -486,6 +524,10 @@ const openDetail = (row) => {
 }
 
 const handleSingleRowDiagnosis = async (row) => {
+    abortDiagnosis()
+    const controller = new AbortController()
+    diagnosisAbort = controller
+    aiJob.value = null
     aiDialogVisible.value = true
     aiThinking.value = true
     aiResultText.value = ''
@@ -501,6 +543,7 @@ const handleSingleRowDiagnosis = async (row) => {
         const response = await fetch(`${getApiBaseUrl()}/log/quick-diagnose`, {
             method: 'POST',
             credentials: 'include',
+            signal: controller.signal,
             headers: {
                 'Content-Type': 'application/json',
                 'X-Requested-With': 'XMLHttpRequest'
@@ -528,100 +571,79 @@ const handleSingleRowDiagnosis = async (row) => {
              aiResultText.value = '诊断失败: ' + (resData.message || '未知错误')
         }
     } catch (error) {
+        if (controller.signal.aborted) return
         aiResultText.value = '诊断服务暂时不可用，请稍后再试。'
         console.error('Diagnosis error:', error)
     } finally {
-        aiThinking.value = false
+        if (diagnosisAbort === controller) {
+            aiThinking.value = false
+            diagnosisAbort = null
+        }
     }
 }
 
 // --- Global AI Diagnosis ---
-const handleGlobalDiagnosis = async () => {
+const handleGlobalDiagnosis = async (retry = false) => {
     if (!taskId.value) {
         ElMessage.warning('请先上传并分析日志')
         return
     }
-    
-    // Check if result is already cached in reportData
-    if (reportData.value && reportData.value.aiDiagnosis) {
-        aiResultText.value = reportData.value.aiDiagnosis
-        aiDialogVisible.value = true
-        return
-    }
-
-    // Check task status before calling AI diagnosis
-    try {
-        const taskStatus = await getTaskStatus(taskId.value)
-        if (taskStatus.status !== 'COMPLETED') {
-            ElMessage.warning('请等待证据分析完成后再进行 AI 诊断')
-            return
-        }
-    } catch (error) {
-        ElMessage.error('获取任务状态失败，请稍后再试')
-        return
-    }
-
+    abortDiagnosis()
+    const controller = new AbortController()
+    diagnosisAbort = controller
+    const id = taskId.value
     aiDialogVisible.value = true
     aiThinking.value = true
     aiResultText.value = ''
-
-    abortDiagnosis()
-    diagnosisAbort = new AbortController()
-
-    // 与「统一 AI 助手」一致：用 fetch + ReadableStream 读流。浏览器 EventSource 对 Spring SSE 兼容性差，易导致无输出或立即断开。
+    aiJob.value = null
     try {
-        const response = await fetch(`${getApiBaseUrl()}/log/diagnose/stream/${taskId.value}`, {
-            method: 'GET',
-            credentials: 'include',
-            signal: diagnosisAbort.signal
-        })
-        if (!response.ok) {
-            const errText = await response.text().catch(() => '')
-            let msg = `请求失败 (${response.status})`
-            try {
-                const j = JSON.parse(errText)
-                if (j.message) msg = j.message
-            } catch {
-                if (errText) msg = errText.slice(0, 300)
-            }
-            aiResultText.value = '诊断失败: ' + msg
-            return
+        let job = await getDiagnosisJob(id, controller.signal)
+        if (retry === true || job.status === 'NOT_REQUESTED') {
+            job = await startDiagnosisJob(id, (globalThis.crypto?.randomUUID?.() || `diagnosis-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`), controller.signal)
         }
-        const reader = response.body?.getReader()
-        if (!reader) {
-            aiResultText.value = '诊断失败: 服务端未返回流式数据'
-            return
+        const observeUntil = Date.now() + 310000
+        while (!controller.signal.aborted) {
+            aiJob.value = job
+            if (!['QUEUED', 'RUNNING'].includes(job.status)) break
+            if (Date.now() >= observeUntil) throw new Error('等待诊断状态超时，请重新打开查看')
+            await new Promise(resolve => setTimeout(resolve, 1000))
+            if (controller.signal.aborted) return
+            job = await getDiagnosisJob(id, controller.signal)
         }
-        const decoder = new TextDecoder()
-        let sseBuf = ''
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            aiThinking.value = false
-            const chunk = decoder.decode(value, { stream: true })
-            sseBuf = appendSsePayloadFromChunk(sseBuf, chunk, (payload) => {
-                aiResultText.value += payload
-            })
-        }
-        sseBuf = flushSseBuffer(sseBuf, (payload) => {
-            aiResultText.value += payload
-        })
-        if (reportData.value) {
-            reportData.value.aiDiagnosis = aiResultText.value
+        if (controller.signal.aborted) return
+        if (job.status === 'SUCCEEDED') {
+            aiResultText.value = job.diagnosis || ''
+            if (reportData.value) reportData.value.aiDiagnosis = aiResultText.value
+        } else {
+            const labels = { FAILED: '诊断失败', TIMED_OUT: '诊断超时', CANCELLED: '诊断已取消', INTERRUPTED: '诊断因服务关闭中断', UNTRACKED: '历史诊断未记录成功状态，请重新诊断' }
+            aiResultText.value = (labels[job.status] || '诊断尚未完成') + (job.errorCode ? `（${job.errorCode}）` : '')
         }
     } catch (error) {
-        if (error?.name === 'AbortError') {
-          return
-        }
-        console.error('Global diagnosis error:', error)
-        if (aiResultText.value.length === 0) {
-            aiResultText.value = '诊断服务连接中断，请确认任务存在且AI服务可用。'
-        } else if (reportData.value) {
-            reportData.value.aiDiagnosis = aiResultText.value
-        }
+        if (controller.signal.aborted) return
+        aiResultText.value = error?.message || '读取诊断状态失败，请稍后重新打开查看。后台任务不会因页面断线而重复提交。'
     } finally {
+        if (diagnosisAbort === controller) {
+            aiThinking.value = false
+            diagnosisAbort = null
+        }
+    }
+}
+
+const cancelGlobalDiagnosis = async () => {
+    if (!taskId.value || !aiJob.value?.runId) return
+    try {
+        aiJob.value = await cancelDiagnosisJob(taskId.value, aiJob.value.runId)
+        abortDiagnosis()
         aiThinking.value = false
-        diagnosisAbort = null
+        // Completion may win the race with cancellation; show the state the server committed.
+        if (aiJob.value.status === 'SUCCEEDED') {
+            aiResultText.value = aiJob.value.diagnosis || ''
+            if (reportData.value) reportData.value.aiDiagnosis = aiResultText.value
+        } else {
+            aiResultText.value = aiJob.value.status === 'CANCELLED' ? '诊断已取消' : `诊断状态：${aiJob.value.status}`
+        }
+    } catch (error) {
+        ElMessage.error(error?.message || '取消诊断失败，请刷新任务状态')
     }
 }
 
@@ -630,8 +652,22 @@ const triggerUpload = () => fileInput.value.click()
 const handleFileSelect = (e) => processFiles(e.target.files)
 const handleDrop = (e) => processFiles(e.dataTransfer.files)
 
+const uploadKeyFor = (file) => {
+  const fingerprint = `${file.name}\n${file.size}\n${file.lastModified}`
+  const storageKey = 'threshcore.log-upload-retry'
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
+    if (saved?.fingerprint === fingerprint && saved.key) return saved.key
+    const key = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    sessionStorage.setItem(storageKey, JSON.stringify({ fingerprint, key }))
+    return key
+  } catch {
+    return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+}
+
 const processFiles = async (files) => {
-  if (!files || files.length === 0) return
+  if (uploadInFlight.value || !files || files.length === 0) return
   
   // 只处理第一个文件，回归到单文件上传
   const file = files[0]
@@ -640,6 +676,7 @@ const processFiles = async (files) => {
     return
   }
   
+  uploadInFlight.value = true
   try {
     taskStatus.status = 'PROCESSING'
     taskStatus.progress = 0
@@ -649,14 +686,18 @@ const processFiles = async (files) => {
     // 单文件上传
     const formData = new FormData()
     formData.append('file', file)
-    const id = await uploadLog(formData)
+    const requestKey = uploadKeyFor(file)
+    const id = await uploadLog(formData, requestKey)
     taskId.value = id
+    try { sessionStorage.removeItem('threshcore.log-upload-retry') } catch { /* storage may be disabled */ }
     startStatusPolling()
 
   } catch (err) {
     taskStatus.status = 'FAILED'
     taskStatus.errorMsg = err.message || '上传失败'
     ElMessage.error('上传失败：' + err.message)
+  } finally {
+    uploadInFlight.value = false
   }
 }
 

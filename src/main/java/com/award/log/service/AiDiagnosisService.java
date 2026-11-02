@@ -9,6 +9,9 @@ import reactor.core.publisher.Flux;
  * AI 诊断：用脱敏日志切片生成 RCA 报告（批量 / 单条 / 流式）。
  */
 public interface AiDiagnosisService {
+    /** Tracked jobs require an error signal on failure; never turn errors into diagnosis text or retry partial output. */
+    Flux<String> generateTrackedDiagnosis(List<EnhancedLogParseResultEntity> samples);
+
     /**
      * 根据异常日志生成诊断报告
      * @param anomalies 异常日志列表

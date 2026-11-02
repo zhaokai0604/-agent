@@ -2,7 +2,6 @@ package com.award.log.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -27,68 +26,34 @@ public class OpsAuditTraceService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @PostConstruct
-    public void initTable() {
-        try {
-            jdbcTemplate.execute(
-                    "CREATE TABLE IF NOT EXISTS ops_audit_trace (" +
-                            "id BIGINT PRIMARY KEY AUTO_INCREMENT," +
-                            "trace_id VARCHAR(64) NOT NULL," +
-                            "channel VARCHAR(32) NOT NULL," +
-                            "audit_kind VARCHAR(32)," +
-                            "request_channel VARCHAR(32)," +
-                            "stage VARCHAR(64)," +
-                            "decision VARCHAR(64)," +
-                            "user_input TEXT," +
-                            "risk_level VARCHAR(32)," +
-                            "security_outcome VARCHAR(64)," +
-                            "tool_name VARCHAR(128)," +
-                            "target_type VARCHAR(64)," +
-                            "target_name VARCHAR(255)," +
-                            "parent_trace_id VARCHAR(64)," +
-                            "confirmation_id VARCHAR(64)," +
-                            "effect_summary TEXT," +
-                            "execution_ok TINYINT(1) DEFAULT 0," +
-                            "result_summary TEXT," +
-                            "steps_json LONGTEXT," +
-                            "duration_ms BIGINT," +
-                            "operator_user_id VARCHAR(64)," +
-                            "policy_version VARCHAR(64)," +
-                            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
-                            "KEY idx_trace_id (trace_id)," +
-                            "KEY idx_created_at (created_at)" +
-                            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-            );
-            migrateLegacyTable();
-        } catch (Exception e) {
-            log.warn("ops_audit_trace 表初始化失败（请确认数据库已启动且已执行 schema.sql）: {}", e.getMessage());
+    /** Commit before host effects, even if the caller has an outer transaction. */
+    public void requireWriteIntent(String traceId, String toolName, String requester, String riskLevel,
+            String policyVersion, Map<String, Object> details) {
+        if (traceId == null || traceId.isBlank() || requester == null || requester.isBlank()) {
+            throw new IllegalStateException("Required write audit identity is missing");
         }
+        var source = java.util.Objects.requireNonNull(jdbcTemplate.getDataSource(), "Audit datasource is required");
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
+        transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        String safe = new com.award.log.agent.team.TeamDataPolicy(objectMapper).safe(details);
+        String stepsJson = new com.award.log.agent.team.TeamDataPolicy(objectMapper)
+                .safe(List.of(Map.of("phase", "write_intent", "detail", details)));
+        transaction.executeWithoutResult(status -> {
+            int inserted = jdbcTemplate.update("INSERT INTO ops_audit_trace(trace_id,channel,audit_kind,request_channel,stage,decision,"
+                            + "user_input,risk_level,security_outcome,tool_name,execution_ok,result_summary,steps_json,operator_user_id,"
+                            + "policy_version,parent_trace_id,confirmation_id,effect_summary,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    traceId, "MCP", "write_intent", "pipeline", "before_execute", "WRITE_INTENT", "受控写入前置记录",
+                    riskLevel, "WRITE_INTENT", toolName, 0, "仅记录执行意图，不代表工具已执行或效果已验证", stepsJson,
+                    requester, policyVersion, String.valueOf(details.getOrDefault("sessionId", "")), traceId, safe,
+                    new Timestamp(System.currentTimeMillis()));
+            if (inserted != 1) throw new IllegalStateException("Required write audit was not persisted");
+        });
     }
+
 
     /** 已有库升级列（忽略重复列错误）。 */
-    private void migrateLegacyTable() {
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN operator_user_id VARCHAR(64) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN policy_version VARCHAR(64) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_host_id VARCHAR(32) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_host_label VARCHAR(256) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN audit_kind VARCHAR(32) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN request_channel VARCHAR(32) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN stage VARCHAR(64) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN decision VARCHAR(64) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_type VARCHAR(64) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN target_name VARCHAR(255) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN parent_trace_id VARCHAR(64) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN confirmation_id VARCHAR(64) NULL");
-        tryAlter("ALTER TABLE ops_audit_trace ADD COLUMN effect_summary TEXT NULL");
-    }
 
-    private void tryAlter(String sql) {
-        try {
-            jdbcTemplate.execute(sql);
-        } catch (Exception e) {
-            log.debug("migrate skip: {}", e.getMessage());
-        }
-    }
 
     public void save(
             String traceId,

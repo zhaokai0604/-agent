@@ -4,7 +4,8 @@
  */
 export function appendSsePayloadFromChunk(buffer, chunkText, onPayload) {
   const buf = String(buffer || '') + String(chunkText || '')
-  const normalized = buf.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  // A trailing CR may be the first half of a CRLF split across network chunks.
+  const normalized = buf.replace(/\r\n/g, '\n').replace(/\r(?!$)/g, '\n')
   const events = normalized.split('\n\n')
   const rest = events.pop()
   for (const eventText of events) {
@@ -14,7 +15,7 @@ export function appendSsePayloadFromChunk(buffer, chunkText, onPayload) {
 }
 
 export function flushSseBuffer(buffer, onPayload) {
-  emitSseEventPayload(buffer, onPayload)
+  emitSseEventPayload(String(buffer || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n'), onPayload)
   return ''
 }
 
@@ -22,7 +23,7 @@ function emitSseEventPayload(eventText, onPayload) {
   if (!eventText || !String(eventText).trim()) return
   const dataLines = []
   for (const raw of String(eventText).split('\n')) {
-    const line = raw.trimEnd()
+    const line = raw
     if (!line || line.startsWith(':')) continue
     if (!line.startsWith('data:')) continue
     let payload = line.slice(5)

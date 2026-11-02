@@ -4,7 +4,10 @@
  */
 import { ref, watch } from 'vue'
 
-const STORAGE_KEY = 'threshcore-agent-sessions-v2'
+const STORAGE_PREFIX = 'threshcore-agent-sessions-v3:'
+let ownerId = null
+let changingOwner = false
+const storageKey = () => STORAGE_PREFIX + encodeURIComponent(ownerId)
 const MAX_SESSIONS = 24
 const MAX_MESSAGES = 80
 const PERSIST_DEBOUNCE_MS = 800
@@ -69,9 +72,10 @@ function trimSessionMessages(session) {
 }
 
 function persistNow() {
+  if (ownerId == null || changingOwner) return
   try {
     localStorage.setItem(
-      STORAGE_KEY,
+      storageKey(),
       JSON.stringify({
         schemaVersion: SESSION_SCHEMA_VERSION,
         activeId: activeSessionId.value,
@@ -102,6 +106,7 @@ function activeSession() {
 }
 
 function touchActiveSession() {
+  if (changingOwner) return
   const session = activeSession()
   if (!session) return
   trimSessionMessages(session)
@@ -125,7 +130,8 @@ function syncMessagesFromActive() {
 
 function loadFromStorage() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    if (ownerId == null) return false
+    const raw = localStorage.getItem(storageKey())
     if (!raw) return false
     const data = JSON.parse(raw)
     if (!Array.isArray(data?.sessions) || data.sessions.length === 0) return false
@@ -167,7 +173,24 @@ let watchBound = false
 function bindWatchers() {
   if (watchBound) return
   watchBound = true
-  watch(messages, () => touchActiveSession(), { deep: true })
+  watch(messages, () => touchActiveSession(), { deep: true, flush: 'sync' })
+}
+
+/** 由登录/会话校验结果切换账户；无归属的旧缓存不自动导入任一账户。 */
+export function setAgentSessionOwner(userId) {
+  const next = userId == null || String(userId).trim() === '' ? null : String(userId)
+  if (next === ownerId) return
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('ops-agent-session-changing'))
+  if (persistTimer) { clearTimeout(persistTimer); persistTimer = null }
+  persistNow()
+  changingOwner = true
+  ownerId = next
+  sessions.value = []
+  activeSessionId.value = ''
+  messages.value = []
+  if (!loadFromStorage()) ensureDefaultSession()
+  changingOwner = false
+  ensureDefaultSession()
 }
 
 export function useAgentSession() {

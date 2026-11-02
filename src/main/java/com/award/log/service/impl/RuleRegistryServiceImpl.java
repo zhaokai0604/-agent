@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Slf4j
 @Service
-@org.springframework.context.annotation.DependsOn("alarmRuleSchemaService")
+@org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization
 public class RuleRegistryServiceImpl implements RuleRegistryService {
 
     private final Map<String, RuleDefinition> cache = new ConcurrentHashMap<>();

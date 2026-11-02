@@ -41,6 +41,30 @@ public class AnalysisTaskManager {
     @Autowired
     private LogAnalysisArtifactCleaner artifactCleaner;
 
+    @Autowired
+    private DurableLogTaskStore durableTasks;
+
+    public void prepareInput(String taskId, java.io.File input) {
+        if (durableTasks != null) durableTasks.stage(taskId, input);
+    }
+
+    public DurableLogTaskStore.UploadReservation reserveUpload(int userId, String requestKey,
+                                                                 java.io.File input, String candidateTaskId) {
+        if (durableTasks == null) throw new IllegalStateException("Durable task store is unavailable");
+        return durableTasks.reserveUpload(userId, requestKey, input, candidateTaskId);
+    }
+
+    public void submissionFailed(String taskId) {
+        try {
+            if (durableTasks != null) durableTasks.recoveryRequired(taskId, "日志保存或分析排队失败，请恢复任务或重新上传日志");
+            else failTask(taskId, "Analysis submission failed");
+        } finally { artifactCleaner.deleteUploadTemps(taskId); }
+    }
+
+    public <T> T withTaskLock(String taskId, java.util.function.Supplier<T> action) {
+        return durableTasks == null ? action.get() : durableTasks.locked(taskId, action);
+    }
+
     @Value("${log.analysis.detail-batch-size:1000}")
     private int detailBatchSize;
 
@@ -144,7 +168,9 @@ public class AnalysisTaskManager {
         return taskMapper.selectByIdAndUserId(taskId, userId) != null;
     }
 
+    @Transactional
     public void updateProgress(String taskId, int progress, String step) {
+        if (durableTasks != null && !durableTasks.currentExecution(taskId)) return;
         LogAnalysisTask existing = taskMapper.selectById(taskId);
         if (existing != null) {
             String status = existing.getStatus();
@@ -157,12 +183,14 @@ public class AnalysisTaskManager {
         task.setProgress(progress);
         task.setStatus("PROCESSING");
         task.setCurrentStep(step);
-        taskMapper.updateById(task);
+        taskMapper.updateIfStatus(task, List.of("PENDING", "PROCESSING"));
+        if (durableTasks != null) durableTasks.progress(taskId, step);
     }
 
     @Transactional(rollbackFor = Exception.class)
     /** 将任务标为 COMPLETED 并分批落库解析明细。 */
-    public void completeTask(String taskId, List<EnhancedLogParseResultEntity> result, TaskInfo.TaskSummary summary) {
+    public boolean completeTask(String taskId, List<EnhancedLogParseResultEntity> result, TaskInfo.TaskSummary summary) {
+        if (durableTasks != null && !durableTasks.currentExecution(taskId)) return false;
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setProgress(100);
@@ -178,10 +206,11 @@ public class AnalysisTaskManager {
             task.setAnomalyRate(summary.getAnomalyRate());
             task.setCostTime(summary.getCostTime());
         }
-        taskMapper.updateById(task);
+        if (taskMapper.updateIfStatus(task, List.of("PENDING", "PROCESSING")) == 0) return false;
 
         if (result == null || result.isEmpty()) {
-            return;
+            if (durableTasks != null) durableTasks.finish(taskId, "COMPLETED");
+            return true;
         }
         int batchSize = Math.max(100, detailBatchSize);
         List<LogAnalysisDetail> batch = new ArrayList<>(batchSize);
@@ -195,68 +224,70 @@ public class AnalysisTaskManager {
         if (!batch.isEmpty()) {
             detailMapper.batchInsert(batch);
         }
+        if (durableTasks != null) durableTasks.finish(taskId, "COMPLETED");
+        return true;
     }
 
-    public void updateAiDiagnosis(String taskId, String diagnosis) {
-        LogAnalysisTask task = new LogAnalysisTask();
-        task.setTaskId(taskId);
-        task.setAiDiagnosis(diagnosis);
-        taskMapper.updateById(task);
-    }
-
-    public void failTask(String taskId, String errorMsg) {
+    @Transactional
+    public boolean failTask(String taskId, String errorMsg) {
+        if (durableTasks != null && !durableTasks.currentExecution(taskId)) return false;
         if (isTerminalDbStatus(taskId)) {
             log.warn("[任务状态] 忽略失败写入，任务已终态: {}", taskId);
-            return;
+            return false;
         }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setStatus("FAILED");
         task.setErrorMsg(errorMsg);
-        taskMapper.updateById(task);
+        boolean updated = taskMapper.updateIfStatus(task, List.of("PENDING", "PROCESSING", "PAUSED")) > 0;
+        if (updated && durableTasks != null) durableTasks.finish(taskId, "FAILED");
+        return updated;
     }
 
     /** 用户取消：DB 写 CANCELLED，禁止覆盖 COMPLETED/FAILED */
-    public void cancelTask(String taskId, String message) {
+    @Transactional
+    public boolean cancelTask(String taskId, String message) {
         if (isTerminalDbStatus(taskId)) {
             log.warn("[任务状态] 忽略取消，任务已终态: {}", taskId);
-            return;
+            return false;
         }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setStatus("CANCELLED");
         task.setErrorMsg(message != null ? message : "任务被用户取消");
         task.setCurrentStep("Cancelled by user");
-        taskMapper.updateById(task);
+        boolean updated = taskMapper.updateIfStatus(task, List.of("PENDING", "PROCESSING", "PAUSED", "RECOVERY_REQUIRED")) > 0;
+        if (updated && durableTasks != null) durableTasks.finish(taskId, "CANCELLED");
+        return updated;
     }
 
-    public void pauseTask(String taskId) {
+    public boolean pauseTask(String taskId) {
         if (isTerminalDbStatus(taskId)) {
             log.warn("[任务状态] 忽略暂停，任务已终态: {}", taskId);
-            return;
+            return false;
         }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setStatus("PAUSED");
         task.setCurrentStep("Task paused");
-        taskMapper.updateById(task);
+        return taskMapper.updateIfStatus(task, List.of("PENDING", "PROCESSING")) > 0;
     }
 
-    public void resumeTask(String taskId) {
+    public boolean resumeTask(String taskId) {
         LogAnalysisTask existing = taskMapper.selectById(taskId);
         if (existing == null) {
-            return;
+            return false;
         }
         String st = existing.getStatus();
         if ("COMPLETED".equals(st) || "FAILED".equals(st) || "CANCELLED".equals(st)) {
             log.warn("[任务状态] 忽略恢复，任务已终态: {} status={}", taskId, st);
-            return;
+            return false;
         }
         LogAnalysisTask task = new LogAnalysisTask();
         task.setTaskId(taskId);
         task.setStatus("PROCESSING");
         task.setCurrentStep("Task resumed");
-        taskMapper.updateById(task);
+        return taskMapper.updateIfStatus(task, List.of("PAUSED")) > 0;
     }
 
     /** 已完成/失败/取消视为终态，后续状态写入应忽略。 */
@@ -269,6 +300,11 @@ public class AnalysisTaskManager {
         return "COMPLETED".equals(st) || "FAILED".equals(st) || "CANCELLED".equals(st);
     }
 
+    public Integer getTaskOwner(String taskId) {
+        LogAnalysisTask task = taskMapper.selectById(taskId);
+        return task == null ? null : task.getUserId();
+    }
+
     public String getDbStatus(String taskId) {
         LogAnalysisTask existing = taskMapper.selectById(taskId);
         return existing == null ? null : existing.getStatus();
@@ -276,10 +312,15 @@ public class AnalysisTaskManager {
 
     @Transactional(rollbackFor = Exception.class)
     public boolean deleteTask(String taskId) {
+        return withTaskLock(taskId, () -> deleteLocked(taskId));
+    }
+
+    private boolean deleteLocked(String taskId) {
         try {
             detailMapper.deleteByTaskId(taskId);
             int taskCount = taskMapper.deleteById(taskId);
-            artifactCleaner.purgeTaskArtifacts(taskId);
+            if (durableTasks != null) durableTasks.markDeleted(taskId, () -> artifactCleaner.purgeTaskArtifacts(taskId));
+            else artifactCleaner.purgeTaskArtifacts(taskId);
             return taskCount > 0;
         } catch (Exception e) {
             log.error("Failed to delete task {}", taskId, e);
@@ -418,6 +459,7 @@ public class AnalysisTaskManager {
         info.setErrorMsg(entity.getErrorMsg());
         info.setAiDiagnosis(entity.getAiDiagnosis());
         info.setCreateTime(entity.getCreateTime());
+        if (durableTasks != null) info.setRuntime(durableTasks.snapshot(entity.getTaskId()));
 
         TaskInfo.TaskSummary summary = new TaskInfo.TaskSummary();
         summary.setTotalLogs(entity.getTotalLogs() == null ? 0 : entity.getTotalLogs());

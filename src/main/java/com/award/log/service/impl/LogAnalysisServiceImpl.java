@@ -20,6 +20,8 @@ import com.award.log.service.AiLogAlarmService;
 import com.award.log.service.LogAnalysisService;
 import com.award.log.task.AnalysisTaskManager;
 import com.award.log.task.TaskInfo;
+import com.award.log.task.DurableLogTaskStore;
+import com.award.log.task.TaskExecutionContext;
 import com.award.log.util.LogAnalysisArtifactCleaner;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -76,12 +78,24 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     
     // 任务线程映射，用于跟踪每个任务的执行线程，以便取消任务时中断线程
     private final ConcurrentHashMap<String, Thread> taskThreadMap = new ConcurrentHashMap<>();
+    private final Object[] taskLocks = java.util.stream.Stream.generate(Object::new).limit(64).toArray();
+    private final ConcurrentHashMap<String, List<FutureTask<Void>>> taskShardFutures = new ConcurrentHashMap<>();
+
+    private Object taskLock(String taskId) {
+        return taskLocks[Math.floorMod(taskId.hashCode(), taskLocks.length)];
+    }
     
-    /** 已分析文件指纹（路径+mtime+size → 记录时间）；仅防本进程内重复提交。 */
+    /** 已完成的账户与内容摘要（user+version+SHA256 → 记录时间）；仅防本进程内重复提交。 */
     private final ConcurrentHashMap<String, Long> analyzedFiles = new ConcurrentHashMap<>();
 
     @Autowired
     private AnalysisTaskManager taskManager;
+
+    @Autowired
+    private DurableLogTaskStore durableTasks;
+
+    @Autowired
+    private org.springframework.beans.factory.ObjectProvider<LogAnalysisService> analysisSelf;
 
     @Autowired
     private LogAnalysisArtifactCleaner artifactCleaner;
@@ -133,50 +147,93 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     // 暂停任务：阻塞分析线程直至恢复或取消
     @Override
     public void pauseAnalysis(String taskId) {
-        if (taskManager.isTerminalDbStatus(taskId)) {
-            throw new IllegalStateException("任务已结束，无法暂停");
+        synchronized (taskLock(taskId)) {
+            if (taskManager.isTerminalDbStatus(taskId) || !taskManager.pauseTask(taskId)) {
+                throw new IllegalStateException("任务状态已改变，暂停未生效");
+            }
+            taskStatusMap.put(taskId, "PAUSED");
         }
-        log.info("[任务状态变更] 暂停任务，任务ID: [{}]", taskId);
-        taskStatusMap.put(taskId, "PAUSED");
-        taskManager.pauseTask(taskId);
     }
 
     @Override
     public void resumeAnalysis(String taskId) {
-        String mem = taskStatusMap.get(taskId);
-        String db = taskManager.getDbStatus(taskId);
-        if (!"PAUSED".equals(mem) && !"PAUSED".equals(db)) {
-            throw new IllegalStateException("仅已暂停的任务可恢复；当前状态: mem=" + mem + ", db=" + db);
+        if (durableTasks != null && durableTasks.needsRecovery(taskId)) {
+            File input = durableTasks.prepareRecovery(taskId);
+            try {
+                analysisSelf.getObject().startAnalysisAsync(input, taskId);
+            } catch (RuntimeException e) {
+                durableTasks.recoveryRequired(taskId, "恢复任务未能进入执行队列，请重试或重新上传");
+                try { Files.deleteIfExists(input.toPath()); } catch (IOException ignored) {}
+                throw e;
+            }
+            return;
         }
-        log.info("[任务状态变更] 恢复任务，任务ID: [{}]", taskId);
-        taskStatusMap.put(taskId, "PROCESSING");
-        taskManager.resumeTask(taskId);
+        synchronized (taskLock(taskId)) {
+            if (!taskManager.resumeTask(taskId)) {
+                throw new IllegalStateException("仅已暂停且未结束的任务可恢复");
+            }
+            taskStatusMap.put(taskId, "PROCESSING");
+        }
     }
     
     // 添加取消任务方法
     @Override
     public void cancelAnalysis(String taskId) {
-        if (taskManager.isTerminalDbStatus(taskId)) {
-            throw new IllegalStateException("任务已结束（完成/失败/已取消），无法再次取消");
+        synchronized (taskLock(taskId)) {
+            if (taskManager.isTerminalDbStatus(taskId) || !taskManager.cancelTask(taskId, "任务被用户取消")) {
+                throw new IllegalStateException("任务状态已改变，取消未生效");
+            }
+            taskStatusMap.put(taskId, "CANCELLED");
+            List<FutureTask<Void>> shards = taskShardFutures.get(taskId);
+            if (shards != null) {
+                shards.forEach(future -> future.cancel(true));
+            }
+            Thread taskThread = taskThreadMap.get(taskId);
+            if (taskThread != null) {
+                taskThread.interrupt();
+            } else {
+                artifactCleaner.purgeTaskArtifacts(taskId);
+            }
         }
-        log.info("[任务状态变更] 开始取消任务，任务ID: [{}]", taskId);
-        
-        String oldStatus = taskStatusMap.get(taskId);
-        taskStatusMap.put(taskId, "CANCELLED");
-        log.debug("[任务状态变更] 内存状态已更新，任务ID: [{}]，从 [{}] 变为 [CANCELLED]", taskId, oldStatus);
-        
-        taskManager.cancelTask(taskId, "任务被用户取消");
-        artifactCleaner.purgeTaskArtifacts(taskId);
+    }
 
-        Thread taskThread = taskThreadMap.remove(taskId);
-        if (taskThread != null) {
-            taskThread.interrupt();
-            log.info("[任务状态变更] 已中断任务线程: [{}]，任务ID: [{}]", taskThread.getName(), taskId);
-        } else {
-            log.debug("[任务状态变更] 未找到任务执行线程，任务ID: [{}]", taskId);
+    private void failAnalysis(String taskId, String message) {
+        synchronized (taskLock(taskId)) {
+            if (durableTasks != null && Thread.currentThread().isInterrupted()) {
+                durableTasks.recoveryRequired(taskId, "分析已中断，可从保留的日志恢复分析");
+                if ("RECOVERY_REQUIRED".equals(taskManager.getDbStatus(taskId))) taskStatusMap.put(taskId, "RECOVERY_REQUIRED");
+                return;
+            }
+            if (taskManager.failTask(taskId, message)) {
+                taskStatusMap.put(taskId, "FAILED");
+                artifactCleaner.purgeTaskArtifacts(taskId);
+            }
         }
-        
-        log.info("[任务状态变更] 任务取消完成，任务ID: [{}]", taskId);
+    }
+
+    private boolean completeWhenActive(String taskId, List<EnhancedLogParseResultEntity> results,
+                                       TaskInfo.TaskSummary summary) throws InterruptedException {
+        while (true) {
+            if (durableTasks != null && !durableTasks.locked(taskId, () -> durableTasks.currentExecution(taskId))) return false;
+            checkCancelStatus(taskId);
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("任务已中断");
+            }
+            synchronized (taskLock(taskId)) {
+                if ("PAUSED".equals(taskStatusMap.get(taskId))) {
+                    continue;
+                }
+                if (taskManager.completeTask(taskId, results, summary)) {
+                    taskStatusMap.put(taskId, "COMPLETED");
+                    return true;
+                }
+                String status = taskManager.getDbStatus(taskId);
+                taskStatusMap.put(taskId, status == null ? "CANCELLED" : status);
+                if (!"PAUSED".equals(status)) {
+                    return false;
+                }
+            }
+        }
     }
 
     /**
@@ -190,8 +247,14 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         EngineConfig config = new EngineConfig();
         config.outputDir = System.getProperty("user.dir") + File.separator + "target" + File.separator + "output"
                 + File.separator + taskId;
-        exportCsvResult(results, config);
-        generateHtmlReport(results, config);
+        Runnable exporter = () -> {
+            try { exportReportFiles(results, config); }
+            catch (IOException e) { throw new UncheckedIOException(e); }
+        };
+        try {
+            if (durableTasks == null) exporter.run();
+            else durableTasks.exportIfCompleted(taskId, exporter);
+        } catch (UncheckedIOException e) { throw e.getCause(); }
     }
 
     /**
@@ -201,42 +264,86 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     @Async("logAnalysisExecutor")
     @Override
     public void startAnalysisAsync(File logFile, String taskId) {
+        if (durableTasks == null) {
+            runClaimedAnalysis(logFile, taskId);
+            return;
+        }
+        String execution = durableTasks.claim(taskId);
+        if (execution == null) {
+            deleteTransientInput(logFile);
+            return;
+        }
+        try (var ignored = TaskExecutionContext.open(taskId, execution)) {
+            try { runClaimedAnalysis(durableTasks.retainedInputForExecution(taskId), taskId); }
+            catch (Exception e) { failAnalysis(taskId, "保留的输入不可用，请重新上传日志"); }
+        } finally {
+            durableTasks.release(taskId, execution);
+            deleteTransientInput(logFile);
+        }
+    }
+
+    private void deleteTransientInput(File file) {
+        if (file == null || (durableTasks != null && durableTasks.isRetainedInput(file))) return;
+        try { Files.deleteIfExists(file.toPath()); }
+        catch (IOException e) { log.debug("Transient upload cleanup deferred: {}", e.getMessage()); }
+    }
+
+    private void runClaimedAnalysis(File logFile, String taskId) {
+        boolean acquired = false;
+        Thread currentThread = Thread.currentThread();
+        List<FutureTask<Void>> shardFutures = new CopyOnWriteArrayList<>();
+        synchronized (taskLock(taskId)) {
+            Thread previous = taskThreadMap.put(taskId, currentThread);
+            if (previous != null && previous != currentThread) previous.interrupt();
+            List<FutureTask<Void>> previousShards = taskShardFutures.put(taskId, shardFutures);
+            if (previousShards != null) previousShards.forEach(f -> f.cancel(true));
+        }
+        try {
+        String initialStatus = taskManager.getDbStatus(taskId);
+        if ("CANCELLED".equals(initialStatus) || "COMPLETED".equals(initialStatus) || "FAILED".equals(initialStatus)) {
+            taskStatusMap.put(taskId, initialStatus);
+            return;
+        }
         String filePath = logFile.getAbsolutePath();
-        String dedupKey = buildFileDedupKey(logFile);
+        String dedupKey;
+        try {
+            Integer owner = taskManager.getTaskOwner(taskId);
+            dedupKey = (owner == null ? "task:" + taskId : "user:" + owner) + ":v1:" + buildFileDedupKey(logFile);
+        } catch (RuntimeException e) {
+            failAnalysis(taskId, "读取文件摘要失败，请重新上传");
+            return;
+        }
         if (analyzedFiles.containsKey(dedupKey)) {
             log.warn("【文件跳过】文件 {} 内容与本次运行中已完成任务相同，拒绝重复分析", filePath);
-            taskStatusMap.put(taskId, "FAILED");
-            taskManager.failTask(taskId, "该文件内容与本次运行中已分析的任务相同，请修改文件或重新上传后再试");
-            artifactCleaner.purgeTaskArtifacts(taskId);
+            failAnalysis(taskId, "该文件内容与本次运行中已分析的任务相同，请修改文件或重新上传后再试");
             return;
         }
 
-        boolean acquired = false;
         try {
+            checkCancelStatus(taskId);
             acquired = analysisConcurrencyGate.tryAcquire(ANALYSIS_QUEUE_WAIT_MS, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         if (!acquired) {
             log.warn("【分析排队超时】任务 {} 等待并发槽位超过 {} ms", taskId, ANALYSIS_QUEUE_WAIT_MS);
-            taskStatusMap.put(taskId, "FAILED");
-            taskManager.failTask(taskId, "当前分析任务较多，请稍后重试");
-            artifactCleaner.purgeTaskArtifacts(taskId);
-            try {
-                Files.deleteIfExists(logFile.toPath());
-            } catch (Exception ignored) {
-            }
+            failAnalysis(taskId, "当前分析任务较多，请稍后重试");
+            deleteTransientInput(logFile);
             return;
         }
 
-        rememberAnalyzedFile(dedupKey);
+
         
-        // 初始化任务状态
-        taskStatusMap.put(taskId, "PROCESSING");
-        
-        // 记录当前线程，以便取消任务时中断线程
-        Thread currentThread = Thread.currentThread();
-        taskThreadMap.put(taskId, currentThread);
+        synchronized (taskLock(taskId)) {
+            String status = taskManager.getDbStatus(taskId);
+            if ("CANCELLED".equals(status) || "COMPLETED".equals(status) || "FAILED".equals(status)
+                    || "CANCELLED".equals(taskStatusMap.get(taskId)) || currentThread.isInterrupted()) {
+                return;
+            }
+            if ("PAUSED".equals(status)) taskStatusMap.put(taskId, status);
+            taskStatusMap.putIfAbsent(taskId, "PROCESSING");
+        }
+        checkCancelStatus(taskId);
         
             long startTime = System.currentTimeMillis();
 
@@ -258,9 +365,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
                 if (logShards.isEmpty()) {
 
-                    taskManager.failTask(taskId, "文件内容为空，未读取到日志数据。");
-                    taskStatusMap.put(taskId, "FAILED");
-                    artifactCleaner.purgeTaskArtifacts(taskId);
+                    failAnalysis(taskId, "文件内容为空，未读取到日志数据。");
                     return;
 
                 }
@@ -305,8 +410,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
                     final List<String> shardLines = logShards.get(i);
 
-                    logAnalysisShardExecutor.execute(() -> {
-
+                    FutureTask<Void> shardFuture = new FutureTask<Void>(TaskExecutionContext.wrap(() -> {
                         try {
 
                             log.debug("【分片处理中】正在处理第 [{}/{}] 个分片，包含 [{}] 行日志", shardIndex + 1, logShards.size(), shardLines.size());
@@ -334,13 +438,20 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                             log.error("【分片处理异常】分片索引 [" + shardIndex + "]", e);
                             failedShards.incrementAndGet();
 
-                        } finally {
-
-                            countDownLatch.countDown();
-
                         }
-
-                    });
+                        return null;
+                    })) {
+                        @Override protected void done() { countDownLatch.countDown(); }
+                    };
+                    synchronized (taskLock(taskId)) {
+                        shardFutures.add(shardFuture);
+                        if ("CANCELLED".equals(taskStatusMap.get(taskId)) || currentThread.isInterrupted()) {
+                            shardFuture.cancel(true);
+                        }
+                    }
+                    if (!shardFuture.isCancelled()) {
+                        logAnalysisShardExecutor.execute(shardFuture);
+                    }
 
                 }
 
@@ -361,8 +472,7 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                         String err = String.format("分片分析失败 %d/%d，结果不完整，已终止任务",
                                 failedShards.get(), logShards.size());
                         log.error("【分片完整性校验失败】任务ID: [{}] {}", taskId, err);
-                        taskManager.failTask(taskId, err);
-                        taskStatusMap.put(taskId, "FAILED");
+                        failAnalysis(taskId, err);
                         return;
                     }
 
@@ -483,6 +593,11 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             final String exportOutputDir = config.outputDir;
             // 不双份拷贝全量结果；导出异步任务直接复用 finalResult（完成后由引用释放）
 
+            if (!completeWhenActive(taskId, finalResult, summary)) {
+                return;
+            }
+            rememberAnalyzedFile(dedupKey);
+
             // 6. AI告警处理：文件级别整体告警（最多采样 40 条，避免超大 Prompt）
             if (config.enableAnomalyDetect && anomalyCount > 0) {
                 log.info("【AI告警启动】开始处理异常日志，生成智能告警...");
@@ -548,9 +663,6 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                         config.enableAnomalyDetect, anomalyCount);
             }
 
-            taskManager.completeTask(taskId, finalResult, summary);
-            taskStatusMap.put(taskId, "COMPLETED");
-
             if (exportCsv || exportHtml) {
                 try {
                     logAnalysisExecutor.execute(() ->
@@ -585,25 +697,27 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 String msg = e instanceof java.util.concurrent.RejectedExecutionException
                         ? "分析队列繁忙，请稍后重试"
                         : ("分析过程发生意外错误: " + e.getMessage());
-                taskManager.failTask(taskId, msg);
-                taskStatusMap.put(taskId, "FAILED");
+                failAnalysis(taskId, msg);
+            }
+        }
+        } catch (Exception e) {
+            failAnalysis(taskId, "分析启动失败: " + e.getMessage());
+        } finally {
+            taskShardFutures.remove(taskId, shardFutures);
+            shardFutures.forEach(future -> future.cancel(true));
+            if ("CANCELLED".equals(taskStatusMap.get(taskId))) {
                 artifactCleaner.purgeTaskArtifacts(taskId);
             }
-        } finally {
             if (acquired) {
                 analysisConcurrencyGate.release();
             }
-            taskThreadMap.remove(taskId);
+            boolean ownsState = taskThreadMap.remove(taskId, currentThread);
             String terminal = taskStatusMap.get(taskId);
-            if ("COMPLETED".equals(terminal) || "FAILED".equals(terminal) || "CANCELLED".equals(terminal)) {
-                taskStatusMap.remove(taskId);
+            if (ownsState && ("COMPLETED".equals(terminal) || "FAILED".equals(terminal)
+                    || "CANCELLED".equals(terminal) || "RECOVERY_REQUIRED".equals(terminal))) {
+                taskStatusMap.remove(taskId, terminal);
             }
-            if (logFile != null) {
-                try {
-                    Files.deleteIfExists(logFile.toPath());
-                } catch (Exception ignored) {
-                }
-            }
+            deleteTransientInput(logFile);
         }
     }
 
@@ -617,12 +731,12 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
         config.enableCsvExport = exportCsv;
         config.enableVisualReport = exportHtml;
         try {
-            if (exportCsv) {
-                exportCsvResult(results, config);
-            }
-            if (exportHtml) {
-                generateHtmlReport(results, config);
-            }
+            Runnable exporter = () -> {
+                try { exportReportFiles(results, config); }
+                catch (IOException e) { throw new UncheckedIOException(e); }
+            };
+            if (durableTasks == null) exporter.run();
+            else if (!durableTasks.exportIfCompleted(taskId, exporter)) return;
             log.info("【报告导出完成】任务ID: [{}]", taskId);
         } catch (Exception e) {
             log.warn("【报告导出失败】任务ID: [{}], {}", taskId, e.getMessage());
@@ -630,6 +744,29 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     }
 
     // --- 业务逻辑方法 (从静态方法重构为实例方法或私有辅助方法) ---
+
+    /** Readers see complete individual files; never publish a partially written CSV or HTML. */
+    private void exportReportFiles(List<EnhancedLogParseResultEntity> results, EngineConfig config) throws IOException {
+        String originalDir = config.outputDir;
+        java.nio.file.Path destination = java.nio.file.Path.of(originalDir).toAbsolutePath().normalize();
+        Files.createDirectories(destination);
+        java.nio.file.Path staging = Files.createTempDirectory(destination, ".report-");
+        try {
+            config.outputDir = staging.toString();
+            if (config.enableCsvExport) exportCsvResult(results, config);
+            if (config.enableVisualReport) generateHtmlReport(results, config);
+            for (String name : List.of("log_analysis_result.csv", "log_analysis_report.html")) {
+                java.nio.file.Path file = staging.resolve(name);
+                if (Files.exists(file)) Files.move(file, destination.resolve(name),
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            config.outputDir = originalDir;
+            Files.deleteIfExists(staging.resolve("log_analysis_result.csv"));
+            Files.deleteIfExists(staging.resolve("log_analysis_report.html"));
+            Files.deleteIfExists(staging);
+        }
+    }
 
     private List<EnhancedLogParseResultEntity> processLogBatch(
             List<String> batchLines,
@@ -698,11 +835,15 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
 
     private void waitWhilePaused(String taskId) {
         while ("PAUSED".equals(taskStatusMap.get(taskId))) {
-            if ("CANCELLED".equals(taskStatusMap.get(taskId))) {
-                log.info("任务 [{}] 暂停期间被取消", taskId);
-                Thread.currentThread().interrupt();
-                return;
+            // The DB CAS may have been changed by another request or application instance.
+            synchronized (taskLock(taskId)) {
+                String status = taskManager.getDbStatus(taskId);
+                if (status != null && !"PAUSED".equals(status)) {
+                    taskStatusMap.put(taskId, status);
+                }
             }
+            checkCancelledOnly(taskId);
+            if (!"PAUSED".equals(taskStatusMap.get(taskId))) return;
             try {
                 Thread.sleep(400);
             } catch (InterruptedException e) {
@@ -713,12 +854,14 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
     }
 
     private String buildFileDedupKey(File logFile) {
-        try {
-            return logFile.getAbsolutePath() + "|"
-                    + Files.getLastModifiedTime(logFile.toPath()).toMillis() + "|"
-                    + logFile.length();
-        } catch (IOException e) {
-            return logFile.getAbsolutePath() + "|" + logFile.length();
+        try (InputStream input = Files.newInputStream(logFile.toPath())) {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch (IOException | java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("无法计算日志内容摘要", e);
         }
     }
 
@@ -737,9 +880,8 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             if (timeStr == null || timeStr.isBlank()) {
                 timeStr = LogFieldPlaceholder.TIME_UNPARSED;
             }
-            long timestamp = LogFieldPlaceholder.TIME_UNPARSED.equals(timeStr)
-                    ? 0L
-                    : LogLineParseSupport.toEpochMillis(timeStr);
+            long timestamp = parseTimestampOrUnparsed(timeStr);
+            if (timestamp == 0L) timeStr = LogFieldPlaceholder.TIME_UNPARSED;
             
             // 尝试提取 Windows 事件 ID
             String eventId = "N/A";
@@ -793,6 +935,13 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
             
             return res;
         }).collect(Collectors.toList());
+    }
+
+    static long parseTimestampOrUnparsed(String normalizedTime) {
+        if (normalizedTime == null || normalizedTime.isBlank()
+                || LogFieldPlaceholder.TIME_UNPARSED.equals(normalizedTime)) return 0L;
+        try { return LogLineParseSupport.toEpochMillis(normalizedTime); }
+        catch (RuntimeException invalidTimestamp) { return 0L; }
     }
 
     // --- 脱敏所需的静态正则模式 ---
@@ -1152,15 +1301,15 @@ public class LogAnalysisServiceImpl implements LogAnalysisService {
                 .append("<table><tr><th>日志时间</th><th>风险等级</th><th>日志协议</th><th>进程/标签</th><th>Linux/容器解析</th><th>异常原因</th><th>异常得分</th><th>脱敏日志内容</th></tr>");
         resultList.stream().filter(EnhancedLogParseResultEntity::isAnomaly).limit(50).forEach(res -> {
             html.append("<tr>")
-                    .append(String.format("<td>%s</td>", res.getLogTime() == null ? "未知" : res.getLogTime()))
+                    .append(String.format("<td>%s</td>", res.getLogTime() == null ? "未知" : escapeHtml(res.getLogTime())))
                     .append(String.format("<td style=\"color:%s;font-weight:bold;\">%s</td>", res.getSeverity().getColorCode(), res.getSeverity().getSeverityCnName()))
                     .append(String.format("<td>%s</td>", res.getProtocol().getProtocolDesc()))
-                    .append(String.format("<td>%s</td>", res.getPid()))
+                    .append(String.format("<td>%s</td>", escapeHtml(res.getPid())))
                     .append(String.format("<td style=\"max-width:220px;font-size:12px;\">%s</td>",
                             escapeHtml(LinuxLogParseSupport.formatParsedExtrasSummary(res.getFeatureMap()))))
-                    .append(String.format("<td>%s</td>", String.join(" | ", res.getAnomalyReasons())))
+                    .append(String.format("<td>%s</td>", escapeHtml(String.join(" | ", res.getAnomalyReasons()))))
                     .append(String.format("<td>%.2f</td>", res.getAnomalyScore()))
-                    .append(String.format("<td style=\"max-width:500px;word-break:break-all;\">%s</td>", res.getDesensitizedLog()))
+                    .append(String.format("<td style=\"max-width:500px;word-break:break-all;\">%s</td>", escapeHtml(res.getDesensitizedLog())))
                     .append("</tr>");
         });
         html.append("</table><footer>")

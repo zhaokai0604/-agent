@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,7 +29,7 @@ class FileLogCollectorCoverageTest {
         try {
             collector.start();
             collector.start();
-            Thread.sleep(250);
+            waitForInitialPosition(collector, log);
 
             Files.writeString(log, "new-line-1\nnew-line-2\n", StandardCharsets.UTF_8,
                     StandardOpenOption.APPEND);
@@ -126,6 +127,21 @@ class FileLogCollectorCoverageTest {
             Thread.sleep(50);
         }
         throw new AssertionError("Timed out waiting for " + expected + " log lines");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void waitForInitialPosition(FileLogCollector collector, Path log) throws Exception {
+        Map<String, Long> positions = (Map<String, Long>) ReflectionTestUtils
+                .getField(collector, "fileReadPositions");
+        String key = log.toAbsolutePath().toString();
+        long deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline) {
+            if (positions.containsKey(key)) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        throw new AssertionError("Timed out waiting for initial EOF position");
     }
 
 }

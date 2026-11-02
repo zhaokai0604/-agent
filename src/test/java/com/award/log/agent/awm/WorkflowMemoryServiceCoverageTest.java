@@ -90,15 +90,13 @@ class WorkflowMemoryServiceCoverageTest {
     }
 
     @Test
-    void ensureTableReloadAndFromRowCoverDatabaseDegradation() {
+    void disabledCacheAndIncompleteRowsRemainDefensive() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         WorkflowMemoryService service = new WorkflowMemoryService(jdbc);
         ReflectionTestUtils.setField(service, "enabled", false);
         service.reloadCache();
         assertEquals(0, service.countEnabled());
 
-        doThrow(new RuntimeException("ddl down")).when(jdbc).execute(anyString());
-        service.ensureTable();
 
         assertEquals(null, service.fromRow(Map.of("steps_json", "[]")).workflowId());
         assertFalse(service.existsWithToolSequence(null, null));

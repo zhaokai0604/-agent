@@ -99,6 +99,8 @@ public class UnifiedAssistantController {
         boolean useToolAgent = parseUseToolAgent(payload.get("useToolAgent"));
         boolean confirmRemediation = parseConfirmRemediation(payload.get("confirmRemediation"));
         String modelProfile = parseModelProfile(payload.get("modelProfile"));
+        // HTTP identity is thread-bound; capture it before dispatching to the pool.
+        final String requester = currentRequester();
         // 5 分钟超时；断线/超时/出错时 stop 会 dispose 上游 Flux，避免泄漏
         SseEmitter emitter = new SseEmitter(300000L);
         AtomicReference<Disposable> subscription = new AtomicReference<>();
@@ -121,8 +123,8 @@ public class UnifiedAssistantController {
                 }
                 try {
                     Flux<String> stream = modelProfile == null
-                            ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, null, currentRequester(), sessionId)
-                            : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile, currentRequester(), sessionId);
+                            ? unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, null, requester, sessionId)
+                            : unifiedAssistantService.chatStream(message, history, useToolAgent, confirmRemediation, modelProfile, requester, sessionId);
                     // Keep the controller tolerant of older test doubles/custom
                     // service proxies that only stub the legacy overload.
                     if (stream == null) {

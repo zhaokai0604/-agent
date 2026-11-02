@@ -25,6 +25,7 @@
               <el-option label="已完成" value="COMPLETED" />
               <el-option label="已失败" value="FAILED" />
               <el-option label="已暂停" value="PAUSED" />
+              <el-option label="中断待恢复" value="RECOVERY_REQUIRED" />
             </el-select>
           </el-form-item>
           <el-form-item label="时间范围">
@@ -52,7 +53,7 @@
         <el-table-column prop="fileName" label="文件名" width="200" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="100">
              <template #default="scope">
-                <el-tag :type="getStatusType(scope.row.status)">{{ scope.row.status }}</el-tag>
+                <el-tag :type="getStatusType(scope.row.status)">{{ getStatusText(scope.row.status) }}</el-tag>
              </template>
         </el-table-column>
         <el-table-column label="分析结果摘要">
@@ -72,7 +73,7 @@
         <el-table-column label="操作" width="330" fixed="right">
           <template #default="scope">
             <el-button type="primary" link @click="viewTaskDetail(scope.row.taskId)">查看详情</el-button>
-            <el-button type="info" link @click="$emit('view-task', scope.row.taskId)">查看报告</el-button>
+            <el-button type="info" link @click="$emit('view-task', scope.row.taskId)">{{ scope.row.status === 'RECOVERY_REQUIRED' ? '查看恢复选项' : '查看报告' }}</el-button>
             <el-button
               v-if="scope.row.status === 'FAILED'"
               type="warning"
@@ -374,7 +375,9 @@ const getStatusText = (status) => {
         'PROCESSING': '处理中',
         'COMPLETED': '已完成',
         'FAILED': '已失败',
-        'PAUSED': '已暂停'
+        'PAUSED': '已暂停',
+        'RECOVERY_REQUIRED': '中断待恢复',
+        'CANCELLED': '已取消'
     }
     return statusMap[status] || status
 }

@@ -141,6 +141,16 @@ public class AiDiagnosisServiceImpl implements AiDiagnosisService {
         return new Prompt(List.of(systemMessage, userMessage));
     }
 
+    @Override
+    public Flux<String> generateTrackedDiagnosis(List<EnhancedLogParseResultEntity> samples) {
+        return Flux.defer(() -> {
+            if (samples == null || samples.isEmpty()) return Flux.error(new IllegalArgumentException("No diagnosis samples"));
+            var focus = AiDiagnosisContextBuilder.selectFocusLines(samples);
+            return chatModel.stream(createPrompt(focus, AiDiagnosisContextBuilder.selectBaselineLines(samples)))
+                    .map(AiChatResponseSupport::textFrom);
+        });
+    }
+
     /**
      * 仅用异常列表生成诊断（无正常对照样本）。
      */

@@ -309,10 +309,11 @@ import TopPerformanceBar from './components/TopPerformanceBar.vue'
 import RuntimeModeBar from './components/RuntimeModeBar.vue'
 import OpsChatInterface from './components/OpsChatInterface.vue'
 import AgentSkillsPage from './components/agent/AgentSkillsPage.vue'
+import AgentTeamsPage from './components/agent/AgentTeamsPage.vue'
 
 import { ElMessage } from 'element-plus'
 import { logout, getUserInfo } from './api'
-import { useAgentSession } from './composables/useAgentSession'
+import { useAgentSession, setAgentSessionOwner } from './composables/useAgentSession'
 
 const {
   sessions: agentSessions,
@@ -387,6 +388,7 @@ const tabConfig = {
   'ops-chat': { label: '运维助手', component: OpsChatInterface, icon: ChatLineSquare },
 
   'agent-skills': { label: '运维工具与诊断', component: AgentSkillsPage, icon: Grid },
+  'agent-teams': { label: '协作处置任务', component: AgentTeamsPage, icon: Grid },
 
   'mcp-tools': { label: '运维工具台', component: ToolConsole, icon: Connection },
 
@@ -423,7 +425,7 @@ const defaultTab = 'ops-chat'
 
 const NAV_GROUP_ORDER = [
 
-  { title: '任务 · 工具 · 审计', keys: ['ops-chat', 'agent-skills', 'mcp-tools', 'audit', 'ops-trace', 'security-cockpit', 'environment-status'] },
+  { title: '任务 · 工具 · 审计', keys: ['ops-chat', 'agent-teams', 'agent-skills', 'mcp-tools', 'audit', 'ops-trace', 'security-cockpit', 'environment-status'] },
 
   { title: '观测与证据', keys: ['analysis', 'history', 'dashboard', 'knowledge'] },
 
@@ -514,6 +516,7 @@ function handleResize() {
 
 
 function syncUserState(userData = {}) {
+  setAgentSessionOwner(userData.userId ?? userData.id ?? null)
 
   username.value = userData.username || '本地管理员'
 
@@ -537,6 +540,7 @@ async function validateSession() {
       }
     }
   } catch {
+    setAgentSessionOwner(null)
     localStorage.removeItem('user')
     isLoggedIn.value = false
     ElMessage.warning('会话已失效，请重新登录')
@@ -548,6 +552,7 @@ function checkLoginStatus() {
   const rawUser = localStorage.getItem('user')
 
   if (!rawUser) {
+    setAgentSessionOwner(null)
 
     isLoggedIn.value = false
 
@@ -574,6 +579,7 @@ function checkLoginStatus() {
 
   } catch {
 
+    setAgentSessionOwner(null)
     localStorage.removeItem('user')
 
     isLoggedIn.value = false
@@ -606,6 +612,7 @@ async function handleLogout() {
 
   }
 
+  setAgentSessionOwner(null)
   localStorage.removeItem('user')
 
   isLoggedIn.value = false
